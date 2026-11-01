@@ -197,6 +197,28 @@ final class WatchedAppsStoreTests: XCTestCase {
         XCTAssertEqual(Set(store.presets.map(\.id)).count, store.presets.count)
     }
 
+    func testSemanticDuplicateRejectionDoesNotUseUpItsID() {
+        let store = WatchedAppsStore(userDefaults: defaults, key: key)
+        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        XCTAssertTrue(store.add(validPreset(name: "Foo")))
+        let duplicate = validPreset(name: "Foo")
+        var unique = validPreset(name: "Bar")
+        unique.id = duplicate.id
+
+        let preview = store.previewImport([duplicate, unique])
+
+        XCTAssertEqual(
+            preview.items[0].rejectionReason,
+            "A preset with the same name, process, or app path already exists."
+        )
+        XCTAssertNil(preview.items[1].rejectionReason)
+        XCTAssertEqual(preview.importableCount, 1)
+
+        let result = store.importPresets([duplicate, unique])
+        XCTAssertEqual(result, .init(importedCount: 1, rejectedCount: 1))
+        XCTAssertEqual(store.presets.map(\.displayName), ["Foo", "Bar"])
+    }
+
     func testImportPreviewDoesNotMutateAndCommitUsesTheSameValidation() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
         XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))

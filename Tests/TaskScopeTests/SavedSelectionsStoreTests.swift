@@ -135,6 +135,31 @@ final class SavedSelectionsStoreTests: XCTestCase {
         XCTAssertEqual(unique.matched, [first])
     }
 
+    func testLegacyEntryWhoseOnlyCandidateWasClaimedIsUnmatchedNotAmbiguous() {
+        seedLegacySelection(name: "Workers", entries: [
+            (pid: 10, command: "/usr/local/bin/worker"),
+            (pid: 11, command: "/usr/local/bin/worker")
+        ])
+        let store = makeStore()
+        let running = process(pid: 20, command: "/usr/local/bin/worker")
+
+        let result = store.resolve(store.selections[0], in: [running])
+
+        XCTAssertEqual(result.matched, [running])
+        XCTAssertEqual(result.unmatched.count, 1)
+        XCTAssertTrue(result.ambiguous.isEmpty)
+    }
+
+    func testRenamingADeletedSelectionReportsWhy() {
+        let store = makeStore()
+        store.save(name: "Editors", processes: [process(pid: 1, command: "/bin/Editor", executablePath: "/bin/Editor")])
+        let selection = store.selections[0]
+        XCTAssertTrue(store.remove(selection))
+
+        XCTAssertFalse(store.rename(selection, to: "Development"))
+        XCTAssertEqual(store.validationError, "This saved selection no longer exists.")
+    }
+
     func testDuplicateNamesAreRejectedAndRenamePersists() {
         let store = makeStore()
         store.save(name: "Editors", processes: [process(pid: 1, command: "/bin/Editor", executablePath: "/bin/Editor")])

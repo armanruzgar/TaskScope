@@ -2,6 +2,45 @@ import AppKit
 import ApplicationServices
 import SwiftUI
 
+/// Remembers the application that was frontmost most recently, other than
+/// TaskScope, so suppressing an automatic window hands activation back to the
+/// app the user is in now rather than whichever app was frontmost at launch.
+@MainActor
+final class PreviousApplicationTracker {
+    private let ownProcessID: pid_t
+    private var observer: NSObjectProtocol?
+    private(set) var application: NSRunningApplication?
+
+    init(ownProcessID: pid_t, initial: NSRunningApplication?) {
+        self.ownProcessID = ownProcessID
+        record(initial)
+    }
+
+    func record(_ candidate: NSRunningApplication?) {
+        guard let candidate, candidate.processIdentifier != ownProcessID else { return }
+        application = candidate
+    }
+
+    func startObserving(_ center: NotificationCenter) {
+        observer = center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { self?.record(app) }
+        }
+    }
+
+    /// Does nothing unless TaskScope holds activation: handing it away from a
+    /// background TaskScope would pull an unrelated app in front of the user.
+    func restore(isActive: Bool, deactivate: () -> Void, activate: (NSRunningApplication) -> Void) {
+        guard isActive else { return }
+        deactivate()
+        if let application, !application.isTerminated, application.processIdentifier != ownProcessID {
+            activate(application)
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var launchContext: TaskScopeLaunchContext
@@ -31,7 +70,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         var waitForInteractiveLaunch: () async -> Void
 
         static var system: Runtime {
-            let previous = NSWorkspace.shared.frontmostApplication
+            let previous = PreviousApplicationTracker(
+                ownProcessID: ProcessInfo.processInfo.processIdentifier,
+                initial: NSWorkspace.shared.frontmostApplication
+            )
+            previous.startObserving(NSWorkspace.shared.notificationCenter)
             return Runtime(
                 launchSignal: {
                     let event = NSAppleEventManager.shared().currentAppleEvent
@@ -52,10 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                     NSApp.windows.filter { automaticWindowTitles.contains($0.title) }.forEach { $0.orderOut(nil) }
                 },
                 restorePreviousApplication: {
-                    NSApp.deactivate()
-                    if let previous, previous.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-                        previous.activate()
-                    }
+                    previous.restore(isActive: NSApp.isActive, deactivate: { NSApp.deactivate() },
+                                     activate: { $0.activate() })
                 },
                 presentMainWindow: {
                     DispatchQueue.main.async {

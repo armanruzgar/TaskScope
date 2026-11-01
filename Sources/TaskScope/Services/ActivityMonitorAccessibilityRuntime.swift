@@ -467,12 +467,7 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
     ) -> ActivityMonitorPreparedTableState {
         var state = ActivityMonitorPreparedTableState()
 
-        if let window = elements(application, attribute: kAXWindowsAttribute)?.first,
-           let searchField = firstDescendant(
-               of: window,
-               subrole: kAXSearchFieldSubrole,
-               remainingDepth: Self.maximumTreeDepth
-           ) {
+        if let searchField = processTableSearchField(in: application) {
             state.searchField = searchField
             state.searchValue = string(searchField, attribute: kAXValueAttribute) ?? ""
         }
@@ -505,6 +500,41 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         }
 
         return state
+    }
+
+    /// Finds the search field of the window that shows the process table.
+    /// Activity Monitor's History, CPU Usage and Inspector windows have no
+    /// search field and can be first in the window list, so windows are tried
+    /// in the order chosen by ActivityMonitorWindowOrder.
+    private func processTableSearchField(in application: AXUIElement) -> AXUIElement? {
+        guard let windows = elements(application, attribute: kAXWindowsAttribute),
+              !windows.isEmpty else {
+            return nil
+        }
+        let mainWindow = element(application, attribute: kAXMainWindowAttribute)
+        let ordered = ActivityMonitorWindowOrder.searchFieldCandidates(
+            windows,
+            holdsProcessOutline: { window in
+                firstDescendant(
+                    of: window,
+                    role: kAXOutlineRole,
+                    remainingDepth: Self.maximumTreeDepth
+                ) != nil
+            },
+            isMainWindow: { window in
+                mainWindow.map { CFEqual($0, window) } ?? false
+            }
+        )
+        for window in ordered {
+            if let searchField = firstDescendant(
+                of: window,
+                subrole: kAXSearchFieldSubrole,
+                remainingDepth: Self.maximumTreeDepth
+            ) {
+                return searchField
+            }
+        }
+        return nil
     }
 
     /// Each field is put back only when it still holds the value TaskScope set.
@@ -676,6 +706,25 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
             return nil
         }
         return value
+    }
+}
+
+enum ActivityMonitorWindowOrder {
+    /// Orders windows for the search field lookup: windows holding the process
+    /// outline first, then the main window, then every other window. The
+    /// original front-to-back order is kept within each group.
+    static func searchFieldCandidates<Window>(
+        _ windows: [Window],
+        holdsProcessOutline: (Window) -> Bool,
+        isMainWindow: (Window) -> Bool
+    ) -> [Window] {
+        let ranked = windows.enumerated().map { offset, window -> (rank: Int, offset: Int, window: Window) in
+            let rank = holdsProcessOutline(window) ? 0 : (isMainWindow(window) ? 1 : 2)
+            return (rank, offset, window)
+        }
+        return ranked
+            .sorted { ($0.rank, $0.offset) < ($1.rank, $1.offset) }
+            .map(\.window)
     }
 }
 

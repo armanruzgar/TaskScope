@@ -115,9 +115,39 @@ for application in NSWorkspace.shared.runningApplications
         fputs("Could not resolve a running application's bundle path.\n", stderr)
         exit(1)
     }
-    print(url.resolvingSymlinksInPath().standardizedFileURL.path)
+    print("\(application.processIdentifier)\t\(url.resolvingSymlinksInPath().standardizedFileURL.path)")
 }
 SWIFT
+}
+
+taskscope_process_runs_bundle_executable() {
+  local pid="$1"
+  local bundle="$2"
+  local executable_name
+  local expected_identity
+  local device
+  local inode
+
+  # Launch Services keeps the bundle URL an app was launched from, so a copy
+  # started before its bundle was deleted and rebuilt still reports this path.
+  # Compare the kernel text vnode's device and inode with the bundle's current
+  # executable; the name lsof reports for an unlinked file is not reliable.
+  executable_name="$(
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+      "$bundle/Contents/Info.plist" 2>/dev/null
+  )" || return 1
+  [[ -n "$executable_name" ]] || return 1
+  expected_identity="$(
+    /usr/bin/stat -f '%d %i' "$bundle/Contents/MacOS/$executable_name" 2>/dev/null
+  )" || return 1
+  read -r device inode < <(
+    /usr/sbin/lsof -a -p "$pid" -d txt -FDi 2>/dev/null \
+      | /usr/bin/awk '
+          substr($0, 1, 1) == "D" && device == "" { device = substr($0, 2) }
+          substr($0, 1, 1) == "i" { print device, substr($0, 2); exit }'
+  ) || return 1
+  [[ "$device" =~ ^0x[0-9A-Fa-f]+$ && "$inode" =~ ^[0-9]+$ ]] || return 1
+  [[ "$((16#${device#0x})) $inode" == "$expected_identity" ]]
 }
 
 taskscope_require_no_other_app_instance() {
@@ -125,6 +155,7 @@ taskscope_require_no_other_app_instance() {
   local bundle_id="$2"
   local expected_path
   local running_paths
+  local pid
   local path
 
   expected_path="$(cd "$bundle" && pwd -P)" || return 1
@@ -132,14 +163,22 @@ taskscope_require_no_other_app_instance() {
     echo "Could not check running TaskScope applications; refusing to launch $bundle." >&2
     return 1
   }
-  while IFS= read -r path; do
-    [[ -n "$path" ]] || continue
+  while IFS=$'\t' read -r pid path; do
+    [[ -n "$pid" || -n "$path" ]] || continue
     # Foundation's symlink resolution drops a leading /private (for example
     # /private/var becomes /var), so compare the physical directory paths.
-    if [[ -d "$path" && "$(cd "$path" && pwd -P)" == "$expected_path" ]]; then
-      continue
+    if [[ "$path" == "$expected_path" \
+      || ( -d "$path" && "$(cd "$path" && pwd -P)" == "$expected_path" ) ]]; then
+      # `open` would only activate a same-path copy, so it must be running the
+      # bundle's current executable rather than a build that was replaced.
+      if [[ "$pid" =~ ^[0-9]+$ ]] \
+        && taskscope_process_runs_bundle_executable "$pid" "$bundle"; then
+        continue
+      fi
+      echo "TaskScope process $pid is running an older build of $bundle." >&2
+      echo "Quit that copy before launching $bundle." >&2
+      return 1
     fi
-    [[ "$path" != "$expected_path" ]] || continue
     echo "TaskScope with bundle identifier '$bundle_id' is already running at $path." >&2
     echo "Quit that copy before launching $bundle." >&2
     return 1
@@ -165,6 +204,19 @@ taskscope_process_identity() {
   identity="$(/bin/ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null)" || return 1
   [[ -n "$identity" ]] || return 1
   printf '%s' "$identity"
+}
+
+taskscope_process_start_time() {
+  local pid="$1"
+  local state
+  local start_time
+
+  # The start time survives exec, so PID plus start time follows a forked
+  # child from the shell into the program it runs. Exited zombies do not count.
+  read -r state start_time < <(/bin/ps -p "$pid" -o stat= -o lstart= 2>/dev/null) \
+    || return 1
+  [[ -n "$start_time" && "$state" != Z* ]] || return 1
+  printf '%s' "$start_time"
 }
 
 taskscope_wait_for_process_identity() {

@@ -174,6 +174,7 @@ final class AppCommandCoordinatorTests: XCTestCase {
         XCTAssertEqual(result.status, .completed, result.message)
         XCTAssertEqual(result.message, "No watched processes")
         XCTAssertNil(manager.processLoadError, "a successful inventory read clears the stale failure")
+        XCTAssertEqual(manager.processListLoadError, "ps timed out", "the list itself was not reloaded")
     }
 
     func testRefreshReportsFailureWhenItsOwnReadFails() async {

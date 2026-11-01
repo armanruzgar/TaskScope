@@ -69,7 +69,10 @@ final class ProcessOperationGate: ObservableObject {
         state = kind.isMutation ? .runningMutation : .runningRefresh
         defer {
             isWorking = false
-            release(completed: true)
+            // An owner cancelled mid-run may not have published a result, so
+            // its joiners must retry with their own work instead of treating
+            // the read as delivered.
+            release(completed: !Task.isCancelled)
         }
 
         await operation()
@@ -134,8 +137,9 @@ final class ProcessOperationGate: ObservableObject {
     }
 
     /// Waits for an equivalent read to publish its result without executing a
-    /// duplicate closure. `false` means the queued owner was cancelled before
-    /// it could run, in which case `acquire` retries using this caller's work.
+    /// duplicate closure. `false` means the owner was cancelled, either while
+    /// queued or mid-run, in which case `acquire` retries using this caller's
+    /// work (unless this caller was itself cancelled).
     private func join(operationID: UUID) async -> Bool {
         let joinerID = UUID()
         return await withTaskCancellationHandler {

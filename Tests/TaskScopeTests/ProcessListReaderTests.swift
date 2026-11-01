@@ -291,6 +291,38 @@ final class ProcessListReaderTests: XCTestCase {
         XCTAssertEqual(process.name, "")
     }
 
+    /// A process that writes a title over argv[0] can put a '/' in free
+    /// text. Only an absolute path is split on '/'; anything else is named by
+    /// its leading token, so the row is not named after a fragment of the title.
+    func testRewrittenArgvTitleIsNamedByItsLeadingTokenNotAPathFragment() throws {
+        XCTAssertEqual(AppProcess.name(from: "sshd-session: user@ttys001/x"), "sshd-session")
+        XCTAssertEqual(AppProcess.name(from: "sshd-session: me@ttys001"), "sshd-session: me@ttys001")
+        XCTAssertEqual(
+            AppProcess.name(from: "ssh: /Users/example/.ssh/cm-root@192.0.2.1:22 [mux]"),
+            "ssh"
+        )
+        // Without a '/', the title cannot be misread as a path and keeps its
+        // previous name, so existing rules on it still match.
+        XCTAssertEqual(AppProcess.name(from: "postgres: walwriter   "), "postgres: walwriter")
+        XCTAssertEqual(AppProcess.name(from: "celery worker"), "celery worker")
+
+        // Absolute paths and bare names keep their previous names, so rule and
+        // preset matching on those is unchanged.
+        XCTAssertEqual(AppProcess.name(from: "/Applications/Example App.app/Contents/MacOS/Example App"), "Example App")
+        XCTAssertEqual(AppProcess.name(from: "  /usr/sbin/example  "), "example")
+        XCTAssertEqual(AppProcess.name(from: "Example"), "Example")
+        XCTAssertEqual(AppProcess.name(from: "<defunct>"), "<defunct>")
+        XCTAssertEqual(AppProcess.name(from: "/"), "/")
+        XCTAssertEqual(AppProcess.name(from: "./build/tool"), "tool")
+        XCTAssertEqual(AppProcess.name(from: ": title"), ": title")
+
+        let row = try XCTUnwrap(ProcessListReader.parseProcessLine(
+            "321 1 501 0.0 1024 Sat Jul 26 11:20:17 2026 00:05 sshd-session: user@ttys001/x"[...]
+        ))
+        XCTAssertEqual(row.command, "sshd-session: user@ttys001/x")
+        XCTAssertEqual(row.name, "sshd-session")
+    }
+
     func testDisplayCommandOnlyAbbreviatesTheHomeDirectoryItself() {
         let home = NSHomeDirectory()
         func process(path: String) -> AppProcess {

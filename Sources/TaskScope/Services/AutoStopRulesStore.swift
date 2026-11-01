@@ -236,6 +236,12 @@ final class AutoStopRulesStore: ObservableObject {
         return true
     }
 
+    /// Drops a validation message whose edit was abandoned, so it does not
+    /// linger under the Add Rule form.
+    func clearValidationError() {
+        validationError = nil
+    }
+
     @discardableResult
     func update(_ rule: AutoStopRule) -> Bool {
         guard !rejectUnknownRule(rule) else { return false }

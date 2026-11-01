@@ -101,6 +101,78 @@ final class ProcessHistoryTests: XCTestCase {
         XCTAssertEqual(history.state, .paused)
     }
 
+    func testResumingFromZeroConsumersDiscardsSamplesFromBeforeThePause() async {
+        let inventory = HistoryInventory(results: [
+            .success([process(pid: 1, cpu: 400, memory: 100)]),
+            .success([process(pid: 2, cpu: 5, memory: 50)])
+        ])
+        let history = ProcessHistory(inventory: inventory)
+
+        history.beginSampling(cadence: 60)
+        for _ in 0..<1000 where history.samples.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [400])
+
+        history.endSampling()
+        XCTAssertEqual(history.state, .paused)
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [400], "Paused display keeps the last samples")
+
+        history.beginSampling(cadence: 60)
+        XCTAssertEqual(history.samples, [], "Resuming clears samples from before the pause")
+        for _ in 0..<1000 where history.samples.isEmpty {
+            await Task.yield()
+        }
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [5])
+        history.endSampling()
+    }
+
+    func testAdditionalConsumerDoesNotDiscardSamples() async {
+        let inventory = HistoryInventory(results: [.success([process(pid: 1, cpu: 10, memory: 100)])])
+        let history = ProcessHistory(inventory: inventory)
+
+        history.beginSampling(cadence: 60)
+        for _ in 0..<1000 where history.samples.isEmpty {
+            await Task.yield()
+        }
+        history.beginSampling(cadence: 60)
+        XCTAssertEqual(history.samples.count, 1)
+        history.endSampling()
+        history.endSampling()
+    }
+
+    func testCadenceChangeKeepsUnavailableStateUntilNextRead() async {
+        let inventory = HistoryInventory(results: [.failure(.commandFailed("ps unavailable"))])
+        let history = ProcessHistory(inventory: inventory)
+
+        history.beginSampling(cadence: 10)
+        for _ in 0..<1000 where history.state == .sampling {
+            await Task.yield()
+        }
+        XCTAssertEqual(history.state, .unavailable("ps unavailable"))
+
+        history.updateConsumerCadence(60)
+        XCTAssertEqual(history.state, .unavailable("ps unavailable"))
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(history.state, .unavailable("ps unavailable"))
+        history.endSampling()
+        XCTAssertEqual(history.state, .paused)
+    }
+
+    func testCadenceChangeWhileLiveStaysLive() async {
+        let inventory = HistoryInventory(results: [.success([process(pid: 1, cpu: 10, memory: 100)])])
+        let history = ProcessHistory(inventory: inventory)
+
+        history.beginSampling(cadence: 10)
+        for _ in 0..<1000 where history.samples.isEmpty {
+            await Task.yield()
+        }
+        history.updateConsumerCadence(60)
+        XCTAssertEqual(history.state, .sampling)
+        XCTAssertEqual(history.samples.count, 1)
+        history.endSampling()
+    }
+
     private func process(pid: Int32, cpu: Double, memory: Double) -> AppProcess {
         AppProcess(
             pid: pid,

@@ -20,6 +20,8 @@ struct SettingsView: View {
     @State private var editingRule: AutoStopRule?
     @State private var editingRuleError: String?
     @State private var presetDeletionError: String?
+    @State private var refusedPresetDeletion: WatchedAppPreset?
+    @State private var isGlobalProtectKeepOffPending = false
     @State private var exportError: String?
     @State private var importError: String?
     @State private var presetValidationError: String?
@@ -49,7 +51,10 @@ struct SettingsView: View {
                 importError = err.localizedDescription
             }
         }
-        .sheet(item: $editingRule) { rule in
+        .sheet(item: $editingRule, onDismiss: {
+            editingRuleError = nil
+            autoStopRules.clearValidationError()
+        }) { rule in
             AutoStopRuleEditorSheet(
                 rule: rule,
                 validationError: editingRuleError,
@@ -65,6 +70,7 @@ struct SettingsView: View {
                 onCancel: {
                     editingRule = nil
                     editingRuleError = nil
+                    autoStopRules.clearValidationError()
                 }
             )
         }
@@ -76,6 +82,9 @@ struct SettingsView: View {
         }
         .sheet(item: $dryRunPreset) { preset in
             lifecycleDryRunSheet(for: preset)
+        }
+        .onReceive(processManager.$isGlobalProtectKeepOffPending) { pending in
+            isGlobalProtectKeepOffPending = pending
         }
     }
 
@@ -129,12 +138,13 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                     Button("Reset Presets After Backup", role: .destructive) {
                         watchedApps.resetAfterCorruption()
+                        exportError = nil
                     }
                 }
                 .padding(.horizontal)
             }
-            if let presetDeletionError {
-                Text(presetDeletionError)
+            if let message = presetDeletionRefusalMessage ?? presetDeletionError {
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.red)
                     .padding(.horizontal)
@@ -171,7 +181,13 @@ struct SettingsView: View {
                                 set: { newValue in
                                     var updated = preset
                                     updated.notificationsEnabled = newValue
-                                    watchedApps.update(updated)
+                                    refusedPresetDeletion = nil
+                                    if watchedApps.update(updated) {
+                                        presetDeletionError = nil
+                                    } else {
+                                        presetDeletionError = watchedApps.validationError
+                                            ?? "Could not update notifications for this preset."
+                                    }
                                 }
                             ))
                             .labelsHidden()
@@ -621,16 +637,31 @@ struct SettingsView: View {
         return "Turn off Keep GlobalProtect Off (or choose Open) before deleting the built-in preset. Its user launch agents are disabled by a persistent launchd override that deleting the preset would not clear."
     }
 
+    /// Re-derived on every draw so the refusal disappears once its cause
+    /// (Keep Off, a pending Keep Off action, unreadable settings) is gone.
+    private var presetDeletionRefusalMessage: String? {
+        refusedPresetDeletion.flatMap {
+            Self.presetDeletionRefusal(
+                for: $0,
+                keepGlobalProtectOff: settings.keepGlobalProtectOff,
+                isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
+                isGlobalProtectKeepOffPending: isGlobalProtectKeepOffPending
+            )
+        }
+    }
+
     private func deletePreset(_ preset: WatchedAppPreset) {
-        if let refusal = Self.presetDeletionRefusal(
+        if Self.presetDeletionRefusal(
             for: preset,
             keepGlobalProtectOff: settings.keepGlobalProtectOff,
             isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
             isGlobalProtectKeepOffPending: processManager.isGlobalProtectKeepOffPending
-        ) {
-            presetDeletionError = refusal
+        ) != nil {
+            refusedPresetDeletion = preset
+            presetDeletionError = nil
             return
         }
+        refusedPresetDeletion = nil
         if watchedApps.remove(preset) {
             presetDeletionError = nil
         } else {

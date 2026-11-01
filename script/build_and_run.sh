@@ -274,47 +274,75 @@ verify_startup_readiness() (
   local readiness_home
   local verify_pid=""
   local verify_pid_identity=""
+  local verify_pid_start=""
+  local script_command=""
   local attempt
   local registered_bundle_id=""
   local is_ready=0
 
   readiness_home="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-startup.XXXXXX")"
 
+  readiness_process_is_running() {
+    local start_time
+
+    [[ -n "$verify_pid" && -n "$verify_pid_start" ]] || return 1
+    start_time="$(taskscope_process_start_time "$verify_pid")" || return 1
+    [[ "$start_time" == "$verify_pid_start" ]]
+  }
+
+  signal_readiness_process() {
+    local signal="$1"
+    local command
+
+    readiness_process_is_running || return 1
+    # After exec the kernel text vnode must be the packaged executable. Before
+    # exec the child is still this script's forked shell, which may be stopped
+    # too; otherwise a slow exec would leave the app running after cleanup.
+    if ! taskscope_process_matches_executable "$verify_pid" "$executable"; then
+      command="$(taskscope_process_command "$verify_pid")" || return 1
+      [[ -n "$script_command" && "$command" == "$script_command" ]] || return 1
+    fi
+    readiness_process_is_running || return 1
+    taskscope_send_signal "$signal" "$verify_pid"
+  }
+
+  wait_for_readiness_process_exit() {
+    for _ in {1..20}; do
+      readiness_process_is_running || return 0
+      /bin/sleep 0.1
+    done
+    ! readiness_process_is_running
+  }
+
   cleanup_readiness_process() {
-    if [[ -n "$verify_pid" ]] \
-      && taskscope_process_matches_identity "$verify_pid" "$verify_pid_identity"; then
-      taskscope_signal_process_if_identity_matches \
-        TERM "$verify_pid" "$verify_pid_identity" "$executable" \
-        >/dev/null 2>&1 || true
-      for _ in {1..20}; do
-        if ! taskscope_process_matches_identity "$verify_pid" "$verify_pid_identity"; then
-          wait "$verify_pid" 2>/dev/null || true
-          verify_pid=""
-          break
-        fi
-        /bin/sleep 0.1
-      done
-      if [[ -n "$verify_pid" ]] \
-        && taskscope_process_matches_identity "$verify_pid" "$verify_pid_identity"; then
-        taskscope_signal_process_if_identity_matches \
-          KILL "$verify_pid" "$verify_pid_identity" "$executable" \
-          >/dev/null 2>&1 || true
+    if [[ -n "$verify_pid" ]]; then
+      signal_readiness_process TERM >/dev/null 2>&1 || true
+      if ! wait_for_readiness_process_exit; then
+        signal_readiness_process KILL >/dev/null 2>&1 || true
+        wait_for_readiness_process_exit || true
+      fi
+      # Only reap a child that is gone; waiting on a live one would hang.
+      if readiness_process_is_running; then
+        echo "Could not stop startup verification process $verify_pid." >&2
+      else
         wait "$verify_pid" 2>/dev/null || true
       fi
+      verify_pid=""
     fi
     rm -rf "$readiness_home"
     unregister_staged_app
   }
   trap cleanup_readiness_process EXIT
 
+  script_command="$(taskscope_process_command "$$" || true)"
   CFFIXED_USER_HOME="$readiness_home" \
     "$executable" --automation --verify-startup >/dev/null 2>&1 &
   verify_pid="$!"
+  # Captured at once: an unreaped child's PID cannot yet belong to another process.
+  verify_pid_start="$(taskscope_process_start_time "$verify_pid" || true)"
   verify_pid_identity="$(
     taskscope_wait_for_process_identity "$verify_pid" 40 "$executable"
   )" || {
-    # Let cleanup stop it anyway; signalling re-verifies the kernel executable.
-    verify_pid_identity="$(taskscope_process_identity "$verify_pid" || true)"
     echo "Bundle verification failed: could not capture startup process identity." >&2
     return 1
   }

@@ -78,6 +78,35 @@ final class ActivityMonitorWorkerTests: XCTestCase {
         XCTAssertTrue(state.searchWasChanged)
     }
 
+    func testSearchFieldLookupPrefersOutlineWindowThenMainWindow() {
+        // Front to back: Inspector, CPU History, main window with the outline.
+        let windows = ["inspector", "history", "main"]
+        XCTAssertEqual(
+            ActivityMonitorWindowOrder.searchFieldCandidates(
+                windows,
+                holdsProcessOutline: { $0 == "main" },
+                isMainWindow: { $0 == "history" }
+            ),
+            ["main", "history", "inspector"]
+        )
+        XCTAssertEqual(
+            ActivityMonitorWindowOrder.searchFieldCandidates(
+                windows,
+                holdsProcessOutline: { _ in false },
+                isMainWindow: { $0 == "main" }
+            ),
+            ["main", "inspector", "history"]
+        )
+        XCTAssertEqual(
+            ActivityMonitorWindowOrder.searchFieldCandidates(
+                windows,
+                holdsProcessOutline: { _ in false },
+                isMainWindow: { _ in false }
+            ),
+            windows
+        )
+    }
+
     func testSynchronousShutdownRestoresStateFromAnInFlightAttempt() async {
         let table = WorkerTableFixture()
         let started = expectation(description: "worker selection started")

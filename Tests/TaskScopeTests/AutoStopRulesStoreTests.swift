@@ -154,6 +154,24 @@ final class AutoStopRulesStoreTests: XCTestCase {
         XCTAssertNil(store.validationError)
     }
 
+    func testClearValidationErrorDropsAnAbandonedEditsDuplicateMessage() {
+        let store = makeStore()
+        let node = AutoStopRule(processName: "node", runtimeMinutes: 1, action: .prompt)
+        let python = AutoStopRule(processName: "python", runtimeMinutes: 1, action: .prompt)
+        XCTAssertTrue(store.add(node))
+        XCTAssertTrue(store.add(python))
+
+        var renamed = python
+        renamed.processName = "node"
+        XCTAssertFalse(store.update(renamed))
+        XCTAssertEqual(store.validationError, "A rule for node already exists.")
+
+        store.clearValidationError()
+
+        XCTAssertNil(store.validationError)
+        XCTAssertEqual(store.rules, [node, python])
+    }
+
     func testElapsedRuntimeParserSupportsPsFormats() {
         XCTAssertEqual(appProcess(pid: 1, elapsed: "01:02").runtimeSeconds, 62)
         XCTAssertEqual(appProcess(pid: 1, elapsed: "02:03:04").runtimeSeconds, 7_384)

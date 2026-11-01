@@ -162,9 +162,10 @@ BUNDLE_ID=com.example.TaskScopeTests
 taskscope_running_bundle_paths() {
   [[ "${INVENTORY_FAILED:-0}" -eq 0 ]] || return 1
   if [[ "$1" == "$RUNNING_ID" ]]; then
-    printf '%s\n' "$RUNNING_PATH"
+    printf '4242\t%s\n' "$RUNNING_PATH"
   fi
 }
+taskscope_process_runs_bundle_executable() { [[ "${STALE_EXECUTABLE:-0}" -eq 0 ]]; }
 taskscope_stop_processes_for_executable() { printf 'unexpected stop\n' >> "$TOOL_LOG"; return 1; }
 taskscope_send_signal() { printf 'unexpected signal\n' >> "$TOOL_LOG"; return 1; }
 function /usr/bin/open() { printf 'open %s\n' "$*" >> "$TOOL_LOG"; }
@@ -206,6 +207,18 @@ EOF
         exit 1
       }
     done
+    # A same-path copy whose executable was replaced is a stale build; `open`
+    # would only activate it, so launching must refuse instead.
+    : > "$TOOL_LOG"
+    if ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
+      RUNNING_PATH="$bundle" RUNNING_ID=com.example.TaskScopeTests STALE_EXECUTABLE=1 \
+      LAUNCH_SCRIPT="$launch_script" TOOL_LOG="$TOOL_LOG" \
+      bash "$harness" > "$OUTPUT" 2>&1; then
+      echo "$kind launched beside a stale build of the same bundle." >&2
+      exit 1
+    fi
+    [[ ! -s "$TOOL_LOG" ]] || { cat "$TOOL_LOG" >&2; exit 1; }
+    grep -Fq 'older build' "$OUTPUT"
     : > "$TOOL_LOG"
     if ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
       RUNNING_PATH="$other_bundle" RUNNING_ID=com.example.TaskScopeTests INVENTORY_FAILED=1 \

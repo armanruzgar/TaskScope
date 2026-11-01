@@ -190,6 +190,44 @@ final class ProcessOperationGateTests: XCTestCase {
         XCTAssertEqual(gate.state, .idle)
     }
 
+    /// A joiner must not be told the read completed when its owner was
+    /// cancelled mid-run; it runs its own work instead.
+    func testJoinerOfOwnerCancelledMidRunRunsItsOwnWork() async {
+        let blocker = OperationGateBlocker()
+        let recorder = OperationGateRecorder()
+        let gate = ProcessOperationGate()
+
+        let owner = Task {
+            await gate.run(kind: .read(.watchedStatus)) {
+                await blocker.block()
+                await recorder.record("owner finished")
+            }
+        }
+        await blocker.waitUntilBlocked()
+
+        let joiner = Task {
+            await gate.run(kind: .read(.watchedStatus)) {
+                await recorder.record("joiner operation")
+            }
+        }
+        for _ in 0..<100 where gate.state != .coalesced {
+            await Task.yield()
+        }
+        XCTAssertEqual(gate.state, .coalesced)
+
+        owner.cancel()
+        await blocker.release()
+
+        let ownerRan = await owner.value
+        let joinerRan = await joiner.value
+        let values = await recorder.values()
+        XCTAssertTrue(ownerRan)
+        XCTAssertTrue(joinerRan)
+        XCTAssertEqual(values, ["owner finished", "joiner operation"])
+        XCTAssertEqual(gate.state, .idle)
+        XCTAssertFalse(gate.isWorking)
+    }
+
     func testCancelledWaiterNeverRunsAndGateReturnsToIdle() async {
         let blocker = OperationGateBlocker()
         let recorder = OperationGateRecorder()

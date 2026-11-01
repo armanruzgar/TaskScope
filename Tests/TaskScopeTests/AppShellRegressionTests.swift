@@ -306,6 +306,38 @@ final class AppShellRegressionTests: XCTestCase {
     }
 
     @MainActor
+    func testRestoringThePreviousApplicationRequiresActivationAndUsesTheMostRecentApp() {
+        let other = NSRunningApplication.current
+        let tracker = PreviousApplicationTracker(ownProcessID: other.processIdentifier + 1, initial: nil)
+        var events: [String] = []
+        let restore = { (active: Bool) in
+            tracker.restore(isActive: active, deactivate: { events.append("deactivate") },
+                            activate: { events.append("activate \($0.processIdentifier)") })
+        }
+
+        restore(true)
+        XCTAssertEqual(events, ["deactivate"], "Nothing recorded yet, so nothing is activated")
+
+        let center = NotificationCenter()
+        tracker.startObserving(center)
+        center.post(name: NSWorkspace.didActivateApplicationNotification, object: nil,
+                    userInfo: [NSWorkspace.applicationUserInfoKey: other])
+        XCTAssertEqual(tracker.application?.processIdentifier, other.processIdentifier)
+
+        events.removeAll()
+        restore(false)
+        XCTAssertEqual(events, [], "A background TaskScope must not hand activation to another app")
+
+        restore(true)
+        XCTAssertEqual(events, ["deactivate", "activate \(other.processIdentifier)"])
+
+        let selfTracker = PreviousApplicationTracker(ownProcessID: other.processIdentifier, initial: other)
+        XCTAssertNil(selfTracker.application, "TaskScope never records itself as the previous app")
+        selfTracker.record(other)
+        XCTAssertNil(selfTracker.application)
+    }
+
+    @MainActor
     private func makeDelegate(
         session: TaskScopeLaunchSession,
         bus: AppCommandBus,

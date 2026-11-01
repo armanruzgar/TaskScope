@@ -49,8 +49,15 @@ final class ProcessHistory: ObservableObject {
     }
 
     func start(cadence: TimeInterval, sampleImmediately: Bool = true) {
+        let previousState = state
         stop()
-        state = .sampling
+        // Without an immediate read, nothing new is known yet: keep reporting a
+        // failed last read instead of claiming "Live" for a whole interval.
+        if !sampleImmediately, case .unavailable = previousState {
+            state = previousState
+        } else {
+            state = .sampling
+        }
         let interval = max(2, cadence)
         let generation = samplingGeneration
         samplingTask = Task { [weak self] in
@@ -73,6 +80,9 @@ final class ProcessHistory: ObservableObject {
         consumerCount += 1
         consumerCadence = max(2, cadence)
         guard consumerCount == 1 else { return }
+        // Resuming from zero consumers: samples kept from before the pause are
+        // stale and would be drawn joined to the new ones as if contiguous.
+        samples.removeAll()
         start(cadence: consumerCadence)
     }
 

@@ -85,10 +85,12 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertThrowsError(try inspected.find(text: "Process List Unavailable"))
     }
 
-    func testSuccessfulWatchedReadClearsStaleListBanner() async throws {
+    /// A watched-status read does not replace the rows, so it must not hide the
+    /// stale-list banner; only a list load that succeeds does.
+    func testSuccessfulWatchedReadKeepsStaleListBannerUntilTheListReloads() async throws {
         let target = process(pid: 71, parentPID: 1, name: "Example")
         let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
-            .success([target]), .failure(.commandFailed("ps timed out")), .success([target])
+            .success([target]), .failure(.commandFailed("ps timed out")), .success([target]), .success([target])
         ]))
         defer { fixture.stores.cleanup() }
         let loaded = await fixture.manager.loadProcessList(showMessage: false)
@@ -97,7 +99,49 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertNoThrow(try view.inspect().find(text: "Process list is stale"))
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         XCTAssertNil(fixture.manager.processLoadError)
+        XCTAssertEqual(fixture.manager.processListLoadError, "ps timed out")
+        XCTAssertNoThrow(try view.inspect().find(text: "Process list is stale"))
+        let reloaded = await fixture.manager.loadProcessList(showMessage: false)
+        XCTAssertTrue(reloaded)
+        XCTAssertNil(fixture.manager.processListLoadError)
         XCTAssertThrowsError(try view.inspect().find(text: "Process list is stale"))
+    }
+
+    func testSuccessfulWatchedReadKeepsFailedFirstLoadState() async throws {
+        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+            .failure(.commandFailed("ps timed out")), .success([])
+        ]))
+        defer { fixture.stores.cleanup() }
+        await fixture.manager.refreshWatchedStatus(showMessage: false)
+        XCTAssertFalse(fixture.manager.hasLoadedProcessList)
+        let inspected = try makePopover(fixture: fixture, confirmationState: ProcessConfirmationState()).inspect()
+        XCTAssertNoThrow(try inspected.find(text: "Process List Unavailable"))
+        XCTAssertNoThrow(try inspected.find(text: "ps timed out"))
+    }
+
+    /// Editing a preset while its confirmation is open must drop the pending
+    /// action, so confirming cannot signal names removed from the preset.
+    func testEditingAPresetWhileItsConfirmationIsPendingClearsIt() async throws {
+        let fixture = await makeFixture(processes: [])
+        defer { fixture.stores.cleanup() }
+        let store = fixture.stores.watchedApps
+        var preset = WatchedAppPreset(displayName: "Editor", mainProcessName: "Editor",
+                                      helperProcessNames: ["Editor Helper", "Editor Agent"], protectedProcessNames: [],
+                                      appPath: "/Applications/Editor.app")
+        XCTAssertTrue(store.add(preset))
+        let confirmation = ProcessConfirmationState()
+        let view = makePopover(fixture: fixture, confirmationState: confirmation)
+
+        confirmation.requestPresetAction(.quitHelpers, preset: try XCTUnwrap(store.presets.first { $0.id == preset.id }))
+        let unchanged = store.presets
+        try view.inspect().vStack().callOnChange(oldValue: unchanged, newValue: unchanged)
+        XCTAssertNotNil(confirmation.pendingPresetAction, "an unrelated presets change keeps the confirmation")
+
+        preset.helperProcessNames = ["Editor Helper"]
+        XCTAssertTrue(store.update(preset))
+        try view.inspect().vStack().callOnChange(oldValue: unchanged, newValue: store.presets)
+        XCTAssertNil(confirmation.pendingPresetAction)
+        XCTAssertTrue(fixture.signaler.sent.isEmpty)
     }
 
     func testConfiguredPresetsAndUnknownHeaderAppearBeforeTheFirstRead() async throws {

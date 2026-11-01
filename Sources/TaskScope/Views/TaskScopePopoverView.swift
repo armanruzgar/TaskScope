@@ -218,11 +218,11 @@ struct TaskScopePopoverView: View {
         } message: { pending in
             Text(presetConfirmationMessage(for: pending))
         }
-        // A preset removed while its confirmation is pending must not stay
-        // confirmable.
+        // A preset removed or edited while its confirmation is pending must not
+        // stay confirmable: confirming would act on the stale copy.
         .onChange(of: watchedApps.presets) { _, presets in
             if let pending = confirmationState.pendingPresetAction,
-               !presets.contains(where: { $0.id == pending.preset.id }) {
+               presets.first(where: { $0.id == pending.preset.id }) != pending.preset {
                 confirmationState.clearPresetAction()
             }
         }
@@ -549,7 +549,7 @@ struct TaskScopePopoverView: View {
             .padding(.horizontal, 16)
 
             if processManager.hasLoadedProcessList,
-               let processLoadError = processManager.processLoadError {
+               let processLoadError = processManager.processListLoadError {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
@@ -601,7 +601,7 @@ struct TaskScopePopoverView: View {
             .padding(.horizontal, 16)
 
             if !processManager.hasLoadedProcessList, processManager.hasAttemptedProcessListLoad,
-               let error = processManager.processLoadError {
+               let error = processManager.processListLoadError {
                 firstLoadFailedState(error: error)
             } else if processManager.hasLoadedProcessList, filteredProcesses.isEmpty {
                 // Rows exist but the filter matched none of them; the stale-list

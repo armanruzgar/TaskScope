@@ -32,6 +32,10 @@ final class ProcessManager: ObservableObject {
     /// memoized lists on it.
     @Published private(set) var inventoryGeneration: UInt64 = 0
     @Published private(set) var processLoadError: String?
+    /// Failure of the last attempt to replace the displayed process list. Unlike
+    /// `processLoadError`, watched-status and per-preset reads never clear it:
+    /// only replacing the list does, so the stale-list banner tracks the rows.
+    @Published private(set) var processListLoadError: String?
     /// Time the inventory backing the displayed rows was last replaced.
     @Published private(set) var lastSuccessfulInventoryAt: Date?
     /// Time the watched snapshots on screen were last replaced after a read.
@@ -86,6 +90,7 @@ final class ProcessManager: ObservableObject {
             listProjection = ProcessListProjection(inventory: newValue)
             inventoryGeneration &+= 1
             lastSuccessfulInventoryAt = now()
+            processListLoadError = nil
         }
     }
     private var selectedIdentities: [Int32: ProcessIdentity] = [:]
@@ -248,6 +253,9 @@ final class ProcessManager: ObservableObject {
             )
             guard !outcome.wasCancelled else { return }
             processLoadError = outcome.inventoryError
+            if hasLoadedProcessList, let inventoryError = outcome.inventoryError {
+                processListLoadError = inventoryError
+            }
             message = outcome.message
             batchActionReport = outcome.report
             if outcome.shouldClearSelection {
@@ -313,6 +321,7 @@ final class ProcessManager: ObservableObject {
             case .failure(let error):
                 let failure = Task.isCancelled ? ProcessInventoryError.cancelled : error
                 recordInventoryFailure(failure)
+                recordProcessListFailure(failure)
             }
         }
         guard !Task.isCancelled, !lastInventoryReadWasCancelled else { return false }
@@ -1100,6 +1109,7 @@ final class ProcessManager: ObservableObject {
             return inventory
         case .failure(let error):
             recordInventoryFailure(error)
+            if hasLoadedProcessList { recordProcessListFailure(error) }
             return nil
         }
     }
@@ -1148,6 +1158,14 @@ final class ProcessManager: ObservableObject {
         guard failure != .cancelled else { return }
         processLoadError = failure.localizedDescription
         if watchedStatusAvailability != .unknown { watchedStatusAvailability = .stale }
+    }
+
+    /// Records a failed attempt to replace the displayed list. Called after
+    /// `recordInventoryFailure`, so a cancelled read is already classified.
+    private func recordProcessListFailure(_ error: ProcessInventoryError) {
+        let failure = Task.isCancelled ? ProcessInventoryError.cancelled : error
+        guard failure != .cancelled else { return }
+        processListLoadError = failure.localizedDescription
     }
 
     private func snapshots(from inventory: [AppProcess]) -> [WatchedAppSnapshot] {

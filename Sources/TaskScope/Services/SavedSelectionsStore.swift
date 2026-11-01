@@ -227,6 +227,8 @@ final class SavedSelectionsStore: ObservableObject {
             return false
         }
         guard let index = selections.firstIndex(where: { $0.id == selection.id }) else {
+            // Another window may have deleted it while the rename sheet was open.
+            validationError = "This saved selection no longer exists."
             return false
         }
         validationError = nil
@@ -287,7 +289,9 @@ final class SavedSelectionsStore: ObservableObject {
                 if saved.executablePath == nil {
                     legacyNameMatches.insert(match.identity)
                 }
-            } else if candidates.isEmpty {
+            } else if unclaimed.isEmpty {
+                // Every candidate was claimed by an earlier entry, so nothing is
+                // left for this one; that is unavailable, not ambiguous.
                 unmatched.append(saved)
             } else {
                 ambiguous.append(saved)

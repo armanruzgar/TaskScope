@@ -252,7 +252,7 @@ final class WatchedAppsStore: ObservableObject {
                 ))
                 continue
             }
-            guard seenIDs.insert(normalized.id).inserted else {
+            guard !seenIDs.contains(normalized.id) else {
                 items.append(ImportPreviewItem(
                     id: offset,
                     preset: candidate,
@@ -270,6 +270,9 @@ final class WatchedAppsStore: ObservableObject {
                 ))
                 continue
             }
+            // Record the ID only once the candidate is accepted, so a rejected
+            // duplicate does not block a later valid candidate with the same ID.
+            seenIDs.insert(normalized.id)
             workingPresets.append(normalized)
             items.append(ImportPreviewItem(
                 id: offset,

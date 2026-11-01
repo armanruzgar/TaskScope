@@ -23,8 +23,8 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     var command: String {
         didSet { name = Self.name(from: command) }
     }
-    /// Last path component of `command`, computed once per row rather than on
-    /// every sort comparison and filter pass.
+    /// Display name derived from `command` (see `name(from:)`), computed once
+    /// per row rather than on every sort comparison and filter pass.
     private(set) var name: String
     /// Kernel-resolved executable vnode path. Never derived from argv/`ps comm`.
     var executablePath: String?
@@ -85,11 +85,26 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         pid
     }
 
+    /// `command` is the argv-backed `ps comm` value. An absolute path names its
+    /// last component. Anything else may be a title the process wrote over
+    /// argv[0] (`sshd-session: me@ttys001`, `ssh: /path/to/socket [mux]`), where
+    /// a '/' is free text rather than a path separator, so the name is the
+    /// leading token up to the first whitespace or ':'. A leading token that is
+    /// itself a relative path (`./build/tool`) names its last component. A
+    /// command with no '/' at all keeps its whole text, as it always has.
     static func name(from command: String) -> String {
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else { return "" }
-        let lastPathComponent = URL(fileURLWithPath: trimmedCommand).lastPathComponent
-        return lastPathComponent.isEmpty ? trimmedCommand : lastPathComponent
+        if trimmedCommand.hasPrefix("/") {
+            let lastPathComponent = URL(fileURLWithPath: trimmedCommand).lastPathComponent
+            return lastPathComponent.isEmpty || lastPathComponent == "/" ? trimmedCommand : lastPathComponent
+        }
+        guard trimmedCommand.contains("/") else { return trimmedCommand }
+        let token = trimmedCommand.prefix { !$0.isWhitespace && $0 != ":" }
+        guard !token.isEmpty else { return trimmedCommand }
+        guard token.contains("/") else { return String(token) }
+        let lastPathComponent = URL(fileURLWithPath: String(token)).lastPathComponent
+        return lastPathComponent.isEmpty || lastPathComponent == "/" ? String(token) : lastPathComponent
     }
 
     /// The executable path with the home directory abbreviated. Only an exact
