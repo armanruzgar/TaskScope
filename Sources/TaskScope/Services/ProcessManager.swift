@@ -441,7 +441,7 @@ final class ProcessManager: ObservableObject {
             let previousMessage = message
             var cancelledRead = false
             var mayHaveChangedState = false
-            if preset.hasCanonicalGlobalProtectIdentity { globalProtectDisconnectFailureID = nil }
+            if preset.isBuiltInGlobalProtect { globalProtectDisconnectFailureID = nil }
             var diagnosticReason: LifecycleDiagnosticFailure.Reason = .incomplete
             var diagnosticJobs: [LifecycleJobResult] = []
             defer {
@@ -467,7 +467,7 @@ final class ProcessManager: ObservableObject {
                 // overrides when the app is gone, for example mid-reinstall or
                 // before uninstalling, or a reinstalled client cannot start.
                 let wasKeptOff = isPresetKeptOffProvider?(preset) ?? false
-                if wasKeptOff || preset.hasCanonicalGlobalProtectIdentity {
+                if wasKeptOff || preset.isBuiltInGlobalProtect {
                     mayHaveChangedState = true
                     let allowed = await clearKeepOffOverrides(preset)
                     diagnosticJobs += allowed.jobs
@@ -505,7 +505,7 @@ final class ProcessManager: ObservableObject {
             // A UI started directly while PanGPS was stopped can remain stuck
             // retrieving configuration even after the service returns. Restart
             // that orphaned UI before restoration; never unload the VPN job.
-            if preset.hasCanonicalGlobalProtectIdentity,
+            if preset.isBuiltInGlobalProtect,
                beforeServices.isMainRunning,
                beforeServices.protectedRunning.isEmpty,
                beforeServices.unprivilegedProtectedRunning.isEmpty {
@@ -545,7 +545,7 @@ final class ProcessManager: ObservableObject {
             }
             // Bootstrap clears the override in the same administrator request.
             // Only a daemon that was already loaded can still need enabling.
-            let systemEnable = preset.hasCanonicalGlobalProtectIdentity
+            let systemEnable = preset.isBuiltInGlobalProtect
                 ? await lifecycle.enableSystemLaunchDaemons(for: preset) : .notNeeded
             diagnosticJobs += systemEnable.jobs
             let daemonResult = LifecycleBatchResult(jobs: ensuredDaemon.jobs + systemEnable.jobs)
@@ -561,7 +561,7 @@ final class ProcessManager: ObservableObject {
             let enableResult: LifecycleBatchResult
             // launchd overrides outlive TaskScope preferences (including reset
             // or reinstall). Explicit Open must recover them even without intent.
-            if wasKeptOff || preset.hasCanonicalGlobalProtectIdentity {
+            if wasKeptOff || preset.isBuiltInGlobalProtect {
                 enableResult = await lifecycle.enableUserLaunchAgents(for: preset)
                 diagnosticJobs += enableResult.jobs
                 guard enableResult.succeeded else {
@@ -590,14 +590,14 @@ final class ProcessManager: ObservableObject {
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
                 return
             }
-            if wasKeptOff || preset.hasCanonicalGlobalProtectIdentity {
+            if wasKeptOff || preset.isBuiltInGlobalProtect {
                 setPresetKeptOffHandler?(preset, false)
             }
             let serviceJobs = daemonResult.jobs + enableResult.jobs + agentResult.jobs
             let restored = daemonResult.didChangeState
                 || enableResult.didChangeState
                 || agentResult.didChangeState
-            lifecycleReport = serviceJobs.isEmpty || (preset.hasCanonicalGlobalProtectIdentity && !restored)
+            lifecycleReport = serviceJobs.isEmpty || (preset.isBuiltInGlobalProtect && !restored)
                 ? nil
                 : LifecycleReport(
                     title: "\(preset.displayName) Service Results",
@@ -635,7 +635,7 @@ final class ProcessManager: ObservableObject {
             // never opened over a running one.
             let activatesRunningApp = alreadyRunning
                 && mainWasRunning
-                && !preset.hasSupportedGlobalProtectIdentity
+                && !preset.isBuiltInGlobalProtect
             let reportsAlreadyRunning = alreadyRunning
                 && mainWasRunning
                 && !activatesRunningApp
@@ -716,7 +716,7 @@ final class ProcessManager: ObservableObject {
         confirmedFailureID: UUID? = nil
     ) async -> TaskScopeCommandResult {
         if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
-        let tracksPendingAction = recordIntent && preset.hasCanonicalGlobalProtectIdentity
+        let tracksPendingAction = recordIntent && preset.isBuiltInGlobalProtect
         if tracksPendingAction {
             pendingGlobalProtectKeepOffCount += 1
             isGlobalProtectKeepOffPending = true
@@ -741,9 +741,9 @@ final class ProcessManager: ObservableObject {
                 if isKeepOffIntentWritableProvider?() == false {
                     return "Settings are unreadable. Reset settings in Settings → General before changing Keep Off."
                 }
-                if preset.hasCanonicalGlobalProtectIdentity,
+                if preset.isBuiltInGlobalProtect,
                    let presets = watchedAppsProvider?(),
-                   !presets.contains(where: { $0.id == preset.id && $0.hasCanonicalGlobalProtectIdentity }) {
+                   !presets.contains(where: { $0.id == preset.id && $0.isBuiltInGlobalProtect }) {
                     return "The built-in GlobalProtect preset was removed. Keep Off was not recorded and no services were disabled."
                 }
                 return nil
@@ -754,7 +754,7 @@ final class ProcessManager: ObservableObject {
                 return
             }
             if let confirmedFailureID {
-                guard recordIntent, preset.hasCanonicalGlobalProtectIdentity,
+                guard recordIntent, preset.isBuiltInGlobalProtect,
                       confirmedFailureID == globalProtectDisconnectFailureID else {
                     commandResult = TaskScopeCommandResult(status: .rejected, message: "This disconnect failure is no longer current. Choose Keep GlobalProtect Off again.")
                     message = commandResult.message
@@ -799,7 +799,7 @@ final class ProcessManager: ObservableObject {
                 return
             }
 
-            if recordIntent && preset.hasCanonicalGlobalProtectIdentity {
+            if recordIntent && preset.isBuiltInGlobalProtect {
                 globalProtectDisconnectFailureID = nil
                 if confirmedFailureID == nil {
                     message = "Disconnecting GlobalProtect before stopping its services…"
@@ -823,7 +823,7 @@ final class ProcessManager: ObservableObject {
             if recordIntent {
                 setPresetKeptOffHandler?(preset, true)
             }
-            if recordIntent && preset.hasCanonicalGlobalProtectIdentity {
+            if recordIntent && preset.isBuiltInGlobalProtect {
                 message = "Stopping GlobalProtect and its services…"
             }
 
@@ -837,7 +837,7 @@ final class ProcessManager: ObservableObject {
             guard recordIntent || !Task.isCancelled else { return }
             let userDisable = await lifecycle.disableUserLaunchAgents(for: preset, preservingVPNService: !recordIntent)
             guard recordIntent || !Task.isCancelled else { return }
-            let systemDisable = preset.hasCanonicalGlobalProtectIdentity
+            let systemDisable = preset.isBuiltInGlobalProtect
                 ? await lifecycle.disableSystemLaunchDaemons(for: preset, allowAdministratorPrompt: recordIntent)
                 : .notNeeded
             guard recordIntent || !Task.isCancelled else { return }
@@ -866,14 +866,14 @@ final class ProcessManager: ObservableObject {
             }
 
             let terminationOutcomes = await terminateProcesses(for: preset, scope: .all)
-            if recordIntent && preset.hasCanonicalGlobalProtectIdentity {
+            if recordIntent && preset.isBuiltInGlobalProtect {
                 self.message = "Verifying GlobalProtect is off…"
             }
             await lifecycle.settleAfterProcessChange()
             let finalInventory = await refreshInventoryAfterMutation()
             guard recordIntent || !Task.isCancelled else { return }
             let nowSnapshot = snapshot(for: preset, inventory: finalInventory ?? [])
-            let serviceObservation = preset.hasCanonicalGlobalProtectIdentity
+            let serviceObservation = preset.isBuiltInGlobalProtect
                 ? await globalProtectServiceObservationProvider?() : nil
             guard recordIntent || !Task.isCancelled else { return }
 
@@ -894,7 +894,7 @@ final class ProcessManager: ObservableObject {
                 resultMessage = "Keep Off is enabled, but TaskScope could not verify the final process state."
                 diagnosticReason = .verificationUnavailable
                 commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if preset.hasCanonicalGlobalProtectIdentity
+            } else if preset.isBuiltInGlobalProtect
                 && (serviceObservation?.system == .running
                     || (serviceObservation == nil && !nowSnapshot.protectedRunning.isEmpty)) {
                 resultMessage = "Keep Off was requested, but a privileged VPN service is still running. Check the service report and your organization's policy before retrying."
@@ -910,11 +910,11 @@ final class ProcessManager: ObservableObject {
                 diagnosticReason = .stillRunning
                 commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
             } else {
-                if preset.hasCanonicalGlobalProtectIdentity && !recordIntent
+                if preset.isBuiltInGlobalProtect && !recordIntent
                     && (serviceObservation?.session == .running
                         || (serviceObservation == nil && nowSnapshot.hasCurrentUserLaunchAgent)) {
                     resultMessage = "Keep Off disabled relaunch jobs. The running login-session VPN service was preserved; choose Apply Keep Off for a confirmed disconnect and stop."
-                } else if preset.hasCanonicalGlobalProtectIdentity {
+                } else if preset.isBuiltInGlobalProtect {
                     resultMessage = "GlobalProtect is off. Its user agents are disabled; the system VPN service is disabled or not installed. Choose Open to restore them without reinstalling."
                 } else if !nowSnapshot.protectedRunning.isEmpty {
                     resultMessage = "\(preset.displayName) app is kept off. Protected system service remains available."
@@ -936,7 +936,7 @@ final class ProcessManager: ObservableObject {
     private func clearKeepOffOverrides(
         _ preset: WatchedAppPreset
     ) async -> (result: TaskScopeCommandResult, jobs: [LifecycleJobResult]) {
-        let systemEnable = preset.hasCanonicalGlobalProtectIdentity
+        let systemEnable = preset.isBuiltInGlobalProtect
             ? await lifecycle.enableSystemLaunchDaemons(for: preset) : .notNeeded
         // Do not start restoring user jobs after a cancelled system request.
         let userEnable = systemEnable.succeeded
@@ -985,7 +985,7 @@ final class ProcessManager: ObservableObject {
             // answer its request, and enforcement would close that UI. Leave it
             // for a bounded time, or until the next explicit action clears the
             // failure.
-            if preset.hasCanonicalGlobalProtectIdentity,
+            if preset.isBuiltInGlobalProtect,
                globalProtectDisconnectFailureID != nil,
                let graceUntil = globalProtectDisconnectGraceUntil,
                now() < graceUntil {
@@ -1020,7 +1020,7 @@ final class ProcessManager: ObservableObject {
 
     @discardableResult
     func quitAll(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
-        if preset.hasCanonicalGlobalProtectIdentity {
+        if preset.isBuiltInGlobalProtect {
             return await keepOff(preset)
         }
         return await quitAllKillable(preset)
@@ -1066,7 +1066,7 @@ final class ProcessManager: ObservableObject {
                 // These scopes never disconnect the VPN, so for GlobalProtect they
                 // leave its session VPN service loaded; Keep Off/Quit All stops it
                 // only after a verified disconnect.
-                let agentPreset = preset.hasSupportedGlobalProtectIdentity
+                let agentPreset = preset.isBuiltInGlobalProtect
                     ? preset.globalProtectInterfaceOnly
                     : preset
                 let agents: LifecycleBatchResult

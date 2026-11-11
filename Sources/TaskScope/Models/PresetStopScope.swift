@@ -104,7 +104,7 @@ enum PresetStopScope {
         }
 
         func completed(_ message: String) -> PresetStopResult {
-            let vpnRemains = before.preset.hasSupportedGlobalProtectIdentity
+            let vpnRemains = before.preset.isBuiltInGlobalProtect
                 && (!after.protectedRunning.isEmpty || !after.unprivilegedProtectedRunning.isEmpty)
             return .completed(message + (vpnRemains
                 ? " Its VPN service (PanGPS) is still running and the VPN was not disconnected; use Quit All in TaskScope to disconnect and stop it."
@@ -180,7 +180,7 @@ extension PresetStopScope {
     /// processes. For GlobalProtect that is only the interface agent: these stops
     /// never disconnect the VPN.
     static func closeAgentLabels(for preset: WatchedAppPreset) -> [String] {
-        let agentPreset = preset.hasSupportedGlobalProtectIdentity ? preset.globalProtectInterfaceOnly : preset
+        let agentPreset = preset.isBuiltInGlobalProtect ? preset.globalProtectInterfaceOnly : preset
         return agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
     }
 }

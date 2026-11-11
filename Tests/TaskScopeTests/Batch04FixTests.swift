@@ -18,7 +18,7 @@ final class Batch04FixTests: XCTestCase {
                                   protectedProcessNames: [], appPath: "/Applications/Batch04NeverInstalled.app",
                                   userLaunchAgentJobs: [.init(label: "batch04.agent", plistPath: "/fake/batch04.plist")])
     let absent = batch04Result(error: "Could not find service \"batch04.agent\" in domain", code: 113)
-    let daemon = WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0]
+    let daemon = WatchedAppPreset.globalProtectSystemDaemon
 
     func harness(_ answers: [ShellCommandResult], exists: Bool = true) -> LifecycleRuntimeHarness {
         LifecycleRuntimeHarness(existingPaths: exists ? [preset.appPath, "/fake/batch04.plist"] : [],
@@ -289,7 +289,7 @@ final class Batch04FixTests: XCTestCase {
     /// Background Keep Off must neither unload the session VPN service nor ask
     /// for administrator rights; only the production service forwards those flags.
     func testProductionServiceForwardsVPNPreservationAndPromptPermission() async {
-        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let session = WatchedAppPreset.globalProtectSessionAgent
         for preserve in [true, false] {
             let fake = LifecycleRuntimeHarness(existingPaths: [], commandResults: [], respond: { command in
                 if command.contains(" print ") {
@@ -338,7 +338,7 @@ final class Batch04FixTests: XCTestCase {
         // A daemon that is not loaded is never bootstrapped from a plist whose
         // Label is not the job's.
         let unloaded = LifecycleRuntimeHarness(existingPaths: [daemon.plistPath], launchAgentLabels: [daemon.plistPath: "wrong.label"], commandResults: [],
-            respond: { _ in batch04Result(error: "Could not find service \"\(WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0].label)\" in domain for system", code: 113) })
+            respond: { _ in batch04Result(error: "Could not find service \"\(WatchedAppPreset.globalProtectSystemDaemon.label)\" in domain for system", code: 113) })
         let wrong = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: unloaded.runtime)
         XCTAssertFalse(wrong.succeeded)
         XCTAssertTrue(wrong.failureSummary?.contains("mismatched Label") == true)
@@ -393,7 +393,7 @@ final class Batch04FixTests: XCTestCase {
     }
 
     func testIdleSessionJobGetsOneNonRestartingStartRequest() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let job = WatchedAppPreset.globalProtectSessionAgent
         let process = batch04Process(pid: 42, uid: 0, path: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
         let idle = batch04Result("job = {\n\tstate = not running\n\txpc = {\n\t\tdata = <deadbeef>}\n}")
         let fake = LifecycleRuntimeHarness(existingPaths: [job.plistPath], launchAgentLabels: [job.plistPath: job.label],
@@ -430,7 +430,7 @@ final class Batch04FixTests: XCTestCase {
         daemons[0]["servicePort"] = 4767
         stored["systemLaunchDaemonJobs"] = daemons
         let preset = try JSONDecoder().decode(WatchedAppPreset.self, from: JSONSerialization.data(withJSONObject: stored))
-        XCTAssertTrue(preset.hasCanonicalGlobalProtectIdentity)
+        XCTAssertTrue(preset.isBuiltInGlobalProtect)
         XCTAssertFalse(preset.hasUnknownFields)
     }
 }

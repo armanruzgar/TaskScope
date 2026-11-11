@@ -67,7 +67,7 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
     }
 
     var lifecycleUserLaunchAgentJobs: [UserLaunchAgentJob] {
-        if hasSupportedGlobalProtectIdentity {
+        if isBuiltInGlobalProtect {
             return Self.globalProtectUserLaunchAgentJobs
         }
         return userLaunchAgentJobs
@@ -79,15 +79,16 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// vendor's disconnect, which can leave DNS unusable.
     var globalProtectInterfaceOnly: WatchedAppPreset {
         var value = self
-        value.userLaunchAgentJobs = [Self.globalProtectUserLaunchAgentJobs[0]]
-        // Clearing the daemon jobs also stops the legacy-payload match that
-        // would expand back to both user jobs in lifecycleUserLaunchAgentJobs.
+        value.userLaunchAgentJobs = [Self.globalProtectInterfaceAgent]
+        // With its jobs changed the copy is no longer the built-in preset, so
+        // none of the built-in lifecycle steps (session service, system daemon,
+        // disconnect) apply to it. Clearing the daemon jobs keeps it that way.
         value.systemLaunchDaemonJobs = []
         return value
     }
 
     var lifecycleSystemLaunchDaemonJobs: [SystemLaunchDaemonJob] {
-        if hasSupportedGlobalProtectIdentity {
+        if isBuiltInGlobalProtect {
             return Self.globalProtectSystemLaunchDaemonJobs
         }
         return []
@@ -167,7 +168,15 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
         systemLaunchDaemonJobs: globalProtectSystemLaunchDaemonJobs
     )
 
-    var hasCanonicalGlobalProtectIdentity: Bool {
+    /// The built-in GlobalProtect preset, exactly as this build defines it. The
+    /// one test for a stored preset: only this preset disconnects first, has a
+    /// session VPN service and a privileged system daemon, offers Stop Services
+    /// Anyway, and has the GlobalProtect-specific card and texts. Stored presets
+    /// are validated on load, add, edit and import, and a stored preset with the
+    /// built-in id is always replaced by this exact value, so for them the id
+    /// alone would give the same answer. A copy whose jobs were changed (such as
+    /// `globalProtectInterfaceOnly`) is not the built-in preset.
+    var isBuiltInGlobalProtect: Bool {
         hasFixedGlobalProtectFields
             && userLaunchAgentJobs == Self.globalProtectUserLaunchAgentJobs
             && systemLaunchDaemonJobs == Self.globalProtectSystemLaunchDaemonJobs
@@ -176,6 +185,8 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// Recognizes the previous built-in payload so a trusted schema migration can
     /// add the optional per-user PanGPS agent without putting preferences into
     /// recovery mode. No custom identity or privileged field is accepted here.
+    /// Validation and migration only; everything else uses
+    /// `isBuiltInGlobalProtect`.
     var hasSupportedGlobalProtectIdentity: Bool {
         hasFixedGlobalProtectFields
             && [
@@ -232,32 +243,36 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
             .appendingPathComponent(component, isDirectory: true).path + "/"
     }
 
-    static let globalProtectUserLaunchAgentJobs = [
-        UserLaunchAgentJob(
-            label: "com.paloaltonetworks.gp.pangpa",
-            plistPath: "/Library/LaunchAgents/com.paloaltonetworks.gp.pangpa.plist"
-        ),
-        UserLaunchAgentJob(
-            label: "com.paloaltonetworks.gp.pangps",
-            plistPath: "/Library/LaunchAgents/com.paloaltonetworks.gp.pangps.plist",
-            isRequired: false
-        )
-    ]
+    /// GlobalProtect's interface agent (`pangpa`). On some layouts its
+    /// Program is the main GlobalProtect binary.
+    static let globalProtectInterfaceAgent = UserLaunchAgentJob(
+        label: "com.paloaltonetworks.gp.pangpa",
+        plistPath: "/Library/LaunchAgents/com.paloaltonetworks.gp.pangpa.plist"
+    )
 
-    static let legacyGlobalProtectUserLaunchAgentJobs = [
-        UserLaunchAgentJob(
-            label: "com.paloaltonetworks.gp.pangpa",
-            plistPath: "/Library/LaunchAgents/com.paloaltonetworks.gp.pangpa.plist"
-        )
-    ]
+    /// GlobalProtect's per-user session VPN service (`pangps`), which runs
+    /// PanGPS. Optional: older installations do not have it. Unloading it
+    /// without the vendor's disconnect drops a connected tunnel.
+    static let globalProtectSessionAgent = UserLaunchAgentJob(
+        label: "com.paloaltonetworks.gp.pangps",
+        plistPath: "/Library/LaunchAgents/com.paloaltonetworks.gp.pangps.plist",
+        isRequired: false
+    )
 
-    static let globalProtectSystemLaunchDaemonJobs = [
-        SystemLaunchDaemonJob(
-            label: "com.paloaltonetworks.gp.pangpsd",
-            plistPath: "/Library/LaunchDaemons/com.paloaltonetworks.gp.pangpsd.plist",
-            processName: "PanGPS"
-        )
-    ]
+    /// GlobalProtect's privileged system VPN daemon (`pangpsd`), which also
+    /// runs PanGPS. Changing it needs administrator approval.
+    static let globalProtectSystemDaemon = SystemLaunchDaemonJob(
+        label: "com.paloaltonetworks.gp.pangpsd",
+        plistPath: "/Library/LaunchDaemons/com.paloaltonetworks.gp.pangpsd.plist",
+        processName: "PanGPS"
+    )
+
+    static let globalProtectUserLaunchAgentJobs = [globalProtectInterfaceAgent, globalProtectSessionAgent]
+
+    /// The built-in preset's user agents before the session agent was added.
+    static let legacyGlobalProtectUserLaunchAgentJobs = [globalProtectInterfaceAgent]
+
+    static let globalProtectSystemLaunchDaemonJobs = [globalProtectSystemDaemon]
 }
 
 struct WatchedAppSnapshot: Equatable, Sendable {

@@ -44,13 +44,13 @@ extension ProcessLifecycleController {
         allowAdministratorPrompt: Bool,
         runtime: ProcessLifecycleRuntime = .live
     ) async -> LifecycleBatchResult {
-        guard preset.hasCanonicalGlobalProtectIdentity else { return .notNeeded }
-        let job = WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0]
+        guard preset.isBuiltInGlobalProtect else { return .notNeeded }
+        let job = WatchedAppPreset.globalProtectSystemDaemon
         let before = await systemOffState(job, runtime: runtime)
         guard let before else {
             return systemResult(job, .verified, "System VPN service is disabled persistently and unloaded.")
         }
-        let sessionJob = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let sessionJob = WatchedAppPreset.globalProtectSessionAgent
         let preservesLoadedDaemon = runtime.fileExists(sessionJob.plistPath)
         let daemonInstalled = runtime.fileExists(job.plistPath)
         if preservesLoadedDaemon || !daemonInstalled {
@@ -189,9 +189,9 @@ extension ProcessLifecycleController {
         for preset: WatchedAppPreset,
         runtime: ProcessLifecycleRuntime = .live
     ) async -> LifecycleBatchResult {
-        guard preset.hasCanonicalGlobalProtectIdentity else { return .notNeeded }
-        let job = WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0]
-        let sessionJob = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        guard preset.isBuiltInGlobalProtect else { return .notNeeded }
+        let job = WatchedAppPreset.globalProtectSystemDaemon
+        let sessionJob = WatchedAppPreset.globalProtectSessionAgent
         let usesSessionService = runtime.fileExists(sessionJob.plistPath)
         let before = await systemDisabledState(job, runtime: runtime)
         switch before {

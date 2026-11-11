@@ -224,8 +224,8 @@ enum ProcessLifecycleController {
 
             // Background ticks cannot establish a disconnected tunnel. Persist
             // suppression without unloading the session VPN service underneath it.
-            if preservingVPNService, preset.hasCanonicalGlobalProtectIdentity,
-               job == WatchedAppPreset.globalProtectUserLaunchAgentJobs[1] {
+            if preservingVPNService, preset.isBuiltInGlobalProtect,
+               job == WatchedAppPreset.globalProtectSessionAgent {
                 results.append(LifecycleJobResult(
                     label: job.label, state: .changed,
                     detail: "Disabled persistently; any loaded VPN service was preserved. Choose Apply Keep Off to disconnect and stop it."
@@ -332,7 +332,7 @@ enum ProcessLifecycleController {
     ) async -> LifecycleBatchResult {
         await bootstrapUserLaunchAgents(
             jobs: preset.lifecycleUserLaunchAgentJobs,
-            avoidDuplicateGlobalProtectUI: preset.hasCanonicalGlobalProtectIdentity,
+            avoidDuplicateGlobalProtectUI: preset.isBuiltInGlobalProtect,
             runtime: runtime
         )
     }
@@ -401,7 +401,7 @@ enum ProcessLifecycleController {
             }
 
             if avoidDuplicateGlobalProtectUI,
-               job == WatchedAppPreset.globalProtectUserLaunchAgentJobs[0] {
+               job == WatchedAppPreset.globalProtectInterfaceAgent {
                 guard case .success(let inventory) = await runtime.loadProcessInventory() else {
                     results.append(LifecycleJobResult(
                         label: job.label, state: .failed,
@@ -492,12 +492,12 @@ enum ProcessLifecycleController {
         for preset: WatchedAppPreset,
         runtime: ProcessLifecycleRuntime = .live
     ) async -> LifecycleBatchResult {
-        guard preset.hasCanonicalGlobalProtectIdentity else { return .notNeeded }
+        guard preset.isBuiltInGlobalProtect else { return .notNeeded }
         // On current installations PanGPS is a setuid executable launched by
         // gui/<uid>/pangps. Its effective root UID does not make it pangpsd.
         // When pre-logon is off, starting pangpsd can make it remove itself.
         // Restore the installed session service before starting the UI instead.
-        let sessionJob = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let sessionJob = WatchedAppPreset.globalProtectSessionAgent
         if runtime.fileExists(sessionJob.plistPath) {
             return await ensureGlobalProtectSessionService(sessionJob, runtime: runtime)
         }

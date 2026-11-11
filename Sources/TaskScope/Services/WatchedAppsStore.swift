@@ -183,7 +183,7 @@ final class WatchedAppsStore: ObservableObject {
     @discardableResult
     func restoreBuiltInPreset() -> Bool {
         guard !rejectIfReadOnly() else { return false }
-        guard !presets.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) else {
+        guard !presets.contains(where: \.isBuiltInGlobalProtect) else {
             validationError = nil
             return true
         }

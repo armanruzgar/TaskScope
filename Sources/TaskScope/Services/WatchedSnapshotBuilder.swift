@@ -81,7 +81,7 @@ struct WatchedSnapshotBuilder: Sendable {
             runningNames: runningNames,
             mainProcessPIDs: mainProcessPIDs,
             unprivilegedProtectedNames: unprivilegedProtectedNames,
-            hasCurrentUserLaunchAgent: preset.hasSupportedGlobalProtectIdentity
+            hasCurrentUserLaunchAgent: preset.isBuiltInGlobalProtect
                 && currentUID != 0
                 && inventory.contains {
                     $0.pid != excludedPID

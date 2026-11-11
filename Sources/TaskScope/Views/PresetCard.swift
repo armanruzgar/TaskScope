@@ -20,7 +20,7 @@ struct PresetCard: View {
             HStack {
                 // The shield belongs to the built-in VPN preset only; it suggests
                 // network protection and Keep Off, which other presets lack.
-                Label(snapshot.preset.displayName, systemImage: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "network.badge.shield.half.filled" : "app")
+                Label(snapshot.preset.displayName, systemImage: snapshot.preset.isBuiltInGlobalProtect ? "network.badge.shield.half.filled" : "app")
                     .font(.headline)
 
                 Spacer()
@@ -39,8 +39,8 @@ struct PresetCard: View {
                 PresetActionButton(title: "Quit Helpers…", systemImage: "wrench.and.screwdriver", role: .destructive, action: onQuitHelpers)
                     .disabled(!hasHelperScope)
                     .help(hasHelperScope ? "Quit Helpers" : "This preset has no helper processes or user launch agents to stop.")
-                PresetActionButton(title: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "Quit All…" : "Quit App and Helpers…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
-                    .disabled(snapshot.preset.hasCanonicalGlobalProtectIdentity && !isKeepOffControlEnabled)
+                PresetActionButton(title: snapshot.preset.isBuiltInGlobalProtect ? "Quit All…" : "Quit App and Helpers…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
+                    .disabled(snapshot.preset.isBuiltInGlobalProtect && !isKeepOffControlEnabled)
             }
             .disabled(isMutationActive)
 
@@ -50,7 +50,7 @@ struct PresetCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if snapshot.preset.id == WatchedAppPreset.globalProtectID {
+            if snapshot.preset.isBuiltInGlobalProtect {
                 Divider()
                 if isKeepOffControlEnabled {
                     Toggle(

@@ -136,7 +136,7 @@ final class ProcessConfirmationState: ObservableObject {
 
         /// The verb, as on the card's button.
         var confirmTitle: String {
-            action == .quitAll && preset.hasCanonicalGlobalProtectIdentity ? "Quit All" : action.rawValue
+            action == .quitAll && preset.isBuiltInGlobalProtect ? "Quit All" : action.rawValue
         }
 
         /// A question that names the preset the card shows.
@@ -148,7 +148,7 @@ final class ProcessConfirmationState: ObservableObject {
             case .quitAll:
                 // GlobalProtect's button is the stronger Quit All; a custom
                 // preset's is Quit App and Helpers, so its question says that.
-                return preset.hasCanonicalGlobalProtectIdentity
+                return preset.isBuiltInGlobalProtect
                     ? "Quit All \(name) Processes?"
                     : "Quit \(name) and Its Helpers?"
             case .keepOff: return "Keep \(name) Off?"

@@ -51,7 +51,7 @@ struct PresetsSectionView: View {
                         onQuitAll: {
                             requestPresetAction(.quitAll, id: snapshot.preset.id)
                         },
-                        isKeptOff: snapshot.preset.id == WatchedAppPreset.globalProtectID
+                        isKeptOff: snapshot.preset.isBuiltInGlobalProtect
                             && settings.keepGlobalProtectOff,
                         isKeepOffControlEnabled: !settings.isReadOnlyAfterCorruption,
                         onKeepOffChanged: { keptOff in
@@ -123,7 +123,7 @@ struct PresetsSectionView: View {
             Text(watchedApps.persistenceIssue ?? "Stored presets could not be read.")
                 .font(.caption).foregroundStyle(.secondary)
             if settings.keepGlobalProtectOff
-                && !watchedApps.presets.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) {
+                && !watchedApps.presets.contains(where: { $0.isBuiltInGlobalProtect }) {
                 Text("Keep GlobalProtect Off is not being enforced until presets are reset.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -153,7 +153,7 @@ struct PresetsSectionView: View {
     }
 
     private func stopRecoveryAction(for preset: WatchedAppPreset) -> (() -> Void)? {
-        guard preset.hasCanonicalGlobalProtectIdentity,
+        guard preset.isBuiltInGlobalProtect,
               let failureID = processManager.globalProtectDisconnectFailureID else { return nil }
         return {
             confirmationState.requestPresetAction(.stopServices, preset: preset, disconnectFailureID: failureID)

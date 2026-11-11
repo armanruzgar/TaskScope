@@ -6,7 +6,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
     func testSessionKeepOffPreservesLoadedSystemDaemonAndItsOverride() async {
         for disabled in [false, true] {
             let harness = ServiceHarness(disabled: disabled, loaded: true)
-            let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+            let session = WatchedAppPreset.globalProtectSessionAgent
             var runtime = harness.runtime
             let exists = runtime.fileExists
             runtime.fileExists = { $0 == session.plistPath || exists($0) }
@@ -312,7 +312,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
 
     func testSessionInstallationPreservesSystemDisableWithoutAdministratorRequest() async {
         let harness = ServiceHarness(disabled: true, loaded: false)
-        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let session = WatchedAppPreset.globalProtectSessionAgent
         var runtime = harness.runtime
         runtime.fileExists = { $0 == session.plistPath }
         runtime.launchAgentLabel = { $0 == session.plistPath ? session.label : nil }
@@ -338,7 +338,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         for label in [nil, "wrong.label"] as [String?] {
             let harness = ServiceHarness(disabled: true, loaded: false)
             var runtime = harness.runtime
-            runtime.fileExists = { $0 == WatchedAppPreset.globalProtectUserLaunchAgentJobs[1].plistPath }
+            runtime.fileExists = { $0 == WatchedAppPreset.globalProtectSessionAgent.plistPath }
             runtime.launchAgentLabel = { _ in label }
             let result = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: runtime)
             XCTAssertFalse(result.succeeded)
@@ -355,7 +355,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             var runtime = harness.runtime
             if preservingLoadedDaemon {
                 let fileExists = runtime.fileExists
-                runtime.fileExists = { fileExists($0) || $0 == WatchedAppPreset.globalProtectUserLaunchAgentJobs[1].plistPath }
+                runtime.fileExists = { fileExists($0) || $0 == WatchedAppPreset.globalProtectSessionAgent.plistPath }
             }
             let result = await ProcessLifecycleController.disableSystemLaunchDaemons(
                 for: .globalProtect, allowAdministratorPrompt: true, runtime: runtime
@@ -374,7 +374,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
     func testPrivilegedDisableScriptParsesAsShell() async {
         for preservesLoadedDaemon in [false, true] {
             let script = ProcessLifecycleController.adminDisableScript(
-                for: WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0],
+                for: WatchedAppPreset.globalProtectSystemDaemon,
                 preservingLoadedDaemon: preservesLoadedDaemon
             )
             if preservesLoadedDaemon {
@@ -401,7 +401,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         ]
         for scenario in cases {
             let script = ProcessLifecycleController.adminDisableScript(
-                for: WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0],
+                for: WatchedAppPreset.globalProtectSystemDaemon,
                 preservingLoadedDaemon: scenario.preserve
             ).replacingOccurrences(of: "/bin/launchctl", with: "fake_launchd_tool")
             guard !script.contains("launchctl") else { return XCTFail("The stand-in did not replace every launchctl call") }
@@ -452,7 +452,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
     }
     func testBatch04SessionOpenWorksWithDisabledUnloadedSystemDaemon() async {
         let fake = ServiceHarness(disabled: true, loaded: false, sessionLoaded: true)
-        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let session = WatchedAppPreset.globalProtectSessionAgent
         var runtime = fake.runtime
         let exists = runtime.fileExists
         runtime.fileExists = { $0 == session.plistPath || exists($0) }
@@ -515,7 +515,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
 
     func testBatch04SessionOnlyInstallNeedsNoSystemDisableOverrideOrPrompt() async {
         let fake = ServiceHarness(disabled: false, loaded: false)
-        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let session = WatchedAppPreset.globalProtectSessionAgent
         var runtime = fake.runtime
         runtime.fileExists = { $0 == session.plistPath }
         let stopped = await ProcessLifecycleController.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: false, runtime: runtime)

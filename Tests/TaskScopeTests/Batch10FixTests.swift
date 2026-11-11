@@ -133,7 +133,7 @@ final class Batch10FixTests: XCTestCase {
         let state = ProcessConfirmationState()
         let view = Batch10.popover(fixture, state: state)
         let cards = try view.inspect().findAll(PresetCard.self)
-        let gp = try XCTUnwrap(cards.first { try $0.actualView().snapshot.preset.hasCanonicalGlobalProtectIdentity })
+        let gp = try XCTUnwrap(cards.first { try $0.actualView().snapshot.preset.isBuiltInGlobalProtect })
         let editor = try XCTUnwrap(cards.first { try $0.actualView().snapshot.preset.id == preset.id })
         XCTAssertTrue(try gp.actualView().isKeptOff)
         XCTAssertFalse(try editor.actualView().isKeptOff)

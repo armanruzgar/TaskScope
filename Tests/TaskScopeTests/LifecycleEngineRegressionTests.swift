@@ -94,7 +94,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
     }
 
     func testOpenReportsActualOverrideRestoration() async {
-        let label = WatchedAppPreset.globalProtectUserLaunchAgentJobs[0].label
+        let label = WatchedAppPreset.globalProtectInterfaceAgent.label
         let runtime = CommandRuntime(disabledTable: "disabled services = {\n\"\(label)\" => true\n}")
         var lifecycle = FakeLifecycle()
         lifecycle.enableRuntime = runtime.runtime

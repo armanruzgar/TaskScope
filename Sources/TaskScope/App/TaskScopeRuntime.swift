@@ -54,14 +54,14 @@ final class TaskScopeRuntime {
         processManager.isKeepOffIntentWritableProvider = { !settings.isReadOnlyAfterCorruption }
         processManager.keptOffPresetsProvider = {
             settings.keepGlobalProtectOff
-                ? watchedApps.presets.filter { $0.id == WatchedAppPreset.globalProtectID }
+                ? watchedApps.presets.filter { $0.isBuiltInGlobalProtect }
                 : []
         }
         processManager.isPresetKeptOffProvider = { preset in
-            preset.id == WatchedAppPreset.globalProtectID && settings.keepGlobalProtectOff
+            preset.isBuiltInGlobalProtect && settings.keepGlobalProtectOff
         }
         processManager.setPresetKeptOffHandler = { preset, keptOff in
-            guard preset.id == WatchedAppPreset.globalProtectID else { return }
+            guard preset.isBuiltInGlobalProtect else { return }
             settings.keepGlobalProtectOff = keptOff
         }
         let coordinator = AppCommandCoordinator(

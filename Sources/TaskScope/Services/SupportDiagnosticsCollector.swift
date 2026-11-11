@@ -41,7 +41,7 @@ struct SupportDiagnosticsCollector {
             ))
         }
         return .init(
-            kind: preset.hasSupportedGlobalProtectIdentity ? .builtInGlobalProtect : .custom,
+            kind: preset.isBuiltInGlobalProtect ? .builtInGlobalProtect : .custom,
             appBundleFound: runtime.fileExists(preset.appPath),
             keepOffRequested: keepOffRequested, userLaunchAgents: agents
         )

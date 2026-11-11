@@ -633,7 +633,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testGlobalProtectDoesNotBootstrapUIJobWhenAppIsAlreadyOpenDirectly() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[0]
+        let job = WatchedAppPreset.globalProtectInterfaceAgent
         var ui = process(pid: 42, command: GlobalProtectAccessibilityDisconnect.executable)
         ui.uid = 501
         let harness = LifecycleRuntimeHarness(
@@ -649,7 +649,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testGlobalProtectUnknownInventoryCannotStartADuplicateUI() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[0]
+        let job = WatchedAppPreset.globalProtectInterfaceAgent
         let harness = LifecycleRuntimeHarness(
             existingPaths: [job.plistPath],
             launchAgentLabels: [job.plistPath: job.label],
@@ -662,7 +662,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testGlobalProtectDoesNotTrustAnImpostorOrAnotherUsersUI() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[0]
+        let job = WatchedAppPreset.globalProtectInterfaceAgent
         for (uid, path) in [(uid_t(501), "/tmp/GlobalProtect"), (uid_t(502), GlobalProtectAccessibilityDisconnect.executable)] {
             var ui = process(pid: 42, command: path)
             ui.uid = uid
@@ -836,8 +836,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
     func testReadinessCommandsShareWallClockDeadline() async {
         for session in [false, true] {
-            let sessionJob = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
-            let daemonJob = WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0]
+            let sessionJob = WatchedAppPreset.globalProtectSessionAgent
+            let daemonJob = WatchedAppPreset.globalProtectSystemDaemon
             let path = session ? sessionJob.plistPath : daemonJob.plistPath
             let clock = LifecycleTestClock()
             let harness = LifecycleRuntimeHarness(
@@ -866,8 +866,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
     func testReadinessDoesNotRetryAfterInventoryConsumesDeadline() async {
         for session in [false, true] {
-            let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
-            let path = session ? job.plistPath : WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0].plistPath
+            let job = WatchedAppPreset.globalProtectSessionAgent
+            let path = session ? job.plistPath : WatchedAppPreset.globalProtectSystemDaemon.plistPath
             let clock = LifecycleTestClock()
             var service = process(pid: 42, command: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
             service.uid = 0
@@ -991,7 +991,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testRootPanGPSInTheSessionJobIsAcceptedWithoutBootstrappingSystemDaemon() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let job = WatchedAppPreset.globalProtectSessionAgent
         for owner: uid_t in [0, 501] {
             var service = process(pid: 42, command: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
             service.uid = owner
@@ -1010,7 +1010,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testStoppedSessionServiceIsEnabledAndStartedWithoutKillingTheNewProcess() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let job = WatchedAppPreset.globalProtectSessionAgent
         var service = process(pid: 42, command: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
         service.uid = 0
         let harness = LifecycleRuntimeHarness(
@@ -1034,7 +1034,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
     }
 
     func testSessionServiceReadinessRejectsWrongOwnerPIDAndExecutableWithoutSystemFallback() async {
-        let job = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        let job = WatchedAppPreset.globalProtectSessionAgent
         for invalid in ["owner", "pid", "path", "missing-path"] {
             var service = process(pid: invalid == "pid" ? 43 : 42,
                                   command: invalid == "path" ? "/tmp/PanGPS" : "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
@@ -1157,7 +1157,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
 
         let script = ProcessLifecycleController.adminBootstrapScript(
-            for: WatchedAppPreset.globalProtectSystemLaunchDaemonJobs[0]
+            for: WatchedAppPreset.globalProtectSystemDaemon
         )
         XCTAssertFalse(script.contains("kickstart"))
         XCTAssertTrue(script.contains("exit 0"), "a loaded daemon must be left alone")

@@ -345,7 +345,7 @@ struct TaskScopePopoverView: View {
         let preset = pending.preset
         let action = pending.action
         let failureID = pending.disconnectFailureID
-        let presentsResult = preset.hasCanonicalGlobalProtectIdentity
+        let presentsResult = preset.isBuiltInGlobalProtect
             && (action == .quitAll || action == .keepOff || action == .stopServices)
         let showResult = openFullWindow
         let isExpandedWindow = isExpandedWindow
@@ -1538,52 +1538,41 @@ struct TaskScopePopoverView: View {
         for pending: ProcessConfirmationState.PendingPresetAction
     ) -> String {
         let preset = pending.preset
+        let forceStopDisclosure = PresetStopScope.forceStopDisclosure
         let names: [String]
         switch pending.action {
+        case .stopServices:
+            return "GlobalProtect did not complete a normal disconnect. TaskScope will stop and disable its services anyway and keep them off until you choose Open. This can interrupt network access or leave VPN DNS settings behind. If internet access stops working, choose Open to restore the service. Administrator approval may be required. \(forceStopDisclosure)"
+        case .keepOff:
+            // Keep Off is offered only for the built-in GlobalProtect preset.
+            return globalProtectStopMessage
+        case .quitAll where preset.isBuiltInGlobalProtect:
+            return globalProtectStopMessage
         case .quitApp:
             names = [preset.mainProcessName]
         case .quitHelpers:
             names = preset.helperProcessNames
         case .quitAll:
             names = preset.killableNames
-        case .keepOff, .stopServices:
-            names = preset.killableNames
         }
         let targets = names.isEmpty ? "no configured processes" : names.joined(separator: ", ")
         let agentLabels = PresetStopScope.closeAgentLabels(for: preset)
         let agentList = agentLabels.joined(separator: ", ")
-        let forceStopDisclosure = PresetStopScope.forceStopDisclosure
-
-        if pending.action == .stopServices {
-            return "GlobalProtect did not complete a normal disconnect. TaskScope will stop and disable its services anyway and keep them off until you choose Open. This can interrupt network access or leave VPN DNS settings behind. If internet access stops working, choose Open to restore the service. Administrator approval may be required. \(forceStopDisclosure)"
-        }
-
-        if preset.hasCanonicalGlobalProtectIdentity && (pending.action == .quitAll || pending.action == .keepOff) {
-            return "TaskScope will disconnect the VPN, stop GlobalProtect and its services, and keep them off until you choose Open. Accessibility permission lets TaskScope press Disconnect for you; administrator approval is requested only when needed to stop the system service. \(forceStopDisclosure)"
-        }
 
         var sentences: [String] = []
-        switch pending.action {
-        case .keepOff, .stopServices:
-            sentences.append(
-                "TaskScope will persistently disable GlobalProtect's per-user launch agents (\(agentList)) and stop current user-facing matches: \(targets)."
-            )
-            sentences.append("Open restores the required services without reinstalling.")
-        case .quitHelpers:
-            if !agentLabels.isEmpty {
-                sentences.append(
-                    "TaskScope will unload the helper launch agents (\(agentList)); an agent that is running the main \(preset.mainProcessName) process is left loaded."
-                )
-            }
-            sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
-        case .quitApp, .quitAll:
-            if !agentLabels.isEmpty {
-                sentences.append("TaskScope will unload the user launch agents (\(agentList)).")
-            }
-            sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
+        if !agentLabels.isEmpty {
+            sentences.append(pending.action == .quitHelpers
+                ? "TaskScope will unload the helper launch agents (\(agentList)); an agent that is running the main \(preset.mainProcessName) process is left loaded."
+                : "TaskScope will unload the user launch agents (\(agentList)).")
         }
+        sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
         sentences.append(forceStopDisclosure)
         return sentences.joined(separator: " ")
+    }
+
+    /// Quit All and Keep Off of the built-in GlobalProtect preset.
+    private static var globalProtectStopMessage: String {
+        "TaskScope will disconnect the VPN, stop GlobalProtect and its services, and keep them off until you choose Open. Accessibility permission lets TaskScope press Disconnect for you; administrator approval is requested only when needed to stop the system service. \(PresetStopScope.forceStopDisclosure)"
     }
 
     private func moveKeyboard(by delta: Int, in processes: [AppProcess], proxy: ScrollViewProxy) {

@@ -175,7 +175,7 @@ struct SettingsView: View {
                 .padding(.horizontal)
 
             if !watchedApps.isReadOnlyAfterCorruption,
-               !watchedApps.presets.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) {
+               !watchedApps.presets.contains(where: { $0.isBuiltInGlobalProtect }) {
                 Button("Restore Built-in GlobalProtect Preset") {
                     refusedPresetDeletion = nil
                     if watchedApps.restoreBuiltInPreset() {
@@ -218,7 +218,7 @@ struct SettingsView: View {
                         HStack {
                             Text(preset.displayName).fontWeight(.semibold)
                             Spacer()
-                            if preset.id == WatchedAppPreset.globalProtectID {
+                            if preset.isBuiltInGlobalProtect {
                                 Text("Built-in")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
@@ -230,7 +230,7 @@ struct SettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Dry run \(preset.displayName)")
-                            if preset.id != WatchedAppPreset.globalProtectID {
+                            if !preset.isBuiltInGlobalProtect {
                                 Button("Edit…") {
                                     prepareToEdit(preset)
                                 }
@@ -274,7 +274,7 @@ struct SettingsView: View {
                             Text("Protected: \(preset.protectedProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
                         }
                         Text("App path: \(preset.appPath)").font(.caption).foregroundStyle(.secondary)
-                        if preset.id == WatchedAppPreset.globalProtectID {
+                        if preset.isBuiltInGlobalProtect {
                             GlobalProtectCompatibilityButton(
                                 keepOffRequested: settings.isReadOnlyAfterCorruption
                                     ? nil : settings.keepGlobalProtectOff
@@ -496,12 +496,12 @@ struct SettingsView: View {
         operations.append(
             "Open: open \(preset.appPath) only when \(preset.mainProcessName) is not already running, then verify it."
         )
-        let agentPreset = preset.hasSupportedGlobalProtectIdentity ? preset.globalProtectInterfaceOnly : preset
+        let agentPreset = preset.isBuiltInGlobalProtect ? preset.globalProtectInterfaceOnly : preset
         let agentLabels = agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
         // A custom preset's card names its full stop Quit App and Helpers. The
         // built-in GlobalProtect card has the stronger Quit All instead, so its
         // user-scope full stop is reachable only as the Shortcuts Stop action.
-        let fullStop = preset.hasCanonicalGlobalProtectIdentity ? "Shortcuts Stop" : "Quit App and Helpers"
+        let fullStop = preset.isBuiltInGlobalProtect ? "Shortcuts Stop" : "Quit App and Helpers"
         if !agentLabels.isEmpty {
             operations.append(
                 "Quit App, Quit Helpers, or \(fullStop): unload and verify the user launch agents (\(agentLabels.joined(separator: ", "))) before signaling processes; Quit Helpers preserves an agent running the main process."
@@ -523,7 +523,7 @@ struct SettingsView: View {
                 "Never signal protected processes through these ordinary quits: \(preset.protectedProcessNames.joined(separator: ", "))."
             )
         }
-        if preset.id == WatchedAppPreset.globalProtectID {
+        if preset.isBuiltInGlobalProtect {
             operations.append(
                 "Quit All and Keep Off: use Accessibility to disconnect GlobalProtect, verify a stable disconnected state, then disable and unload its known services and stop its processes. An unverified disconnect stops the action before new Keep Off intent is saved. An explicit action requests administrator approval only if needed for the fixed system VPN service. Background enforcement never requests privileges. Open and turning Keep Off off restore the required VPN service and app. A window started without its service is closed and restored; an already running UI is not duplicated. For session-agent installations, the unused system daemon remains disabled."
             )
@@ -737,7 +737,7 @@ struct SettingsView: View {
         isSettingsReadOnlyAfterCorruption: Bool = false,
         isGlobalProtectKeepOffPending: Bool = false
     ) -> String? {
-        guard preset.id == WatchedAppPreset.globalProtectID else { return nil }
+        guard preset.isBuiltInGlobalProtect else { return nil }
         if isSettingsReadOnlyAfterCorruption {
             return "Settings are unreadable, so Keep GlobalProtect Off may still be active. Recover settings and clear Keep Off before deleting the built-in preset."
         }
@@ -795,7 +795,7 @@ struct SettingsView: View {
     }
 
     private var presetDeletionMessage: String {
-        if interactions.pendingPresetDeletions.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) {
+        if interactions.pendingPresetDeletions.contains(where: { $0.isBuiltInGlobalProtect }) {
             return "Deleting the built-in GlobalProtect preset also removes its Keep GlobalProtect Off and Disconnect controls. Restore Built-in GlobalProtect Preset adds it back."
         }
         return "This cannot be undone."
