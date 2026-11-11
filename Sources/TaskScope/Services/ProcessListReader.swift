@@ -41,18 +41,22 @@ enum ProcessListReader {
     // ShellCommandRunner pins numeric/time formatting to C and the time zone to
     // UTC, while allowing UTF-8 process names.
     static let processListCommand = "/bin/ps -awwwxo pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="
-    static let identityValidationCommand = "/bin/ps -awwwxo pid=,lstart="
     static let networkStatsCommand = "/usr/bin/nettop -P -L 1 -n -x -J bytes_in,bytes_out"
 
     /// Every command and kernel read goes through a parameter whose default is
-    /// the real one, so tests can script `ps` and `nettop` output, failures and
-    /// cancellations.
+    /// the real one, so tests can script `ps` and `nettop` output, the process
+    /// table, failures and cancellations.
+    ///
+    /// `ps` stays: it is the only unprivileged source of RSS and %CPU for other
+    /// users' processes. One in-process read of the kernel's process table,
+    /// taken after the per-row libproc reads, then vouches for each row's
+    /// identity, where a second `ps` used to.
     static func currentProcessList(
         fetchExtendedStats: Bool,
         run: @Sendable (String) async -> ShellCommandResult = { await ShellCommandRunner.run($0) },
         executablePath: @Sendable (Int32) -> String? = { executablePath(for: $0) },
         startUptime: @Sendable (Int32) -> UInt64? = { startUptimeNanoseconds(for: $0) },
-        zombieState: @Sendable (Int32) -> Bool? = { ProcessSignalGuard.zombieState($0) },
+        processTable: @Sendable () -> KernelProcessTable.TableRead = { KernelProcessTable.allEntries() },
         diskIO: @Sendable (Int32) -> (read: Double, written: Double)? = { diskIOBytes(for: $0) },
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier
     ) async -> Result<[AppProcess], ProcessInventoryError> {
@@ -79,8 +83,8 @@ enum ProcessListReader {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        // Read between the snapshots, like the paths, so identity validation
-        // also vouches for these start times.
+        // Read before the process table, like the paths, so identity
+        // validation also vouches for these start times.
         let currentUID = getuid()
         let monotonicStarts = Dictionary(
             parsed.compactMap { process -> (Int32, UInt64)? in
@@ -89,32 +93,23 @@ enum ProcessListReader {
             },
             uniquingKeysWith: { first, _ in first }
         )
-        // Exit is decided from kernel state: `comm` is argv-backed, so a live
-        // process can call itself `<defunct>`.
-        let zombieStates = Dictionary(
-            parsed.compactMap { process in
-                zombieState(process.pid).map { (process.pid, $0) }
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        let validation = await run(identityValidationCommand)
-        if let cancellation = cancellation(of: validation) {
-            return .failure(cancellation)
+        if Task.isCancelled {
+            return .failure(.cancelled)
         }
         let validatedStartTimeMap: [Int32: String]
-        switch validatedStartTimes(from: validation) {
-        case .success(let startTimes):
-            validatedStartTimeMap = startTimes
-        case .failure(let error):
-            return .failure(error)
+        switch processTable() {
+        case .entries(let table):
+            validatedStartTimeMap = validatedStartTimes(from: table)
+        case .failed(let code):
+            return .failure(.commandFailed("The process table could not be read (\(String(cString: strerror(code))))."))
         }
-        // Process churn between the two `ps` snapshots is normal (the first
-        // `ps` invocation can itself disappear). Keep only rows whose identity
-        // survived unchanged; malformed validation output still fails the
-        // entire read, but a cleanly missing PID is simply no longer present.
+        // Process churn between `ps` and the table read is normal (`ps` itself
+        // has exited by then). Keep only rows whose PID still has the row's
+        // start time and has not exited; a cleanly missing PID is simply no
+        // longer present.
         parsed = validatedProcesses(parsed, using: validatedStartTimeMap)
-        // This process must survive both snapshots. A nonempty but incomplete
-        // validation result must not turn a broken read into "nothing running".
+        // This process must survive both reads. A table without it must not
+        // turn a broken read into "nothing running".
         guard parsed.contains(where: { $0.pid == currentPID }) else {
             return .failure(.parseFailed)
         }
@@ -130,8 +125,11 @@ enum ProcessListReader {
             validatedStartTimes: validatedStartTimeMap
         )
 
+        // Exit is decided from the table's process state, never from `comm`,
+        // which is argv-backed: a live process can call itself `<defunct>`.
+        // Every row left has a running process.
         for index in parsed.indices {
-            parsed[index].isZombie = zombieStates[parsed[index].pid]
+            parsed[index].isZombie = false
         }
 
         if fetchExtendedStats {
@@ -266,41 +264,16 @@ enum ProcessListReader {
         }
     }
 
-    static func parseStartTimes(
-        _ output: String
-    ) -> Result<[Int32: String], ProcessInventoryError> {
-        var values: [Int32: String] = [:]
-        for line in output.split(separator: "\n") {
-            // ps pads the final lstart column. A bounded split left those
-            // trailing spaces attached to the year, making every identity
-            // comparison fail except an accidentally trimmed final row.
-            let parts = line.split(whereSeparator: \.isWhitespace)
-            guard parts.count == 6, let pid = Int32(parts[0]) else {
-                return .failure(.parseFailed)
-            }
-            guard values.updateValue(parts[1...5].joined(separator: " "), forKey: pid) == nil else {
-                return .failure(.parseFailed)
-            }
+    /// Each running process's start time, as the inventory's `ps lstart`
+    /// text (the conversion the Activity Monitor handoff uses too). A zombie
+    /// has exited, so it vouches for no row.
+    static func validatedStartTimes(from table: [Int32: KernelProcessEntry]) -> [Int32: String] {
+        var startTimes: [Int32: String] = [:]
+        startTimes.reserveCapacity(table.count)
+        for (pid, entry) in table where !entry.isZombie {
+            startTimes[pid] = entry.startTimeText
         }
-        return .success(values)
-    }
-
-    static func validatedStartTimes(
-        from result: ShellCommandResult
-    ) -> Result<[Int32: String], ProcessInventoryError> {
-        guard result.succeeded else {
-            let detail = result.stderr.isEmpty
-                ? "Identity validation \(result.failureDescription)."
-                : result.stderr
-            return .failure(.commandFailed(detail))
-        }
-
-        switch parseStartTimes(result.stdout) {
-        case .success(let startTimes):
-            return .success(startTimes)
-        case .failure(let error):
-            return .failure(error)
-        }
+        return startTimes
     }
 
     static func validatedProcesses(

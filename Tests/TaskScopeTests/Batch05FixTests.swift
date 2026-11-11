@@ -164,42 +164,91 @@ final class Batch05ReaderFixTests: XCTestCase {
     private var list: String {
         "42 1 \(getuid()) 1 1024 \(start) 00:01 <defunct>\n43 1 0 2 2048 \(start) 00:02 Other"
     }
-    private var validation: String { "42 \(start)\n43 \(start)" }
+    /// The process table: `start` is 1_791_392_687 in UTC.
+    private func table(live: [Int32], zombies: [Int32] = []) -> KernelProcessTable.TableRead {
+        KernelProcessTable.table(
+            from: live.map { KernelProcessEntry(pid: $0, parentPID: 1, uid: 0, startSeconds: 1_791_392_687) }
+                + zombies.map { KernelProcessEntry(pid: $0, parentPID: 1, uid: 0, startSeconds: 1_791_392_687, isZombie: true) }
+        )
+    }
 
     private func read(
         _ results: [ShellCommandResult],
-        extended: Bool = false
+        table: KernelProcessTable.TableRead? = nil,
+        extended: Bool = false,
+        cancelDuringRowReads: Bool = false
+    ) async -> Result<[AppProcess], ProcessInventoryError> {
+        let processTable = table ?? self.table(live: [42, 43])
+        // Each read runs in a task of its own, so a cancellation stays in it.
+        return await Task {
+            await Self.read(results, processTable, extended, cancelDuringRowReads)
+        }.value
+    }
+
+    private static func read(
+        _ results: [ShellCommandResult],
+        _ processTable: KernelProcessTable.TableRead,
+        _ extended: Bool,
+        _ cancelDuringRowReads: Bool
     ) async -> Result<[AppProcess], ProcessInventoryError> {
         let runner = Batch05ScriptedRunner(results)
         return await ProcessListReader.currentProcessList(
             fetchExtendedStats: extended,
             run: { await runner.run($0) },
             executablePath: { _ in nil },
-            startUptime: { _ in 123 },
-            zombieState: { $0 == 43 },
+            startUptime: { _ in
+                if cancelDuringRowReads { withUnsafeCurrentTask { $0?.cancel() } }
+                return 123
+            },
+            processTable: { processTable },
             diskIO: { $0 == 42 ? (4096, 8192) : nil },
             currentPID: 42
         )
     }
 
     func testInventoryFailuresAndCancellationAtBothSnapshots() async {
-        for (results, expected) in [
-            ([shellResult("", code: 9, error: "denied")], ProcessInventoryError.commandFailed("denied")),
-            ([shellResult("", code: 7)], .commandFailed("ps exited with status 7.")),
-            ([shellResult("", code: ShellCommandRunner.cancelledExitCode)], .cancelled),
-            ([shellResult(list), shellResult("", code: 4)], .commandFailed("Identity validation exited with status 4.")),
-            ([shellResult(list), shellResult("", code: ShellCommandRunner.cancelledExitCode)], .cancelled),
+        let unreadable = "The process table could not be read (\(String(cString: strerror(EPERM))))."
+        let inconsistent = "The process table could not be read (\(String(cString: strerror(EINVAL))))."
+        let repeated = KernelProcessTable.table(from: [
+            KernelProcessEntry(pid: 42, parentPID: 1, uid: 0, startSeconds: 1_791_392_687),
+            KernelProcessEntry(pid: 42, parentPID: 1, uid: 0, startSeconds: 1_791_392_688)
+        ])
+        let cases: [([ShellCommandResult], KernelProcessTable.TableRead?, Bool, ProcessInventoryError)] = [
+            ([shellResult("", code: 9, error: "denied")], nil, false, .commandFailed("denied")),
+            ([shellResult("", code: 7)], nil, false, .commandFailed("ps exited with status 7.")),
+            ([shellResult("", code: ShellCommandRunner.cancelledExitCode)], nil, false, .cancelled),
+            ([shellResult(list)], .failed(errno: EPERM), false, .commandFailed(unreadable)),
+            ([shellResult(list)], nil, true, .cancelled),
             // Well formed, but without TaskScope's own PID: never "nothing running".
-            ([shellResult(list), shellResult("43 \(start)")], .parseFailed),
-            ([shellResult(list), shellResult("malformed")], .parseFailed)
-        ] {
-            let result = await read(results)
+            ([shellResult(list)], table(live: [43]), false, .parseFailed),
+            // A PID listed twice is an inconsistent table.
+            ([shellResult(list)], repeated, false, .commandFailed(inconsistent))
+        ]
+        for (results, table, cancel, expected) in cases {
+            let result = await read(results, table: table, cancelDuringRowReads: cancel)
             XCTAssertEqual(result, .failure(expected))
         }
     }
 
+    /// L07-14: a basic read runs `ps` once; the second `ps` is gone.
+    func testABasicReadRunsOnePSAndNoOtherCommand() async throws {
+        let runner = Batch05ScriptedRunner([shellResult(list)])
+        let table = table(live: [42, 43])
+        _ = try await ProcessListReader.currentProcessList(
+            fetchExtendedStats: false,
+            run: { await runner.run($0) },
+            executablePath: { _ in nil },
+            startUptime: { _ in nil },
+            processTable: { table },
+            diskIO: { _ in nil },
+            currentPID: 42
+        ).get()
+        let commands = await runner.commands
+        XCTAssertEqual(commands, [ProcessListReader.processListCommand])
+    }
+
     func testChurnDropsOnlyTheMissingRowAndAttachesValidatedKernelState() async throws {
-        let rows = try await read([shellResult(list), shellResult("42 \(start)")]).get()
+        let rows = try await read([shellResult(list)], table: table(live: [42])).get()
 
         XCTAssertEqual(rows.map(\.pid), [42])
         XCTAssertEqual(rows[0].monotonicStart, .uptimeNanoseconds(123))
@@ -209,7 +258,7 @@ final class Batch05ReaderFixTests: XCTestCase {
 
     func testExtendedMergePutsEachValueInItsFieldAndLeavesMissingOnesEmpty() async throws {
         let rows = try await read(
-            [shellResult(list), shellResult(validation), shellResult(",bytes_in,bytes_out,\nname.42,2048,3072,")],
+            [shellResult(list), shellResult(",bytes_in,bytes_out,\nname.42,2048,3072,")],
             extended: true
         ).get()
 
@@ -222,8 +271,14 @@ final class Batch05ReaderFixTests: XCTestCase {
         XCTAssertNil(rows[1].netOutKB)
         XCTAssertNil(rows[1].diskReadBytes)
         XCTAssertNil(rows[1].diskWriteBytes)
-        XCTAssertTrue(rows[1].hasExited, "The kernel's zombie state decides, whatever the row is called")
+        XCTAssertFalse(rows[1].hasExited)
         XCTAssertEqual(rows[1].monotonicStart, .notRead)
+
+        // The kernel's process state decides, whatever the row is called: the
+        // live row named <defunct> stays, and the exited one is not listed.
+        let withZombie = try await read([shellResult(list)], table: table(live: [42], zombies: [43])).get()
+        XCTAssertEqual(withZombie.map(\.pid), [42])
+        XCTAssertFalse(withZombie[0].hasExited)
     }
 
     func testNetworkParserHandlesDottedAndCommaNamesAndMalformedRows() {
@@ -411,12 +466,14 @@ private final class Batch05Box<Value: Sendable>: @unchecked Sendable {
 /// Answers each command with the next scripted result.
 private actor Batch05ScriptedRunner {
     private var results: [ShellCommandResult]
+    private(set) var commands: [String] = []
 
     init(_ results: [ShellCommandResult]) {
         self.results = results
     }
 
     func run(_ command: String) -> ShellCommandResult {
+        commands.append(command)
         guard !results.isEmpty else { return shellResult("", code: 99, error: "Unexpected command: \(command)") }
         return results.removeFirst()
     }

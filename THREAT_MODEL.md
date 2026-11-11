@@ -77,12 +77,14 @@ Required invariants:
 - distinguish “not present,” “identity changed,” and “could not verify”;
   a present PID with changed start or executable evidence is identity-changed;
   a still-running PID/start pair with a moved or unavailable executable path
-  must not produce an Auto Stop Ended or Stopped event. Whether a row has
-  exited comes from the kernel's zombie state, read with the inventory; an
-  exited row must not be signalled. `ps` names come from argv, so a live
-  process can call itself `<defunct>`: that text, with no kernel executable
-  path, counts as exit only when the kernel state could not be read. A missing
-  path alone does not establish exit;
+  must not produce an Auto Stop Ended or Stopped event. The inventory keeps a
+  `ps` row only if one read of the kernel's process table, taken after the
+  per-row kernel reads, shows its PID running (not a zombie) with the row's
+  start time; an exited process is not listed and must not be signalled. If
+  the table cannot be read, the whole read fails. `ps` names come from argv, so
+  a live process can call itself `<defunct>`: that text, with no kernel
+  executable path, counts as exit only for a row whose kernel state was never
+  read. A missing path alone does not establish exit;
 - never turn an unreadable inventory into a success or stale-target claim;
 - distinguish unobserved watched status from a verified quiet observation, mark
   retained observations stale after failures, and resolve preset card actions

@@ -167,9 +167,13 @@ final class ProcessListReaderTests: XCTestCase {
         let output = "\(liveRow)\n\(liveRow)"
 
         XCTAssertEqual(ProcessListReader.parseProcessListOutput(output), .failure(.parseFailed))
+        // L07-14: the same rule for the kernel's process table.
         XCTAssertEqual(
-            ProcessListReader.parseStartTimes("42 Sat Jul 26 11:20:17 2026\n42 Sat Jul 26 11:20:18 2026"),
-            .failure(.parseFailed)
+            KernelProcessTable.table(from: [
+                KernelProcessEntry(pid: 42, parentPID: 1, uid: 501, startSeconds: 1_790_596_801),
+                KernelProcessEntry(pid: 42, parentPID: 1, uid: 501, startSeconds: 1_790_596_802)
+            ]),
+            .failed(errno: EINVAL)
         )
     }
 
@@ -191,29 +195,36 @@ final class ProcessListReaderTests: XCTestCase {
         XCTAssertNil(ProcessListReader.cancellation(of: failed))
     }
 
-    func testStartTimeValidationRejectsPartialMalformedOutput() {
-        let output = """
-        42 Sat Jul 26 11:20:17 2026
-        43 Sat Jul 26
-        """
-
-        XCTAssertEqual(
-            ProcessListReader.parseStartTimes(output),
-            .failure(.parseFailed)
+    /// L07-14: identity validation reads the kernel's process table; a table
+    /// that cannot be read fails the whole inventory read, closed.
+    func testStartTimeValidationRejectsAnUnreadableProcessTable() async {
+        let result = await ProcessListReader.currentProcessList(
+            fetchExtendedStats: false,
+            run: { _ in ShellCommandResult(command: "", stdout: "42 1 501 0.0 100 Mon Sep 28 12:00:01 2026 00:10 Example", stderr: "", exitCode: 0) },
+            executablePath: { _ in nil },
+            startUptime: { _ in nil },
+            processTable: { .failed(errno: EIO) },
+            diskIO: { _ in nil },
+            currentPID: 42
         )
+        XCTAssertEqual(result, .failure(.commandFailed("The process table could not be read (\(String(cString: strerror(EIO)))).")))
     }
 
+    /// `ps` pads a single-digit day ("Sep  8"); the row's start time and the
+    /// kernel's must still be the same text.
     func testPaddedPSStartTimesRetainEveryMatchingProcessIdentity() throws {
         let first = try XCTUnwrap(ProcessListReader.parseProcessLine(
-            "42 1 501 0.0 100 Mon Sep 28 12:00:01 2026 00:10 GlobalProtect"[...]
+            "42 1 501 0.0 100 Tue Sep  8 12:00:01 2026 00:10 GlobalProtect"[...]
         ))
         let second = try XCTUnwrap(ProcessListReader.parseProcessLine(
             "43 1 0 0.0 100 Mon Sep 28 12:00:02 2026 00:10 PanGPS"[...]
         ))
-        let times = try ProcessListReader.parseStartTimes(
-            "   42 Mon Sep 28 12:00:01 2026    \n\t43 Mon Sep 28 12:00:02 2026\t  \n"
-        ).get()
+        let times = ProcessListReader.validatedStartTimes(from: [
+            42: KernelProcessEntry(pid: 42, parentPID: 1, uid: 501, startSeconds: 1_788_868_801),
+            43: KernelProcessEntry(pid: 43, parentPID: 1, uid: 0, startSeconds: 1_790_596_802)
+        ])
         XCTAssertEqual(times[42], first.startTime)
+        XCTAssertEqual(first.startTime, "Tue Sep 8 12:00:01 2026")
         XCTAssertEqual(times[43], second.startTime)
         XCTAssertEqual(ProcessListReader.validatedProcesses([first, second], using: times), [first, second])
     }
@@ -223,38 +234,44 @@ final class ProcessListReaderTests: XCTestCase {
         XCTAssertTrue(inventory.contains { $0.pid == ProcessInfo.processInfo.processIdentifier })
     }
 
-    func testFailedIdentityValidationCommandIsInventoryFailure() {
-        let result = ShellCommandResult(
-            command: ProcessListReader.identityValidationCommand,
-            stdout: "",
-            stderr: "ps denied",
-            exitCode: 1
+    /// A process table that is read but holds no entries cannot vouch for
+    /// this process either: the read fails instead of reporting nothing.
+    func testEmptyProcessTableIsInventoryFailure() async {
+        let result = await ProcessListReader.currentProcessList(
+            fetchExtendedStats: false,
+            run: { _ in ShellCommandResult(command: "", stdout: "42 1 501 0.0 100 Mon Sep 28 12:00:01 2026 00:10 Example", stderr: "", exitCode: 0) },
+            executablePath: { _ in nil },
+            startUptime: { _ in nil },
+            processTable: { .entries([:]) },
+            diskIO: { _ in nil },
+            currentPID: 42
         )
-
-        XCTAssertEqual(
-            ProcessListReader.validatedStartTimes(from: result),
-            .failure(.commandFailed("ps denied"))
-        )
+        XCTAssertEqual(result, .failure(.parseFailed))
     }
 
+    /// Rows that exited, became zombies or gave their PID to another process
+    /// after `ps` ran are dropped; the rest are kept.
     func testIdentityValidationOmitsProcessThatExitedBetweenSnapshots() throws {
-        let result = ShellCommandResult(
-            command: ProcessListReader.identityValidationCommand,
-            stdout: "42 Sat Jul 26 11:20:17 2026",
-            stderr: "",
-            exitCode: 0
-        )
-
-        let startTimes = try ProcessListReader.validatedStartTimes(from: result).get()
+        let startTimes = ProcessListReader.validatedStartTimes(from: [
+            42: KernelProcessEntry(pid: 42, parentPID: 1, uid: 501, startSeconds: 1_790_596_801),
+            44: KernelProcessEntry(pid: 44, parentPID: 1, uid: 501, startSeconds: 1_790_596_801, isZombie: true),
+            45: KernelProcessEntry(pid: 45, parentPID: 1, uid: 501, startSeconds: 1_790_596_900)
+        ])
         let first = try XCTUnwrap(ProcessListReader.parseProcessLine(
-            "42 1 501 0 100 Sat Jul 26 11:20:17 2026 00:01 First"[...]
+            "42 1 501 0 100 Mon Sep 28 12:00:01 2026 00:01 First"[...]
         ))
         let exited = try XCTUnwrap(ProcessListReader.parseProcessLine(
-            "43 1 501 0 100 Sat Jul 26 11:20:18 2026 00:01 Exited"[...]
+            "43 1 501 0 100 Mon Sep 28 12:00:02 2026 00:01 Exited"[...]
+        ))
+        let zombie = try XCTUnwrap(ProcessListReader.parseProcessLine(
+            "44 1 501 0 100 Mon Sep 28 12:00:01 2026 00:01 Zombie"[...]
+        ))
+        let reused = try XCTUnwrap(ProcessListReader.parseProcessLine(
+            "45 1 501 0 100 Mon Sep 28 12:00:01 2026 00:01 Reused"[...]
         ))
 
         XCTAssertEqual(
-            ProcessListReader.validatedProcesses([first, exited], using: startTimes),
+            ProcessListReader.validatedProcesses([first, exited, zombie, reused], using: startTimes),
             [first]
         )
     }
