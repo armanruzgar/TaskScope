@@ -166,8 +166,10 @@ final class Batch10PresentationTests: XCTestCase {
         // expanded parent shows "chevron.down".
         let spacer = try inspected.find(ViewType.Image.self) { try $0.actualImage().name() == "chevron.right" }
         XCTAssertTrue(try spacer.accessibilityHidden())
-        let sort = try inspected.find(ViewType.Picker.self) { try $0.labelView().text().string() == "Sort" }
-        XCTAssertThrowsError(try sort.accessibilityLabel(), "The hidden title already names the pop-up")
+        // The sort menu's visible title is the current key and an arrow, so
+        // VoiceOver gets one name for the control and the order as its value.
+        let sort = try inspected.find(ViewType.Menu.self) { try $0.accessibilityLabel().string() == "Sort" }
+        XCTAssertEqual(try sort.accessibilityValue().string(), "CPU, descending")
 
         let header = TaskScopeHeaderView(status: .idle, samples: [], samplingState: .sampling, showsMetrics: false, showsOpenWindowButton: false, refreshAction: {})
         let logo = try header.inspect().find(ViewType.Image.self) { try $0.actualImage().name() == "waveform.path.ecg" }
@@ -260,8 +262,14 @@ final class Batch10PresentationTests: XCTestCase {
             (try? stack.find(text: "PPID")) != nil
         }
         XCTAssertEqual(try header.spacing(), 10)
-        XCTAssertEqual(try inspected.find(text: "NET KB TOTAL").help().string(), "Kilobytes received / sent since the process started")
-        XCTAssertEqual(try inspected.find(text: "DISK MB TOTAL").help().string(), "Megabytes read / written since the process started")
+        XCTAssertEqual(
+            try inspected.find(button: "NET KB TOTAL").help().string(),
+            "Kilobytes received / sent since the process started. Click to sort by Network."
+        )
+        XCTAssertEqual(
+            try inspected.find(button: "DISK MB TOTAL").help().string(),
+            "Megabytes read / written since the process started. Click to sort by Disk."
+        )
 
         let cpuHeader = try inspected.find(button: "CPU")
         XCTAssertEqual(try cpuHeader.accessibilityValue().string(), "sorted descending")

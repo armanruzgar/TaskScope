@@ -26,8 +26,14 @@ final class ProcessManager: ObservableObject {
         operationGate.state
     }
 
-    @Published var sortKey: ProcessSortKey = .cpu {
+    @Published var sortOrder = ProcessSortOrder(key: .cpu) {
         didSet { resortProcesses() }
+    }
+
+    /// Setting only the key sorts in that key's default direction.
+    var sortKey: ProcessSortKey {
+        get { sortOrder.key }
+        set { sortOrder = ProcessSortOrder(key: newValue) }
     }
 
     @Published private(set) var selectedPids: Set<Int32> = []
@@ -281,23 +287,23 @@ final class ProcessManager: ObservableObject {
         matching predicate: (AppProcess) -> Bool = { _ in true }
     ) -> [AppProcess] {
         listProjection.displayProcesses(
-            sortKey: sortKey,
+            order: sortOrder,
             limit: processListLimitProvider?() ?? 80,
             matching: predicate
         )
     }
 
     /// The sorted, filtered, limited list for `query`, memoized per inventory,
-    /// sort key, and limit by the projection.
+    /// sort order, and limit by the projection.
     func displayProcesses(for query: ProcessListQuery) -> [AppProcess] {
         listProjection.displayProcesses(
-            for: query, sortKey: sortKey, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
         )
     }
 
     func displayList(for query: ProcessListQuery) -> ProcessListProjection.DisplayList {
         listProjection.displayList(
-            for: query, sortKey: sortKey, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
         )
     }
 
@@ -305,7 +311,7 @@ final class ProcessManager: ObservableObject {
     /// inventory, including ancestors outside the display limit.
     func treeRoots(for query: ProcessListQuery) -> [ProcessTreeNode] {
         listProjection.treeRoots(
-            for: query, sortKey: sortKey, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
         )
     }
 

@@ -185,6 +185,12 @@ final class Batch02RuntimeTests: XCTestCase {
 
         XCTAssertEqual(rig.polling.intervals, [10, 20])
         XCTAssertEqual(rig.manager.sortKey, .memory)
+        XCTAssertEqual(rig.manager.sortOrder.direction, .descending)
+
+        // L09-21: the direction follows the setting too.
+        rig.stores.settings.setSortOrder(ProcessSortOrder(key: .memory, direction: .ascending))
+        await waitUntil { rig.manager.sortOrder.direction == .ascending }
+        XCTAssertEqual(rig.manager.sortOrder, ProcessSortOrder(key: .memory, direction: .ascending))
 
         rig.stores.settings.enableNotifications = true
         await waitUntil { rig.manager.enableNotifications }

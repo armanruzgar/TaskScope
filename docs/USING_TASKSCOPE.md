@@ -52,11 +52,20 @@ Dock icon.
 Type in the search field to match a process name, command, or PID. Text with a
 slash, or starting with `~`, also matches the executable path shown under the
 name, as shown or in full (`/usr/bin`, `~/dev/`). Sort with
-the sort menu (CPU, memory, name, or PID) or by clicking the **CPU** or **MEM
-MB** column title, or **PID** in the window: CPU and memory sort highest first,
-PID lowest first, and the active column is marked. Use the **All / Watched /
-Hot** filter and the **Tree view** button. Sort, search, the filter, and tree
-view are saved across launches and shared by the window and the popover.
+the **Sort** menu, which offers CPU, Memory, Name, PID, Parent PID, User,
+Network, and Disk, each **Ascending** or **Descending**, or click a column
+title: the first click sorts by that column and the next one reverses it. CPU,
+memory, network, and disk start highest first, so the display limit keeps the
+busiest processes; name, user, PID, and parent PID start in ascending order.
+The active column title shows a chevron for its direction, which VoiceOver reads
+as sorted ascending or descending. Rows without a value for the sorted column,
+such as processes whose network or disk counters macOS does not report, stay at
+the end in either direction, and equal values are ordered by name, then PID.
+The menu-bar popover has no network or disk columns, so it reads those counters
+only while it is open and sorted by one of them. Use the **All / Watched /
+Hot** filter and the **Tree view** button. Sort, its direction, search, the
+filter, and tree view are saved across launches and shared by the window and
+the popover.
 Select rows with the circle at the
 start of each row; with a selection, the red button with the count offers
 **Stop Selected…** and **Force Stop Selected…**, and **Clear** deselects. The

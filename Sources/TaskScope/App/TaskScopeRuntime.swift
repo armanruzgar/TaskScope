@@ -85,7 +85,7 @@ final class TaskScopeRuntime {
         self.requestShortcutParameterRefresh = requestShortcutParameterRefresh
 
         processManager.processListLimitProvider = { [settings] in settings.processListLimit }
-        processManager.sortKey = settings.sortKey
+        processManager.sortOrder = settings.sortOrder
         processManager.enableNotifications = settings.enableNotifications
         observeSettings()
         configurePolling()
@@ -140,7 +140,10 @@ final class TaskScopeRuntime {
             runtime.configurePolling()
         }
         react(to: settings.$sortKeyRaw) { runtime in
-            runtime.processManager.sortKey = runtime.settings.sortKey
+            runtime.processManager.sortOrder = runtime.settings.sortOrder
+        }
+        react(to: settings.$sortDirectionRaw) { runtime in
+            runtime.processManager.sortOrder = runtime.settings.sortOrder
         }
         react(to: settings.$processListLimit) { runtime in
             runtime.processManager.applyCurrentDisplayLimit()

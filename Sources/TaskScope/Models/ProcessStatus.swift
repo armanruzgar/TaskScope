@@ -36,16 +36,40 @@ enum ProcessSortKey: String, CaseIterable, Identifiable, Sendable {
     case memory
     case name
     case pid
+    case parentPID = "ppid"
+    case user
+    case network
+    case disk
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .cpu: "CPU"
-        case .memory: "MEM"
+        case .memory: "Memory"
         case .name: "Name"
         case .pid: "PID"
+        case .parentPID: "Parent PID"
+        case .user: "User"
+        case .network: "Network"
+        case .disk: "Disk"
         }
+    }
+
+    /// The usage columns start busiest first: the display limit applies after
+    /// sorting, so an ascending default would list the idlest processes. The
+    /// others start in alphabetical or lowest-first order.
+    var defaultDirection: ProcessSortDirection {
+        switch self {
+        case .cpu, .memory, .network, .disk: .descending
+        case .name, .pid, .parentPID, .user: .ascending
+        }
+    }
+
+    /// Network and disk counters are read only while something shows or
+    /// sorts by them.
+    var needsExtendedStats: Bool {
+        self == .network || self == .disk
     }
 }
 

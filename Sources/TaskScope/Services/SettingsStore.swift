@@ -45,6 +45,11 @@ final class SettingsStore: ObservableObject {
     @Published var sortKeyRaw: String {
         didSet { normalizeAndSave() }
     }
+    /// The direction of `sortKeyRaw`. A payload without one, from a build
+    /// before directions, sorts in the key's default direction.
+    @Published var sortDirectionRaw: String {
+        didSet { normalizeAndSave() }
+    }
     /// The process list's Filter and Tree View choices, shared by the window and
     /// the menu-bar popover and kept across launches, like Sort.
     @Published var filterModeRaw: String {
@@ -103,6 +108,7 @@ final class SettingsStore: ObservableObject {
         selectedSectionRaw = decoded.selectedSectionRaw
         searchText = decoded.searchText
         sortKeyRaw = decoded.sortKeyRaw
+        sortDirectionRaw = decoded.sortDirectionRaw
         filterModeRaw = decoded.filterModeRaw
         treeMode = decoded.treeMode
     }
@@ -120,6 +126,19 @@ final class SettingsStore: ObservableObject {
 
     var sortKey: ProcessSortKey {
         ProcessSortKey(rawValue: sortKeyRaw) ?? .cpu
+    }
+
+    var sortDirection: ProcessSortDirection {
+        ProcessSortDirection(rawValue: sortDirectionRaw) ?? sortKey.defaultDirection
+    }
+
+    var sortOrder: ProcessSortOrder {
+        ProcessSortOrder(key: sortKey, direction: sortDirection)
+    }
+
+    func setSortOrder(_ order: ProcessSortOrder) {
+        sortKeyRaw = order.key.rawValue
+        sortDirectionRaw = order.direction.rawValue
     }
 
     var selectedSection: TaskScopeSection {
@@ -188,6 +207,7 @@ final class SettingsStore: ObservableObject {
             selectedSectionRaw = normalized.selectedSectionRaw
             searchText = normalized.searchText
             sortKeyRaw = normalized.sortKeyRaw
+            sortDirectionRaw = normalized.sortDirectionRaw
             filterModeRaw = normalized.filterModeRaw
             treeMode = normalized.treeMode
             isNormalizing = false
@@ -208,6 +228,7 @@ final class SettingsStore: ObservableObject {
             selectedSectionRaw: selectedSectionRaw,
             searchText: searchText,
             sortKeyRaw: sortKeyRaw,
+            sortDirectionRaw: sortDirectionRaw,
             filterModeRaw: filterModeRaw,
             treeMode: treeMode
         )
@@ -268,7 +289,8 @@ final class SettingsStore: ObservableObject {
             keepGlobalProtectOff: false,
             selectedSectionRaw: TaskScopeSection.processes.rawValue,
             searchText: "",
-            sortKeyRaw: ProcessSortKey.cpu.rawValue
+            sortKeyRaw: ProcessSortKey.cpu.rawValue,
+            sortDirectionRaw: ProcessSortKey.cpu.defaultDirection.rawValue
         )
 
         var schemaVersion: Int
@@ -282,6 +304,7 @@ final class SettingsStore: ObservableObject {
         var selectedSectionRaw: String
         var searchText: String
         var sortKeyRaw: String
+        var sortDirectionRaw: String
         var filterModeRaw: String
         var treeMode: Bool
 
@@ -297,6 +320,7 @@ final class SettingsStore: ObservableObject {
             case selectedSectionRaw
             case searchText
             case sortKeyRaw
+            case sortDirectionRaw
             case filterModeRaw
             case treeMode
         }
@@ -313,6 +337,7 @@ final class SettingsStore: ObservableObject {
             selectedSectionRaw: String,
             searchText: String,
             sortKeyRaw: String,
+            sortDirectionRaw: String = "",
             filterModeRaw: String = ProcessFilterMode.all.rawValue,
             treeMode: Bool = false
         ) {
@@ -327,6 +352,7 @@ final class SettingsStore: ObservableObject {
             self.selectedSectionRaw = selectedSectionRaw
             self.searchText = searchText
             self.sortKeyRaw = sortKeyRaw
+            self.sortDirectionRaw = sortDirectionRaw
             self.filterModeRaw = filterModeRaw
             self.treeMode = treeMode
         }
@@ -375,6 +401,13 @@ final class SettingsStore: ObservableObject {
                 String.self,
                 forKey: .sortKeyRaw
             ) ?? defaults.sortKeyRaw
+            // Added after 1.1.0. A payload without it sorts in its key's
+            // default direction (see `normalized()`), and older builds ignore
+            // the field and keep it when they save.
+            sortDirectionRaw = try container.decodeIfPresent(
+                String.self,
+                forKey: .sortDirectionRaw
+            ) ?? ""
             // Added after schema version 1 shipped: payloads without them keep
             // the defaults, and older builds ignore them.
             filterModeRaw = try container.decodeIfPresent(
@@ -408,7 +441,13 @@ final class SettingsStore: ObservableObject {
             }
             value.searchText = String(searchText.prefix(500))
             if ProcessSortKey(rawValue: sortKeyRaw) == nil {
+                // A key this build does not know: its direction meant nothing
+                // for the replacement key either.
                 value.sortKeyRaw = ProcessSortKey.cpu.rawValue
+                value.sortDirectionRaw = ""
+            }
+            if ProcessSortDirection(rawValue: value.sortDirectionRaw) == nil {
+                value.sortDirectionRaw = (ProcessSortKey(rawValue: value.sortKeyRaw) ?? .cpu).defaultDirection.rawValue
             }
             return value
         }

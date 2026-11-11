@@ -100,6 +100,20 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         pid
     }
 
+    /// The Network column's value, received plus sent; nil when the
+    /// counters were not read for this process.
+    var networkSortValue: Double? {
+        guard let netInKB, let netOutKB else { return nil }
+        return netInKB + netOutKB
+    }
+
+    /// The Disk column's value, read plus written; nil when the kernel did not
+    /// report the counters for this process.
+    var diskSortValue: Double? {
+        guard let diskReadBytes, let diskWriteBytes else { return nil }
+        return diskReadBytes + diskWriteBytes
+    }
+
     /// `command` is the argv-backed `ps comm` value. An absolute path names its
     /// last component. Anything else may be a title the process wrote over
     /// argv[0] (`sshd-session: me@ttys001`, `ssh: /path/to/socket [mux]`), where

@@ -286,15 +286,17 @@ final class SwiftUIHarnessTests: XCTestCase {
             ).inspect()
 
             // A fixed width shared with a visible label cut "CPU" to "C..." on macOS 26.
-            let sort = try inspected.find(ViewType.Picker.self) {
-                try $0.labelView().text().string() == "Sort"
+            let sort = try inspected.find(ViewType.Menu.self) {
+                try $0.accessibilityLabel().string() == "Sort"
             }
-            XCTAssertTrue(sort.labelsHidden())
             XCTAssertTrue(try sort.fixedSize().horizontal)
             XCTAssertThrowsError(try sort.fixedWidth())
             XCTAssertEqual(try sort.help().string(), "Sort By")
             for key in ProcessSortKey.allCases {
                 XCTAssertNoThrow(try sort.find(text: key.label))
+            }
+            for direction in ProcessSortDirection.allCases {
+                XCTAssertNoThrow(try sort.find(text: direction.label))
             }
 
             let filter = try inspected.find(ViewType.Picker.self) {

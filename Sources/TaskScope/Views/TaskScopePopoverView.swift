@@ -31,6 +31,8 @@ struct TaskScopePopoverView: View {
     @State private var renameSelection: SavedSelectionsStore.SavedSelection?
     @State private var renameSelectionName = ""
     @State private var registeredExtendedMetrics = false
+    @State private var isOnScreen = false
+    @State private var registeredSortMetrics = false
     /// The list must own focus for `.onKeyPress` to receive arrow, Return, and
     /// Escape without Full Keyboard Access; tapping a row moves focus here.
     @FocusState private var processListFocused: Bool
@@ -143,6 +145,8 @@ struct TaskScopePopoverView: View {
         .onAppear {
             listState.filterMode = settings.filterMode
             listState.treeMode = settings.treeMode
+            isOnScreen = true
+            updateSortMetricsRegistration()
             guard isExpandedWindow, !registeredExtendedMetrics else { return }
             registeredExtendedMetrics = true
             history.beginSampling(cadence: settings.refreshIntervalSeconds)
@@ -150,10 +154,15 @@ struct TaskScopePopoverView: View {
         }
         .onDisappear {
             processManager.endObservingStatus()
+            isOnScreen = false
+            updateSortMetricsRegistration()
             guard registeredExtendedMetrics else { return }
             registeredExtendedMetrics = false
             history.endSampling()
             processManager.endExtendedMetrics()
+        }
+        .onChange(of: settings.sortKeyRaw) { _, _ in
+            updateSortMetricsRegistration()
         }
         .onChange(of: processManager.inventoryGeneration) { _, _ in
             // Forget disclosure state for processes that no longer exist; a
@@ -740,14 +749,18 @@ struct TaskScopePopoverView: View {
                     Spacer()
                     columnHeader("PID", sortKey: .pid)
                         .frame(width: 70, alignment: .trailing)
-                    Text("PPID")
+                    columnHeader("PPID", sortKey: .parentPID)
                         .frame(width: 70, alignment: .trailing)
-                    Text("NET KB TOTAL")
-                        .help("Kilobytes received / sent since the process started")
-                        .frame(width: 96, alignment: .trailing)
-                    Text("DISK MB TOTAL")
-                        .help("Megabytes read / written since the process started")
-                        .frame(width: 96, alignment: .trailing)
+                    columnHeader(
+                        "NET KB TOTAL", sortKey: .network,
+                        explanation: "Kilobytes received / sent since the process started."
+                    )
+                    .frame(width: 96, alignment: .trailing)
+                    columnHeader(
+                        "DISK MB TOTAL", sortKey: .disk,
+                        explanation: "Megabytes read / written since the process started."
+                    )
+                    .frame(width: 96, alignment: .trailing)
                 } else {
                     Spacer()
                 }
@@ -888,22 +901,7 @@ struct TaskScopePopoverView: View {
 
     @ViewBuilder
     private var processListDisplayControls: some View {
-        Picker("Sort", selection: Binding(
-            get: { settings.sortKey },
-            set: { newValue in
-                setSortKey(newValue)
-            }
-        )) {
-            ForEach(ProcessSortKey.allCases) { key in
-                Text(key.label).tag(key)
-            }
-        }
-        .pickerStyle(.menu)
-        // A fixed frame shared with the visible label truncated the selected
-        // key on macOS 26, so the popup sizes itself to its widest key.
-        .labelsHidden()
-        .fixedSize()
-        .help("Sort By")
+        sortMenu
 
         Picker("Filter", selection: $listState.filterMode) {
             ForEach(ProcessFilterMode.allCases) { mode in
@@ -1133,34 +1131,112 @@ struct TaskScopePopoverView: View {
         return "\(title), \(visible) \(visible == 1 ? "row" : "rows") visible"
     }
 
-    func setSortKey(_ key: ProcessSortKey) {
-        settings.sortKeyRaw = key.rawValue
-        processManager.sortKey = key
+    /// The window reads network and disk counters whenever it is open; the
+    /// menu-bar popover, which has no columns for them, reads them only while
+    /// it is on screen and sorted by one of them.
+    static func needsSortMetrics(isExpandedWindow: Bool, isOnScreen: Bool, sortKey: ProcessSortKey) -> Bool {
+        !isExpandedWindow && isOnScreen && sortKey.needsExtendedStats
     }
 
-    /// A column title that sorts by its column, marking the active sort and its
-    /// direction (CPU and memory sort descending, PID ascending).
+    private func updateSortMetricsRegistration() {
+        let needed = Self.needsSortMetrics(
+            isExpandedWindow: isExpandedWindow, isOnScreen: isOnScreen, sortKey: settings.sortKey
+        )
+        guard needed != registeredSortMetrics else { return }
+        registeredSortMetrics = needed
+        if needed {
+            Task { await processManager.beginExtendedMetrics() }
+        } else {
+            processManager.endExtendedMetrics()
+        }
+    }
+
+    /// Sets the window's and the popover's shared sort.
+    func setSortOrder(_ order: ProcessSortOrder) {
+        settings.setSortOrder(order)
+        processManager.sortOrder = order
+    }
+
+    /// Sorts by `key` in its default direction.
+    func setSortKey(_ key: ProcessSortKey) {
+        setSortOrder(ProcessSortOrder(key: key))
+    }
+
+    /// A click on a column title: the active column reverses its direction,
+    /// and another column starts in its default direction.
+    func selectSortColumn(_ key: ProcessSortKey) {
+        setSortOrder(settings.sortOrder.selectingColumn(key))
+    }
+
+    /// Every key, then both directions, with the current ones checked.
+    private var sortMenu: some View {
+        let order = settings.sortOrder
+        return Menu {
+            Picker("Sort By", selection: Binding(
+                get: { settings.sortKey },
+                set: { key in
+                    // Choosing the current key again keeps its direction.
+                    guard key != settings.sortKey else { return }
+                    setSortKey(key)
+                }
+            )) {
+                ForEach(ProcessSortKey.allCases) { key in
+                    Text(key.label).tag(key)
+                }
+            }
+            .pickerStyle(.inline)
+            Picker("Order", selection: Binding(
+                get: { settings.sortDirection },
+                set: { setSortOrder(ProcessSortOrder(key: settings.sortKey, direction: $0)) }
+            )) {
+                ForEach(ProcessSortDirection.allCases) { direction in
+                    Text(direction.label).tag(direction)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Text(verbatim: "\(order.key.label) \(order.direction == .descending ? "↓" : "↑")")
+        }
+        // A fixed frame shared with the visible label truncated the selected
+        // key on macOS 26, so the menu sizes itself to its label.
+        .fixedSize()
+        .help("Sort By")
+        .accessibilityLabel("Sort")
+        .accessibilityValue("\(order.key.label), \(order.direction.label.lowercased())")
+    }
+
+    /// A column title that sorts by its column. The active column shows a
+    /// chevron for its direction, and VoiceOver reads the direction as its
+    /// value.
     @ViewBuilder
-    private func columnHeader(_ title: String, sortKey: ProcessSortKey) -> some View {
-        let isActive = settings.sortKey == sortKey
-        let descending = sortKey == .cpu || sortKey == .memory
+    private func columnHeader(_ title: String, sortKey: ProcessSortKey, explanation: String? = nil) -> some View {
+        let order = settings.sortOrder
+        let isActive = order.key == sortKey
         Button {
-            setSortKey(sortKey)
+            selectSortColumn(sortKey)
         } label: {
             HStack(spacing: 2) {
                 if isActive {
-                    Image(systemName: descending ? "chevron.down" : "chevron.up")
+                    Image(systemName: order.direction == .descending ? "chevron.down" : "chevron.up")
                         .font(.system(size: 7, weight: .bold))
                         .accessibilityHidden(true)
                 }
                 Text(title)
                     .fontWeight(isActive ? .semibold : .regular)
             }
+            .foregroundStyle(isActive ? Color.primary : Color.secondary)
         }
-        .buttonStyle(.plain)
-        .help("Sort by \(sortKey.label)")
-        .accessibilityValue(isActive ? (descending ? "sorted descending" : "sorted ascending") : "")
-        .accessibilityHint("Sorts the process list by this column")
+        .buttonStyle(.borderless)
+        .help(Self.columnHeaderHelp(for: sortKey, order: order, explanation: explanation))
+        .accessibilityValue(isActive ? order.direction.accessibilityValue : "")
+        .accessibilityHint(isActive ? "Reverses the sort order" : "Sorts the process list by this column")
+    }
+
+    static func columnHeaderHelp(for key: ProcessSortKey, order: ProcessSortOrder, explanation: String? = nil) -> String {
+        let action = order.key == key
+            ? "Sorted by \(key.label), \(order.direction.label.lowercased()); click to reverse."
+            : "Click to sort by \(key.label)."
+        return [explanation, action].compactMap { $0 }.joined(separator: " ")
     }
 
     private func refreshVisibleSection() {
