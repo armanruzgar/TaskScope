@@ -104,8 +104,13 @@ Required invariants:
   refuses them;
 - contain child commands (such as `ps`, `nettop`, `launchctl`, `open`, and the
   administrator `osascript` request) in their own process group: the runner
-  spawns `/bin/zsh` as the leader of a new group, with `/dev/null` as standard
-  input and no other inherited descriptor except standard output and error.
+  spawns each command as the leader of a new group, with `/dev/null` as
+  standard input and no other inherited descriptor except standard output and
+  error. A command given as an argument vector (so far, the compatibility
+  self-check's `launchctl` and `sw_vers` reads) is spawned directly, without a
+  shell: its program path must be absolute and is never looked up in `PATH`,
+  and an argument containing a NUL character is refused rather than cut short.
+  The other commands are still one string run by `/bin/zsh -f -c`.
   Only when a command is cancelled or times out does it send that group
   `SIGTERM`, then `SIGKILL` repeatedly until no member is left, for at most
   750 ms; the result is reported only after that, and a group that could not

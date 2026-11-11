@@ -23,10 +23,59 @@ enum ShellCommandRunner {
         var afterReap: @Sendable () -> Void = {}
         /// Tracks the command while it runs.
         var registry: ExecutionRegistry = ShellCommandRunner.liveExecutions
+        /// The environment the app inherited, which `childEnvironment(from:)`
+        /// scrubs into the child's.
+        var inheritedEnvironment: @Sendable () -> [String: String] = { ProcessInfo.processInfo.environment }
 
         init() {}
     }
 
+    /// Runs `executable` with `arguments` and no shell: `posix_spawn` receives
+    /// them as the argument vector exactly as given, so no argument is split,
+    /// expanded or read as shell syntax. `executable` must be an absolute path,
+    /// and no argument may contain a NUL character; such a command fails
+    /// without starting. Timeout, cancellation, process-group containment and
+    /// the scrubbed environment are the same as for the string form.
+    static func run(
+        executable: String,
+        arguments: [String] = [],
+        timeout: TimeInterval = 15,
+        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t = {
+            Darwin.waitpid($0, $1, $2)
+        },
+        hooks: Hooks = Hooks()
+    ) async -> ShellCommandResult {
+        let command = ExternalCommand(executable, arguments)
+        return await execute(
+            argumentVector: command.argumentVector,
+            displayCommand: command.description,
+            timeout: timeout,
+            waitForChild: waitForChild,
+            hooks: hooks
+        )
+    }
+
+    /// Runs `command` as `run(executable:arguments:)` does.
+    static func run(
+        _ command: ExternalCommand,
+        timeout: TimeInterval = 15,
+        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t = {
+            Darwin.waitpid($0, $1, $2)
+        },
+        hooks: Hooks = Hooks()
+    ) async -> ShellCommandResult {
+        await run(
+            executable: command.executable,
+            arguments: command.arguments,
+            timeout: timeout,
+            waitForChild: waitForChild,
+            hooks: hooks
+        )
+    }
+
+    /// Runs one command string through `/bin/zsh -f -c`. Prefer
+    /// `run(executable:arguments:)`: here every interpolated value must be
+    /// quoted with `shellQuoted` to stay one argument.
     static func run(
         _ command: String,
         timeout: TimeInterval = 15,
@@ -35,8 +84,35 @@ enum ShellCommandRunner {
         },
         hooks: Hooks = Hooks()
     ) async -> ShellCommandResult {
+        await execute(
+            argumentVector: shellArguments + [command],
+            displayCommand: command,
+            timeout: timeout,
+            waitForChild: waitForChild,
+            hooks: hooks
+        )
+    }
+
+    /// Both forms end here: `argumentVector[0]` is spawned with the whole
+    /// vector, and `displayCommand` is what the result reports as its command.
+    private static func execute(
+        argumentVector: [String],
+        displayCommand: String,
+        timeout: TimeInterval,
+        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t,
+        hooks: Hooks
+    ) async -> ShellCommandResult {
+        if let problem = ExternalCommand.startProblem(argumentVector: argumentVector) {
+            return ShellCommandResult(
+                command: displayCommand,
+                stdout: "",
+                stderr: "Could not start the command: \(problem).",
+                exitCode: -1
+            )
+        }
         let execution = CommandExecution(
-            command: command,
+            argumentVector: argumentVector,
+            displayCommand: displayCommand,
             timeout: timeout,
             waitForChild: waitForChild,
             hooks: hooks
@@ -99,9 +175,9 @@ enum ShellCommandRunner {
         return sanitized
     }
 
-    /// The shell is started with `-f` (NO_RCS) so a user's `.zshenv` cannot
-    /// alias or redefine the tools TaskScope parses, print into their output,
-    /// or change the locale.
+    /// The string form's shell, started with `-f` (NO_RCS) so a user's
+    /// `.zshenv` cannot alias or redefine the tools TaskScope parses, print
+    /// into their output, or change the locale.
     static let shellArguments = ["/bin/zsh", "-f", "-c"]
 
     /// The commands in flight, so that quitting can stop them.
@@ -165,7 +241,10 @@ enum ShellCommandRunner {
 
         static let lostExitStatusMessage = "The command's exit status could not be collected."
 
-        private let command: String
+        /// `argumentVector[0]` is the program spawned; the result reports
+        /// `displayCommand`.
+        private let argumentVector: [String]
+        private let displayCommand: String
         private let timeout: TimeInterval
         private let waitForChild: @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t
         private let hooks: Hooks
@@ -200,12 +279,14 @@ enum ShellCommandRunner {
         private var exitSource: DispatchSourceProcess?
 
         init(
-            command: String,
+            argumentVector: [String],
+            displayCommand: String,
             timeout: TimeInterval,
             waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t,
             hooks: Hooks
         ) {
-            self.command = command
+            self.argumentVector = argumentVector
+            self.displayCommand = displayCommand
             self.timeout = max(0.1, timeout)
             self.waitForChild = waitForChild
             self.hooks = hooks
@@ -234,7 +315,7 @@ enum ShellCommandRunner {
                 stateLock.unlock()
                 scheduleImmediateFinish(
                     ShellCommandResult(
-                        command: command,
+                        command: displayCommand,
                         stdout: "",
                         stderr: "Could not start the command: \(String(cString: strerror(errorCode))).",
                         exitCode: -1
@@ -243,7 +324,7 @@ enum ShellCommandRunner {
                 return
             }
             configureReadSources()
-            let spawnResult = spawnContainedShell()
+            let spawnResult = spawnContainedProcess()
             switch spawnResult {
             case let .success(pid):
                 processIdentifier = pid
@@ -275,7 +356,7 @@ enum ShellCommandRunner {
                 stateLock.unlock()
                 scheduleImmediateFinish(
                     ShellCommandResult(
-                        command: command,
+                        command: displayCommand,
                         stdout: "",
                         stderr: "Could not start the command: \(String(cString: strerror(errorCode))).",
                         exitCode: -1
@@ -401,7 +482,7 @@ enum ShellCommandRunner {
                 stateLock.unlock()
                 finishOnIOQueue(
                     ShellCommandResult(
-                        command: command,
+                        command: displayCommand,
                         stdout: outputCapture.string,
                         stderr: message,
                         exitCode: exitCode
@@ -411,7 +492,7 @@ enum ShellCommandRunner {
             }
             let processIdentifier = self.processIdentifier
             if let processIdentifier {
-                // The shell is atomically created as the leader of a new process
+                // The child is atomically created as the leader of a new process
                 // group. Signalling the group contains children and grandchildren
                 // that inherit it. The signal is sent under the lock that reaping
                 // takes, so the leader cannot be reaped, and its ID reused,
@@ -572,7 +653,7 @@ enum ShellCommandRunner {
 
                 finishState(
                     ShellCommandResult(
-                        command: command,
+                        command: displayCommand,
                         stdout: outputCapture.string.trimmingCharacters(in: .whitespacesAndNewlines),
                         stderr: reportedError,
                         exitCode: terminalOverride?.exitCode ?? exitCode,
@@ -704,7 +785,7 @@ enum ShellCommandRunner {
             errorSource.resume()
         }
 
-        private func spawnContainedShell() -> SpawnResult {
+        private func spawnContainedProcess() -> SpawnResult {
             guard let standardOutput, let standardError else { return .failure(EBADF) }
             let outputRead = standardOutput.fileHandleForReading.fileDescriptor
             let outputWrite = standardOutput.fileHandleForWriting.fileDescriptor
@@ -762,18 +843,19 @@ enum ShellCommandRunner {
             errorCode = posix_spawnattr_setpgroup(&attributes, 0)
             guard errorCode == 0 else { return .failure(errorCode) }
 
-            let arguments = ShellCommandRunner.shellArguments + [command]
-            var argv = arguments.map { strdup($0) } + [nil]
+            // The program is spawned directly: argv[0] is its path, which is
+            // never searched for in PATH.
+            var argv = argumentVector.map { strdup($0) } + [nil]
             defer { argv.dropLast().forEach { free($0) } }
 
-            var environment = ShellCommandRunner.childEnvironment()
+            var environment = ShellCommandRunner.childEnvironment(from: hooks.inheritedEnvironment())
                 .map { strdup("\($0.key)=\($0.value)") } + [nil]
             defer { environment.dropLast().forEach { free($0) } }
 
             var pid: pid_t = 0
             errorCode = posix_spawn(
                 &pid,
-                arguments[0],
+                argumentVector[0],
                 &fileActions,
                 &attributes,
                 &argv,

@@ -115,6 +115,11 @@ anything affecting:
 - preference schemas, migrations, corruption recovery, or deletion;
 - bundle identity, architecture, signing, notarization, or packaging.
 
+Run an external tool with `ShellCommandRunner.run(executable:arguments:)`,
+giving its absolute path and its arguments as an array: the tool receives them
+as given, with no shell in between, so no value needs quoting. Never build a
+command string from a preset field or any other value.
+
 Changes to a trust boundary must update [THREAT_MODEL.md](THREAT_MODEL.md).
 Changes to stored or surfaced data must update [PRIVACY.md](PRIVACY.md). Release
 process changes must update [RELEASE.md](RELEASE.md). Add a

@@ -8,14 +8,15 @@ struct GlobalProtectCompatibilityRuntime: Sendable {
     enum Probe: Hashable, Sendable {
         case userDisabled, systemDisabled, service(Service), macOSVersion, macOSBuild
 
-        func command(userID: uid_t) -> String {
+        /// The read-only command behind each probe, run without a shell.
+        func command(userID: uid_t) -> ExternalCommand {
             switch self {
-            case .userDisabled: "/bin/launchctl print-disabled gui/\(userID)"
-            case .systemDisabled: "/bin/launchctl print-disabled system"
+            case .userDisabled: .launchctl("print-disabled", "gui/\(userID)")
+            case .systemDisabled: .launchctl("print-disabled", "system")
             case .service(let service):
-                "/bin/launchctl print \(service.isSystem ? "system" : "gui/\(userID)")/\(service.label)"
-            case .macOSVersion: "/usr/bin/sw_vers -productVersion"
-            case .macOSBuild: "/usr/bin/sw_vers -buildVersion"
+                .launchctl("print", "\(service.isSystem ? "system" : "gui/\(userID)")/\(service.label)")
+            case .macOSVersion: ExternalCommand("/usr/bin/sw_vers", ["-productVersion"])
+            case .macOSBuild: ExternalCommand("/usr/bin/sw_vers", ["-buildVersion"])
             }
         }
     }

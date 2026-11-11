@@ -20,13 +20,16 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
         let probes = await recorder.probes
         XCTAssertEqual(Set(probes), [.userDisabled, .systemDisabled, .service(.pangpa), .service(.pangps), .service(.pangpsd), .macOSVersion, .macOSBuild])
         XCTAssertEqual(probes.count, 7)
-        XCTAssertEqual(Set(probes.map { $0.command(userID: 501) }), [
-            "/bin/launchctl print-disabled gui/501",
-            "/bin/launchctl print-disabled system",
-            "/bin/launchctl print gui/501/com.paloaltonetworks.gp.pangpa",
-            "/bin/launchctl print gui/501/com.paloaltonetworks.gp.pangps",
-            "/bin/launchctl print system/com.paloaltonetworks.gp.pangpsd",
-            "/usr/bin/sw_vers -productVersion", "/usr/bin/sw_vers -buildVersion"
+        // Each probe runs one fixed, read-only argument vector, without a shell.
+        let commands = Dictionary(probes.map { ($0, $0.command(userID: 501).argumentVector) }) { first, _ in first }
+        XCTAssertEqual(commands, [
+            .userDisabled: ["/bin/launchctl", "print-disabled", "gui/501"],
+            .systemDisabled: ["/bin/launchctl", "print-disabled", "system"],
+            .service(.pangpa): ["/bin/launchctl", "print", "gui/501/com.paloaltonetworks.gp.pangpa"],
+            .service(.pangps): ["/bin/launchctl", "print", "gui/501/com.paloaltonetworks.gp.pangps"],
+            .service(.pangpsd): ["/bin/launchctl", "print", "system/com.paloaltonetworks.gp.pangpsd"],
+            .macOSVersion: ["/usr/bin/sw_vers", "-productVersion"],
+            .macOSBuild: ["/usr/bin/sw_vers", "-buildVersion"],
         ])
         XCTAssertEqual(report.keepOffRequested, true)
         XCTAssertEqual(Report.Service.allCases.filter { !$0.isSystem }.map(\.label), WatchedAppPreset.globalProtect.lifecycleUserLaunchAgentJobs.map(\.label))
