@@ -214,8 +214,8 @@ final class ReviewCoreRegressionTests: XCTestCase {
         ))
         XCTAssertEqual(result, .disconnected)
         let manager = manager(Inventory([]))
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.globalProtectServiceObservationProvider = { await GlobalProtectServiceObservation.read(runtime: runtime) }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.globalProtectServiceObservation = { await GlobalProtectServiceObservation.read(runtime: runtime) }
         let keepOff = await manager.keepOff(.globalProtect)
         XCTAssertEqual(keepOff.status, .completed)
     }
@@ -250,7 +250,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
                          signaler: Signaler = Signaler(), now: @escaping () -> Date = Date.init) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: verification ?? inventory,
                                      processSignaler: signaler, lifecycle: Lifecycle(), settleAfterProcessChange: {},
-                                     currentPID: 99999, now: now)
+                                     currentPID: 99999, now: now, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }

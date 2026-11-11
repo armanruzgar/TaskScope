@@ -47,7 +47,8 @@ final class Batch11FixTests: XCTestCase {
                 verificationInventory: Batch11Inventory(),
                 processSignaler: Batch11Signaler(),
                 lifecycle: Batch11Lifecycle(),
-                settleAfterProcessChange: {}
+                settleAfterProcessChange: {},
+                dependencies: .inert
             ),
             selectedTab: tab,
             presetActions: actions ?? PresetSettingsActions(),

@@ -372,7 +372,8 @@ final class SystemIntegrationRegressionTests: XCTestCase {
     private func processManager() -> ProcessManager {
         ProcessManager(
             processInventory: IntegrationInventory(), verificationInventory: IntegrationInventory(),
-            processSignaler: IntegrationSignaler(), lifecycle: IntegrationLifecycle(), settleAfterProcessChange: {}
+            processSignaler: IntegrationSignaler(), lifecycle: IntegrationLifecycle(), settleAfterProcessChange: {},
+            dependencies: .inert
         )
     }
 }

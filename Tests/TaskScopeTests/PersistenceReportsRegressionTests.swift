@@ -216,6 +216,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
     @MainActor
     func testQuitAllDisconnectFailureIsExportedWithoutRawDetails() async throws {
         let manager = makeManager()
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         await manager.quitAll(.globalProtect)
         let failures = manager.lifecycleDiagnostics.failures(for: WatchedAppPreset.globalProtect.id)
         XCTAssertEqual(failures.map(\.reason), [.disconnectFailed])
@@ -301,7 +302,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
     @MainActor
     private func makeManager() -> ProcessManager {
         let manager = ProcessManager(processInventory: ReportsInventory(), verificationInventory: ReportsInventory(),
-                                     processSignaler: ReportsSignaler(), lifecycle: ReportsLifecycle(), settleAfterProcessChange: {})
+                                     processSignaler: ReportsSignaler(), lifecycle: ReportsLifecycle(), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }

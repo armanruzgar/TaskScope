@@ -107,7 +107,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: EmptyInventory(),
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         let coordinator = AppCommandCoordinator(
             processManager: manager,
@@ -126,7 +127,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: inventory,
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         let coordinator = AppCommandCoordinator(
             processManager: manager,
@@ -161,7 +163,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: inventory,
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let coordinator = AppCommandCoordinator(processManager: manager, presets: { [] })
@@ -183,7 +186,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: inventory,
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let coordinator = AppCommandCoordinator(processManager: manager, presets: { [] })
@@ -208,7 +212,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: EmptyInventory(),
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         let coordinator = AppCommandCoordinator(
             processManager: manager,
@@ -231,7 +236,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
             processInventory: EmptyInventory(),
             processSignaler: NoopSignaler(),
             lifecycle: NoopLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         let coordinator = AppCommandCoordinator(
             processManager: manager,

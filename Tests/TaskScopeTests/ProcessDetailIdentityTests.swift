@@ -42,7 +42,8 @@ final class ProcessDetailIdentityProofTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: EmptyProcessInventory(),
             processSignaler: InertProcessSignaler(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
 

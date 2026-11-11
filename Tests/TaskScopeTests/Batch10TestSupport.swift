@@ -48,11 +48,12 @@ enum Batch10 {
         let lifecycle = UILifecycle()
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
-            processSignaler: signaler, lifecycle: lifecycle, settleAfterProcessChange: {}
+            processSignaler: signaler, lifecycle: lifecycle, settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let stores = stores(inventory: inventory)
-        manager.watchedAppsProvider = { stores.watchedApps.presets }
+        manager.dependencies.watchedPresets = { stores.watchedApps.presets }
         await manager.loadProcessList(showMessage: false)
         return UIFixture(manager: manager, signaler: signaler, stores: stores, lifecycle: lifecycle)
     }

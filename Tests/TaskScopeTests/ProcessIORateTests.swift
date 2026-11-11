@@ -84,7 +84,8 @@ final class ProcessIORateTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(),
-            settleAfterProcessChange: {}, now: { clock.now }
+            settleAfterProcessChange: {}, now: { clock.now },
+            dependencies: .inert
         )
         manager.enableNotifications = false
         await manager.loadProcessList(showMessage: false)

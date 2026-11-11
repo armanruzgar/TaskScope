@@ -419,7 +419,8 @@ final class Batch09InstallationHealthRecoveryTests: XCTestCase {
         var previews = 0
         let manager = ProcessManager(
             processInventory: Batch09EmptyInventory(), verificationInventory: Batch09EmptyInventory(),
-            processSignaler: Batch09RefusingSignaler(), lifecycle: Batch09NoLifecycle(), settleAfterProcessChange: {}
+            processSignaler: Batch09RefusingSignaler(), lifecycle: Batch09NoLifecycle(), settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let view = SupportDiagnosticsView(

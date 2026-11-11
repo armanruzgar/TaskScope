@@ -60,7 +60,10 @@ private struct Batch02RuntimeRig {
             lifecycle: lifecycle,
             settleAfterProcessChange: {},
             currentPID: 99_999,
-            pollingController: polling.controller()
+            pollingController: polling.controller(),
+            // As TaskScopeApp wires it, with no live service reading.
+            keepOffActivity: stores.keepOffActivity,
+            dependencies: .app(settings: stores.settings, watchedApps: stores.watchedApps, globalProtectServiceObservation: { nil })
         )
         bus = AppCommandBus()
         let effects = Batch02EffectsRecorder()
@@ -112,19 +115,19 @@ final class Batch02RuntimeTests: XCTestCase {
         )
         defer { rig.tearDown() }
         XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff)
-        XCTAssertEqual(rig.manager.keptOffPresetsProvider?().map(\.id), [])
+        XCTAssertEqual(rig.manager.dependencies.keptOffPresets().map(\.id), [])
 
         _ = await rig.manager.keepOff(.globalProtect)
 
         XCTAssertTrue(rig.stores.settings.keepGlobalProtectOff, "Keep Off must be recorded as on: \(rig.lifecycle.calls)")
         XCTAssertTrue(SettingsStore(userDefaults: rig.defaults).keepGlobalProtectOff, "and saved")
-        XCTAssertEqual(rig.manager.keptOffPresetsProvider?().map(\.id), [WatchedAppPreset.globalProtectID])
-        XCTAssertEqual(rig.manager.isPresetKeptOffProvider?(.globalProtect), true)
+        XCTAssertEqual(rig.manager.dependencies.keptOffPresets().map(\.id), [WatchedAppPreset.globalProtectID])
+        XCTAssertEqual(rig.manager.dependencies.isPresetKeptOff(.globalProtect), true)
 
         _ = await rig.manager.openApp(.globalProtect)
 
         XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff, "Open must clear Keep Off: \(rig.lifecycle.calls)")
-        XCTAssertEqual(rig.manager.keptOffPresetsProvider?().map(\.id), [])
+        XCTAssertEqual(rig.manager.dependencies.keptOffPresets().map(\.id), [])
     }
 
     /// T02-6: with unreadable settings the Keep Off intent cannot be written, so
@@ -303,7 +306,8 @@ final class Batch02CoordinatorTests: XCTestCase {
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory, processSignaler: Batch02InertSignaler(),
-            lifecycle: lifecycle, settleAfterProcessChange: {}
+            lifecycle: lifecycle, settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

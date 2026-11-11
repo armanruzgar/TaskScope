@@ -20,8 +20,8 @@ final class Batch03NotificationTests: XCTestCase {
         }
         let inventory = ManagerTestInventory(results: [.success(helpers), .success([helpers[1]]), .success(helpers)])
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
-                                     lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {})
-        manager.watchedAppsProvider = { presets }
+                                     lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {}, dependencies: .inert)
+        manager.dependencies.watchedPresets = { presets }
         // The manager's seams carry the watched snapshots to the service, which
         // diffs each preset on its own; this service records instead of posting.
         var delivered: [String] = []

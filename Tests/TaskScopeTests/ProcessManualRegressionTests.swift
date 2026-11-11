@@ -26,7 +26,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let manager = manager(inventory)
         manager.enableNotifications = true
         var preset = examplePreset()
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
         var primes: [Set<String>] = []
         var diffs: [Set<String>] = []
         manager.primeNotificationBaseline = { primes.append(Set($0.flatMap(\.runningNames))) }
@@ -47,7 +47,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         var second = examplePreset()
         second.appPath = "/Applications/Other.app"
         first.helperProcessNames = ["Helper"]
-        manager.watchedAppsProvider = { [first, second] }
+        manager.dependencies.watchedPresets = { [first, second] }
         var calls: [String] = []
         manager.primeNotificationBaseline = { _ in calls.append("prime") }
         manager.notifyTransitions = { _ in calls.append("diff") }
@@ -244,7 +244,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let manager = manager(inventory, lifecycle: lifecycle)
         var preset = examplePreset()
         preset.helperProcessNames = ["Helper"]
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
         let coordinator = AppCommandCoordinator(processManager: manager, presets: { [preset] })
         let bus = AppCommandBus()
         bus.install { await coordinator.perform($0) }
@@ -455,7 +455,8 @@ final class ProcessManualRegressionTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: verification ?? inventory,
             processSignaler: signaler, lifecycle: lifecycle, settleAfterProcessChange: {},
-            currentPID: currentPID, now: now
+            currentPID: currentPID, now: now,
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

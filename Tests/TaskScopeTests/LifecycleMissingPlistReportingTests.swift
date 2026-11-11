@@ -62,7 +62,7 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
             inventory: P7QueuedInventory(results: [.success([])]),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.quitAllKillable(preset)
 
@@ -106,7 +106,7 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
             ]),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.quitAllKillable(preset)
 
@@ -132,7 +132,8 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: P7NoopSignaler(),
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

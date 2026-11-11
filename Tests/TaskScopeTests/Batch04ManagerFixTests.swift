@@ -10,7 +10,7 @@ final class Batch04ManagerFixTests: XCTestCase {
             let fake = LifecycleRuntimeHarness(existingPaths: [preset.appPath], commandResults: [])
             let inventory = P7QueuedInventory(results: [.success([])])
             let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: P7NoopSignaler(),
-                lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {})
+                lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             let result = await manager.openApp(preset)
             XCTAssertEqual(result.status, .failed)
@@ -25,7 +25,7 @@ final class Batch04ManagerFixTests: XCTestCase {
         let fake = LifecycleRuntimeHarness(existingPaths: [preset.appPath], commandResults: [batch04Result(error: "Launch Services refused", code: 1)])
         let inventory = P7QueuedInventory(results: [.success([])])
         let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: P7NoopSignaler(),
-            lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {})
+            lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         let result = await manager.openApp(preset)
         XCTAssertEqual(result.status, .failed)

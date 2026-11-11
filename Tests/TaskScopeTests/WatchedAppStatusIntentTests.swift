@@ -78,7 +78,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
 
     func testStatusReportsThePresetsKeepOffIntent() async throws {
         let (manager, coordinator) = makeCoordinator(inventory: StatusScriptedInventory([.success([])]))
-        manager.isPresetKeptOffProvider = { [id = preset.id] in $0.id == id }
+        manager.dependencies.isPresetKeptOff = { [id = preset.id] in $0.id == id }
 
         let result = await coordinator.perform(.statusPresetEntity(target))
         let status = try XCTUnwrap(result.watchedStatus)
@@ -252,10 +252,11 @@ final class WatchedAppStatusIntentTests: XCTestCase {
             processInventory: inventory,
             processSignaler: StatusNoopSignaler(),
             lifecycle: StatusNoopLifecycle(bundleExists: bundleExists),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [preset] in [preset] }
+        manager.dependencies.watchedPresets = { [preset] in [preset] }
         return manager
     }
 

@@ -10,7 +10,7 @@ final class ProcessManagerTests: XCTestCase {
         let highMemory = process(pid: 3, cpu: 0, memory: 2_000, name: "HighMemory")
         let inventory = FakeProcessInventory(results: [.success([highCPU, mediumCPU, highMemory])])
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 2 }
+        manager.dependencies.processListLimit = { 2 }
         manager.sortKey = .memory
 
         await manager.loadProcessList()
@@ -25,7 +25,7 @@ final class ProcessManagerTests: XCTestCase {
         let highMemory = process(pid: 3, cpu: 0, memory: 2_000, name: "HighMemory")
         let inventory = FakeProcessInventory(results: [.success([highCPU, mediumCPU, highMemory])])
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 2 }
+        manager.dependencies.processListLimit = { 2 }
 
         await manager.loadProcessList()
         XCTAssertEqual(manager.displayProcesses().map(\.pid), [1, 2])
@@ -40,7 +40,7 @@ final class ProcessManagerTests: XCTestCase {
         let watched = process(pid: 2, cpu: 0, name: "Watched")
         let inventory = FakeProcessInventory(results: [.success([highCPU, watched])])
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 1 }
+        manager.dependencies.processListLimit = { 1 }
 
         await manager.loadProcessList()
 
@@ -80,7 +80,7 @@ final class ProcessManagerTests: XCTestCase {
         )
         let inventory = FakeProcessInventory(results: [.success([parent, child])])
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 1 }
+        manager.dependencies.processListLimit = { 1 }
 
         await manager.loadProcessList()
         let roots = ProcessTreeBuilder.build(
@@ -107,7 +107,7 @@ final class ProcessManagerTests: XCTestCase {
             protectedProcessNames: [],
             appPath: "/Applications/Renderer.app"
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.refreshWatchedStatus()
 
@@ -133,7 +133,7 @@ final class ProcessManagerTests: XCTestCase {
             protectedProcessNames: [],
             appPath: "/Applications/Example.app"
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.refreshWatchedStatus(showMessage: false)
         XCTAssertFalse(manager.snapshots[0].isMainRunning)
@@ -243,7 +243,7 @@ final class ProcessManagerTests: XCTestCase {
             ]
         )
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 1 }
+        manager.dependencies.processListLimit = { 1 }
 
         await manager.loadProcessList()
         manager.toggleSelection(target.pid)
@@ -264,7 +264,7 @@ final class ProcessManagerTests: XCTestCase {
         let needle = process(pid: 93, cpu: 1, memory: 5, name: "Needle")
         let inventory = FakeProcessInventory(results: [.success([hotA, hotB, needle])])
         let manager = makeManager(inventory: inventory)
-        manager.processListLimitProvider = { 2 }
+        manager.dependencies.processListLimit = { 2 }
 
         await manager.loadProcessList()
         XCTAssertEqual(manager.displayProcesses().map(\.pid), [91, 92])
@@ -509,7 +509,8 @@ final class ProcessManagerTests: XCTestCase {
             processInventory: inventory,
             processSignaler: FakeProcessSignaler(),
             lifecycle: FakeLifecycleService(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
 
@@ -544,7 +545,8 @@ final class ProcessManagerTests: XCTestCase {
             verificationInventory: FakeProcessInventory(results: [.success([target, survivor]), .success([survivor])]),
             processSignaler: FakeProcessSignaler(alivePids: [target.pid], exitsOnTerminate: true),
             lifecycle: FakeLifecycleService(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let observer = Task { await shared.load(fetchExtendedStats: false) }
@@ -593,7 +595,8 @@ final class ProcessManagerTests: XCTestCase {
             processInventory: inventory,
             processSignaler: FakeProcessSignaler(),
             lifecycle: FakeLifecycleService(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
 
@@ -722,7 +725,7 @@ final class ProcessManagerTests: XCTestCase {
             ]),
             lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.refreshWatchedStatus(showMessage: false)
         let result = await manager.openApp(preset)
@@ -772,7 +775,7 @@ final class ProcessManagerTests: XCTestCase {
             ]),
             lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.openApp(preset)
 
@@ -824,8 +827,8 @@ final class ProcessManagerTests: XCTestCase {
             lifecycle: lifecycle
         )
         var keptOff = true
-        manager.isPresetKeptOffProvider = { _ in keptOff }
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.isPresetKeptOff = { _ in keptOff }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
         let result = await manager.openApp(lifecyclePreset())
 
@@ -867,7 +870,7 @@ final class ProcessManagerTests: XCTestCase {
                 inventory: FakeProcessInventory(results: [.success([main, protected]), .success([protected])]),
                 lifecycle: lifecycle
             )
-            manager.watchedAppsProvider = { [preset] }
+            manager.dependencies.watchedPresets = { [preset] }
 
             let result = await stop.run(manager, preset)
 
@@ -900,7 +903,7 @@ final class ProcessManagerTests: XCTestCase {
                     ]),
                     lifecycle: lifecycle
                 )
-                manager.watchedAppsProvider = { [preset] }
+                manager.dependencies.watchedPresets = { [preset] }
 
                 let result = await stop.run(manager, preset)
 
@@ -943,7 +946,7 @@ final class ProcessManagerTests: XCTestCase {
                     inventory: FakeProcessInventory(results: [.success(scenario.before), .success(scenario.after)]),
                     lifecycle: lifecycle
                 )
-                manager.watchedAppsProvider = { [preset] }
+                manager.dependencies.watchedPresets = { [preset] }
 
                 let result = await stop.run(manager, preset)
 
@@ -964,7 +967,7 @@ final class ProcessManagerTests: XCTestCase {
         let manager = makeManager(
             inventory: FakeProcessInventory(results: [.success([daemon])]), lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
 
         let result = await manager.quitAllKillable(.globalProtect)
 
@@ -1036,7 +1039,7 @@ final class ProcessManagerTests: XCTestCase {
             ]),
             lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.quitHelpers(preset)
 
@@ -1054,7 +1057,7 @@ final class ProcessManagerTests: XCTestCase {
             ),
             lifecycle: FakeLifecycleService()
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.quitAllKillable(preset)
 
@@ -1107,8 +1110,8 @@ final class ProcessManagerTests: XCTestCase {
     func testGlobalProtectKeepOffStopsSystemServiceOnlyForExplicitAction() async {
         let lifecycle = FakeLifecycleService()
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         let stopped = await manager.keepOff(.globalProtect)
         XCTAssertEqual(stopped.status, .completed)
         XCTAssertTrue(lifecycle.calls.contains("daemon.disable:true"))
@@ -1124,8 +1127,9 @@ final class ProcessManagerTests: XCTestCase {
     func testGlobalProtectQuitAllDisconnectsBeforePersistingAndStoppingServices() async {
         let lifecycle = FakeLifecycleService()
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = false
-        manager.setPresetKeptOffHandler = { _, value in
+        manager.dependencies.setPresetKeptOff = { _, value in
             XCTAssertEqual(lifecycle.calls, ["vpn.disconnect"])
             keptOff = value
         }
@@ -1143,8 +1147,9 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         lifecycle.disconnectResult = .failed("Disconnect could not be verified")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         var intentWrites = 0
-        manager.setPresetKeptOffHandler = { _, _ in intentWrites += 1 }
+        manager.dependencies.setPresetKeptOff = { _, _ in intentWrites += 1 }
         let result = await manager.quitAll(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.contains("could not be verified"))
@@ -1190,8 +1195,9 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         lifecycle.disconnectResult = .failed("Authentication timed out")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = false
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
         _ = await manager.keepOff(.globalProtect)
         let failureID = try XCTUnwrap(manager.globalProtectDisconnectFailureID)
         XCTAssertFalse(keptOff)
@@ -1216,6 +1222,7 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         lifecycle.disconnectResult = .failed("Authentication timed out")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         let unsolicited = await manager.stopGlobalProtectAfterFailedDisconnect(failureID: UUID())
         XCTAssertEqual(unsolicited.status, .rejected)
         XCTAssertTrue(lifecycle.calls.isEmpty)
@@ -1233,6 +1240,7 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         lifecycle.disconnectResult = .failed("Authentication timed out")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         _ = await manager.keepOff(.globalProtect)
         let failureID = try XCTUnwrap(manager.globalProtectDisconnectFailureID)
         _ = await manager.openApp(.globalProtect)
@@ -1249,6 +1257,7 @@ final class ProcessManagerTests: XCTestCase {
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "Administrator cancelled")
         ])
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.contains("Administrator cancelled"))
@@ -1259,7 +1268,7 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         let daemon = process(pid: 42, uid: 0, name: "PanGPS")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([daemon])]), lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.contains("privileged VPN service is still running"))
@@ -1270,10 +1279,10 @@ final class ProcessManagerTests: XCTestCase {
         let running = process(pid: 42, name: "GlobalProtect")
         let daemon = process(pid: 43, uid: 0, name: "PanGPS")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([running, daemon])]), lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = true
-        manager.isPresetKeptOffProvider = { _ in keptOff }
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.isPresetKeptOff = { _ in keptOff }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
         let opened = await manager.openApp(.globalProtect)
         XCTAssertEqual(opened.status, .completed)
         XCTAssertFalse(keptOff)
@@ -1286,8 +1295,8 @@ final class ProcessManagerTests: XCTestCase {
         let running = process(pid: 42, name: "GlobalProtect")
         let daemon = process(pid: 43, uid: 0, name: "PanGPS")
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([running, daemon])]), lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in false }
         let opened = await manager.openApp(.globalProtect)
         XCTAssertEqual(opened.status, .completed)
         XCTAssertEqual(lifecycle.calls, ["exists", "daemon", "daemon.enable", "agents.enable", "agents.load"])
@@ -1301,7 +1310,7 @@ final class ProcessManagerTests: XCTestCase {
         let manager = makeManager(inventory: FakeProcessInventory(results: [
             .success([ui]), .success([]), .success([ui, service])
         ]), lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
 
         let result = await manager.openApp(.globalProtect)
 
@@ -1349,8 +1358,8 @@ final class ProcessManagerTests: XCTestCase {
         ])
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
         var keptOff = true
-        manager.isPresetKeptOffProvider = { _ in keptOff }
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.isPresetKeptOff = { _ in keptOff }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
         let opened = await manager.openApp(.globalProtect)
         XCTAssertEqual(opened.status, .failed)
         XCTAssertTrue(keptOff)
@@ -1373,9 +1382,9 @@ final class ProcessManagerTests: XCTestCase {
             .success([protected])
         ])
         let manager = makeManager(inventory: inventory, lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
         var keptOff = false
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
         let result = await manager.keepOff(preset)
 
@@ -1403,7 +1412,7 @@ final class ProcessManagerTests: XCTestCase {
             lifecycle: lifecycle
         )
         var keptOff = false
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
         let result = await manager.keepOff(lifecyclePreset())
 
@@ -1425,8 +1434,8 @@ final class ProcessManagerTests: XCTestCase {
             }
             let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
             var keptOff = true
-            manager.isPresetKeptOffProvider = { _ in keptOff }
-            manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+            manager.dependencies.isPresetKeptOff = { _ in keptOff }
+            manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
             let task = Task { await manager.openApp(.globalProtect) }
             let result = await task.value
             XCTAssertEqual(result.status, cancelled ? .rejected : .failed)
@@ -1447,7 +1456,7 @@ final class ProcessManagerTests: XCTestCase {
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangps", state: .failed, detail: "Command cancelled.")
         ])
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         let controller = ProcessPollingController(sleep: { _ in false })
         let finished = expectation(description: "cancelled enforcement finished")
         var result: TaskScopeCommandResult?
@@ -1473,9 +1482,9 @@ final class ProcessManagerTests: XCTestCase {
             agent.executablePath = "/Applications/GlobalProtect.app/Contents/Resources/PanGPS"
             let lifecycle = FakeLifecycleService()
             let manager = makeManager(inventory: FakeProcessInventory(results: [.success([agent])]), lifecycle: lifecycle)
-            manager.watchedAppsProvider = { [.globalProtect] }
-            manager.keptOffPresetsProvider = { [.globalProtect] }
-            manager.isPresetKeptOffProvider = { _ in true }
+            manager.dependencies.watchedPresets = { [.globalProtect] }
+            manager.dependencies.keptOffPresets = { [.globalProtect] }
+            manager.dependencies.isPresetKeptOff = { _ in true }
             await manager.enforceKeptOffPresets(force: true)
             XCTAssertEqual(lifecycle.preservedVPNServices, [true])
             XCTAssertFalse(lifecycle.calls.contains("vpn.disconnect"))
@@ -1493,8 +1502,8 @@ final class ProcessManagerTests: XCTestCase {
             lifecycle: lifecycle
         )
         var keptOff = true
-        manager.isPresetKeptOffProvider = { _ in keptOff }
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+        manager.dependencies.isPresetKeptOff = { _ in keptOff }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
         let result = await manager.openApp(lifecyclePreset())
 
@@ -1522,8 +1531,8 @@ final class ProcessManagerTests: XCTestCase {
             ]),
             lifecycle: lifecycle
         )
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
 
         await manager.enforceKeptOffPresets(force: true)
 
@@ -1542,8 +1551,8 @@ final class ProcessManagerTests: XCTestCase {
             inventory: FakeProcessInventory(results: [.success([])]),
             lifecycle: lifecycle
         )
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
 
         await manager.enforceKeptOffPresets(force: true)
 
@@ -1561,8 +1570,8 @@ final class ProcessManagerTests: XCTestCase {
             inventory: FakeProcessInventory(results: [.success([])]),
             lifecycle: lifecycle
         )
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
 
         await manager.enforceKeptOffPresets(force: true)
 
@@ -1591,8 +1600,8 @@ final class ProcessManagerTests: XCTestCase {
             inventory: FakeProcessInventory(results: [.success([process(pid: 42, name: "Example")])]),
             lifecycle: lifecycle
         )
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.keepOff(preset, recordIntent: false)
 
@@ -1619,10 +1628,10 @@ final class ProcessManagerTests: XCTestCase {
         )
         let manager = makeManager(inventory: inventory, lifecycle: lifecycle)
         var keptOff = true
-        manager.watchedAppsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in keptOff }
-        manager.setPresetKeptOffHandler = { _, value in keptOff = value }
-        manager.keptOffPresetsProvider = { keptOff ? [preset] : [] }
+        manager.dependencies.watchedPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in keptOff }
+        manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
+        manager.dependencies.keptOffPresets = { keptOff ? [preset] : [] }
 
         let enforcement = Task { await manager.enforceKeptOffPresets() }
         await inventory.waitForCall(1)
@@ -1654,9 +1663,9 @@ final class ProcessManagerTests: XCTestCase {
             blockingFirstCalls: 1
         )
         let manager = makeManager(inventory: inventory, lifecycle: lifecycle)
-        manager.watchedAppsProvider = { [preset] }
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [preset] }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
 
         let quit = Task { await manager.quitMainApp(preset) }
         await inventory.waitForCall(1)
@@ -1684,9 +1693,9 @@ final class ProcessManagerTests: XCTestCase {
             ]),
             lifecycle: lifecycle
         )
-        manager.keptOffPresetsProvider = { [preset] }
-        manager.isPresetKeptOffProvider = { _ in true }
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.keptOffPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.enforceKeptOffPresets()
 
@@ -1706,9 +1715,9 @@ final class ProcessManagerTests: XCTestCase {
             inventory: FakeProcessInventory(results: [.success([agent])]),
             lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         await manager.refreshWatchedStatus(showMessage: false)
         await manager.enforceKeptOffPresets()
         await manager.enforceKeptOffPresets()
@@ -1731,7 +1740,7 @@ final class ProcessManagerTests: XCTestCase {
             inventory: FakeProcessInventory(results: [.success([agent])]),
             lifecycle: lifecycle
         )
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertFalse(result.succeeded)
         XCTAssertTrue(manager.snapshots[0].hasKeepOffTargets)
@@ -1748,8 +1757,8 @@ final class ProcessManagerTests: XCTestCase {
             agent.executablePath = path
             let lifecycle = FakeLifecycleService()
             let manager = makeManager(inventory: FakeProcessInventory(results: [.success([agent])]), lifecycle: lifecycle)
-            manager.keptOffPresetsProvider = { [.globalProtect] }
-            manager.isPresetKeptOffProvider = { _ in true }
+            manager.dependencies.keptOffPresets = { [.globalProtect] }
+            manager.dependencies.isPresetKeptOff = { _ in true }
             await manager.enforceKeptOffPresets()
             XCTAssertTrue(lifecycle.calls.isEmpty)
         }
@@ -1804,7 +1813,7 @@ final class ProcessManagerTests: XCTestCase {
         let lifecycle = FakeLifecycleService()
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
         lifecycle.appExists = false
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         _ = await manager.openApp(.globalProtect)
         assertFullGlobalProtectScope(lifecycle, calls: ["daemon.enable", "agents.enable"])
     }
@@ -1836,7 +1845,8 @@ final class ProcessManagerTests: XCTestCase {
             processInventory: inventory,
             processSignaler: signaler,
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

@@ -109,7 +109,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
             verificationInventory: verification,
             processSignaler: signaler,
             lifecycle: AuthorizationLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let store = makeStore(inventory: StubInventory(processes: [target]))
@@ -184,7 +185,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: signaler,
             lifecycle: AuthorizationLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

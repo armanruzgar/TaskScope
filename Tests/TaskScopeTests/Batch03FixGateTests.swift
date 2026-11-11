@@ -53,7 +53,8 @@ final class Batch03GateCancellationTests: XCTestCase {
             processSignaler: Batch03Signaler(world: world),
             lifecycle: lifecycle,
             settleAfterProcessChange: {},
-            currentPID: 999_999
+            currentPID: 999_999,
+            dependencies: .inert
         )
         let box = Batch03StopBox()
         manager.enableNotifications = true

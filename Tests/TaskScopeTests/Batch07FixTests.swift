@@ -419,10 +419,11 @@ final class Batch07WatchedAppsStoreTests: XCTestCase {
             processInventory: Batch07EmptyInventory(),
             processSignaler: signaler,
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { store.presets }
+        manager.dependencies.watchedPresets = { store.presets }
         let copy = WatchedAppPreset(
             id: locked.id, displayName: locked.displayName, mainProcessName: locked.mainProcessName,
             helperProcessNames: [], protectedProcessNames: [], appPath: locked.appPath

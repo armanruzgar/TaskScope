@@ -12,10 +12,10 @@ final class Batch03PollingTests: XCTestCase {
         let shared = CoalescingProcessInventory(upstream: upstream, now: { 0 })
         let manager = ProcessManager(processInventory: shared, verificationInventory: verification,
                                      processSignaler: ManagerTestSignaler(), lifecycle: ManagerTestLifecycle(),
-                                     settleAfterProcessChange: {}, pollingController: controller)
+                                     settleAfterProcessChange: {}, pollingController: controller, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.keptOffPresetsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
         await manager.beginExtendedMetrics()
         manager.setPolling(interval: 10, includeProcessList: true)
         await sleeper.waitForRequestCount(1)
@@ -40,11 +40,11 @@ final class Batch03PollingTests: XCTestCase {
         let controller = ProcessPollingController { await sleeper.sleep(interval: $0) }
         let manager = ProcessManager(processInventory: upstream, verificationInventory: verification,
                                      processSignaler: ManagerTestSignaler(), lifecycle: lifecycle,
-                                     settleAfterProcessChange: {}, pollingController: controller)
+                                     settleAfterProcessChange: {}, pollingController: controller, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         manager.setPolling(interval: 10, includeProcessList: false)
         await sleeper.waitForRequestCount(1)
         await sleeper.resumeRequest(at: 0, returning: true)
@@ -63,7 +63,7 @@ final class Batch03PollingTests: XCTestCase {
         let sleeper = ControlledPollingSleeper()
         let controller = ProcessPollingController { await sleeper.sleep(interval: $0) }
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
-                                     lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {}, pollingController: controller)
+                                     lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {}, pollingController: controller, dependencies: .inert)
         manager.enableNotifications = false
         await manager.beginExtendedMetrics()
         manager.setPolling(interval: 10, includeProcessList: true)
@@ -88,7 +88,7 @@ final class Batch03PollingTests: XCTestCase {
         let controller = ProcessPollingController { await sleeper.sleep(interval: $0) }
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
                                      lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {},
-                                     pollingController: controller)
+                                     pollingController: controller, dependencies: .inert)
         manager.enableNotifications = false
 
         await manager.beginObservingStatus()
@@ -115,7 +115,7 @@ final class Batch03PollingTests: XCTestCase {
         let controller = ProcessPollingController { await sleeper.sleep(interval: $0) }
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
                                      lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {},
-                                     pollingController: controller)
+                                     pollingController: controller, dependencies: .inert)
         manager.enableNotifications = false
         manager.setPolling(interval: 10, includeProcessList: false, backgroundActivity: true)
         await sleeper.waitForRequestCount(1)
@@ -144,7 +144,7 @@ final class Batch03PollingTests: XCTestCase {
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
                                      lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {},
                                      pollingController: ProcessPollingController { await pollSleeper.sleep(interval: $0) },
-                                     processHistory: history)
+                                     processHistory: history, dependencies: .inert)
         manager.enableNotifications = false
         manager.setPolling(interval: 10, includeProcessList: true)
         await pollSleeper.waitForRequestCount(1)
@@ -169,7 +169,7 @@ final class Batch03PollingTests: XCTestCase {
         let inventory = ManagerTestInventory(results: [.success([])])
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
                                      lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {},
-                                     pollingController: ProcessPollingController(sleep: { _ in false }))
+                                     pollingController: ProcessPollingController(sleep: { _ in false }), dependencies: .inert)
         manager.enableNotifications = false
         manager.setPolling(interval: 2, includeProcessList: false, backgroundActivity: false)
         for _ in 0..<20 { await Task.yield() }

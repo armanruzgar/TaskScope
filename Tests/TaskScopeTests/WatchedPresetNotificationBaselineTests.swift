@@ -22,7 +22,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
 
         // The preset list changes to include an app that is already running, and the
         // manager has no snapshot for it yet.
-        manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
+        manager.dependencies.watchedPresets = { [self.preset(named: "Slack")] }
         XCTAssertTrue(manager.snapshots.isEmpty, "precondition: no snapshot for the new preset")
 
         // Note: an ordinary refresh, with no flag. The decision is made inside
@@ -46,7 +46,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
     func testAGenuineStartIsStillReported() async {
         let inventory = StubInventory(processes: [])
         let manager = makeManager(inventory: inventory)
-        manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
+        manager.dependencies.watchedPresets = { [self.preset(named: "Slack")] }
 
         var started: [Set<String>] = []
         manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
@@ -67,7 +67,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         )
         var silent = preset(named: "Slack")
         silent.notificationsEnabled = false
-        manager.watchedAppsProvider = { [silent] }
+        manager.dependencies.watchedPresets = { [silent] }
         await manager.refreshWatchedStatus(showMessage: false)
 
         var started: [Set<String>] = []
@@ -75,7 +75,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
         manager.primeNotificationBaseline = { primed.append(Set($0.flatMap(\.runningNames))) }
 
-        manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
+        manager.dependencies.watchedPresets = { [self.preset(named: "Slack")] }
         await manager.refreshWatchedStatus(showMessage: false)
 
         XCTAssertTrue(started.isEmpty)
@@ -94,7 +94,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         manager.notifyTransitions = { _ in calls.append("diff") }
         manager.primeNotificationBaseline = { _ in calls.append("prime") }
 
-        manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
+        manager.dependencies.watchedPresets = { [self.preset(named: "Slack")] }
         // Two bare refreshes, as the quick-watch action and the preset-change
         // handler used to produce between them.
         await manager.refreshWatchedStatus(showMessage: false)
@@ -116,7 +116,8 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: InertSignaler(),
             lifecycle: InertLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = true
         return manager

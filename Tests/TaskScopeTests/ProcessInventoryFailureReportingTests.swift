@@ -124,7 +124,8 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: signaler,
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

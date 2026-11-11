@@ -193,7 +193,8 @@ final class AutoStopPromptAlertTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: signaler,
             lifecycle: PromptLifecycle(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
 

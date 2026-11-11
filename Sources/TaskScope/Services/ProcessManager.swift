@@ -57,7 +57,9 @@ final class ProcessManager: ObservableObject {
     /// One explicit failed disconnect may be followed by a separately confirmed
     /// service stop. Never persisted or exposed to URLs. Polling reads it only
     /// to leave GlobalProtect's UI open for the user during the grace period.
-    @Published private(set) var globalProtectDisconnectFailureID: UUID?
+    var globalProtectDisconnectFailureID: UUID? {
+        lifecycleCoordinator.globalProtectDisconnectFailureID
+    }
     /// Explicit Keep Off actions in flight, shared with the preset deletion
     /// policy so a preset is not deleted halfway through its Keep Off.
     let keepOffActivity: KeepOffActivity
@@ -67,13 +69,15 @@ final class ProcessManager: ObservableObject {
     }
     /// How long background enforcement leaves GlobalProtect's UI alone after an
     /// explicit disconnect failed and told the user to complete its request.
-    static let disconnectFailureGraceSeconds: TimeInterval = 180
-    private var globalProtectDisconnectGraceUntil: Date?
-    private struct BackgroundKeepOffFailure: Equatable {
-        var message: String
-        var jobs: [LifecycleJobResult]
+    static var disconnectFailureGraceSeconds: TimeInterval {
+        PresetLifecycleCoordinator.disconnectFailureGraceSeconds
     }
-    private var backgroundKeepOffFailures: [UUID: BackgroundKeepOffFailure] = [:]
+    /// Settings and presets, passed whole at construction. Tests may replace a
+    /// member after construction.
+    var dependencies: Dependencies
+    /// Open, Keep Off, Allow to Run, preset stops and background enforcement.
+    private let lifecycleCoordinator: PresetLifecycleCoordinator
+    private var lifecycleCoordinatorCancellable: AnyCancellable?
     @Published private(set) var batchActionReport: ProcessBatchActionReport?
     private(set) var lifecycleDiagnostics = LifecycleDiagnosticsHistory()
 
@@ -145,7 +149,8 @@ final class ProcessManager: ObservableObject {
         processHistory: ProcessHistory? = nil,
         detailReader: any ProcessDetailReading = SystemProcessDetailReader(),
         keepOffActivity: KeepOffActivity = KeepOffActivity(),
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        dependencies: Dependencies
     ) {
         self.currentPID = currentPID
         self.processInventory = processInventory
@@ -164,11 +169,16 @@ final class ProcessManager: ObservableObject {
         self.processHistory = processHistory
         self.now = now
         self.keepOffActivity = keepOffActivity
+        self.dependencies = dependencies
+        lifecycleCoordinator = PresetLifecycleCoordinator(lifecycle: lifecycle, now: now)
         snapshotBuilder = WatchedSnapshotBuilder(excludedPID: currentPID)
         operationGateCancellable = operationGate.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
         keepOffActivityCancellable = keepOffActivity.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        lifecycleCoordinatorCancellable = lifecycleCoordinator.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
     }
@@ -302,7 +312,7 @@ final class ProcessManager: ObservableObject {
     ) -> [AppProcess] {
         listProjection.displayProcesses(
             order: sortOrder,
-            limit: processListLimitProvider?() ?? 80,
+            limit: dependencies.processListLimit(),
             matching: predicate
         )
     }
@@ -311,13 +321,13 @@ final class ProcessManager: ObservableObject {
     /// sort order, and limit by the projection.
     func displayProcesses(for query: ProcessListQuery) -> [AppProcess] {
         listProjection.displayProcesses(
-            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: dependencies.processListLimit()
         )
     }
 
     func displayList(for query: ProcessListQuery) -> ProcessListProjection.DisplayList {
         listProjection.displayList(
-            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: dependencies.processListLimit()
         )
     }
 
@@ -325,7 +335,7 @@ final class ProcessManager: ObservableObject {
     /// inventory, including ancestors outside the display limit.
     func treeRoots(for query: ProcessListQuery) -> [ProcessTreeNode] {
         listProjection.treeRoots(
-            for: query, order: sortOrder, limit: processListLimitProvider?() ?? 80
+            for: query, order: sortOrder, limit: dependencies.processListLimit()
         )
     }
 
@@ -414,7 +424,7 @@ final class ProcessManager: ObservableObject {
     func watchedStatusSummary(for preset: WatchedAppPreset) -> WatchedAppStatusSummary {
         WatchedAppStatusSummary(
             preset: preset, snapshots: snapshots, availability: watchedStatusAvailability,
-            isKeptOff: isPresetKeptOffProvider?(preset) ?? false
+            isKeptOff: dependencies.isPresetKeptOff(preset)
         )
     }
 
@@ -460,268 +470,14 @@ final class ProcessManager: ObservableObject {
         return refreshed
     }
 
-    /// A preset stored with fields from a newer build may carry a restriction
-    /// this build cannot honour, so none of its lifecycle actions run here. The
-    /// store's copy is checked too, in case the caller holds a copy without them.
-    private func refusalForPresetFromNewerBuild(_ preset: WatchedAppPreset) -> TaskScopeCommandResult? {
-        guard preset.hasUnknownFields
-            || watchedAppsProvider?().contains(where: { $0.id == preset.id && $0.hasUnknownFields }) == true else {
-            return nil
-        }
-        return TaskScopeCommandResult(status: .rejected, message: WatchedAppsStore.newerBuildMessage)
-    }
-
     @discardableResult
     func openApp(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
-        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
-        var commandResult = TaskScopeCommandResult(
-            status: .failed,
-            message: "Open did not complete."
-        )
+        if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
+        var commandResult = TaskScopeCommandResult(status: .failed, message: "Open did not complete.")
         let ran = await runAction(kind: .mutation, announcesTransitions: false) {
-            let previousMessage = message
-            var cancelledRead = false
-            var mayHaveChangedState = false
-            if preset.isBuiltInGlobalProtect { globalProtectDisconnectFailureID = nil }
-            var diagnosticReason: LifecycleDiagnosticFailure.Reason = .incomplete
-            var diagnosticJobs: [LifecycleJobResult] = []
-            defer {
-                if Task.isCancelled || cancelledRead {
-                    commandResult = TaskScopeCommandResult(
-                        status: .rejected,
-                        message: mayHaveChangedState
-                            ? "Open for \(preset.displayName) was cancelled; services or the app may already have changed."
-                            : "Open for \(preset.displayName) was cancelled."
-                    )
-                    message = mayHaveChangedState ? commandResult.message : previousMessage
-                }
-                if commandResult.status == .failed {
-                    lifecycleDiagnostics.record(
-                        presetID: preset.id, action: .open,
-                        backgroundEnforcement: false, reason: diagnosticReason,
-                        jobs: diagnosticJobs, at: now()
-                    )
-                }
-            }
-            guard lifecycle.appBundleExists(at: preset.appPath) else {
-                // Turning Keep Off off (or Open) must still remove the launchd
-                // overrides when the app is gone, for example mid-reinstall or
-                // before uninstalling, or a reinstalled client cannot start.
-                let wasKeptOff = isPresetKeptOffProvider?(preset) ?? false
-                if wasKeptOff || preset.isBuiltInGlobalProtect {
-                    mayHaveChangedState = true
-                    let allowed = await clearKeepOffOverrides(preset)
-                    diagnosticJobs += allowed.jobs
-                    if allowed.result.succeeded {
-                        let state = wasKeptOff ? "is no longer kept off" : "is allowed to run"
-                        message = "\(preset.displayName) \(state), but its app bundle is missing at \(preset.appPath); nothing was opened."
-                        if !LifecycleBatchResult(jobs: allowed.jobs).didChangeState {
-                            lifecycleReport = nil
-                        }
-                    } else {
-                        let failure = LifecycleBatchResult(jobs: allowed.jobs).failureSummary ?? "service could not be enabled"
-                        message = "Could not allow \(preset.displayName) to run: \(failure). Its app bundle is missing at \(preset.appPath); nothing was opened."
-                    }
-                } else {
-                    message = "Could not open \(preset.displayName): app bundle is missing at \(preset.appPath)."
-                }
-                diagnosticReason = .appBundleMissing
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-
-            let initial = await currentSnapshot(for: preset)
-            if case .failure(.cancelled) = initial { cancelledRead = true; return }
-            guard !Task.isCancelled else { return }
-            guard case .success(let beforeServices) = initial else {
-                message = "Could not verify whether \(preset.displayName) is already running; nothing was opened."
-                diagnosticReason = .inventoryUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-
-            mayHaveChangedState = true
-            // Whether the app was running before Open changed anything.
-            var mainWasRunning = beforeServices.isMainRunning
-            // A UI started directly while PanGPS was stopped can remain stuck
-            // retrieving configuration even after the service returns. Restart
-            // that orphaned UI before restoration; never unload the VPN job.
-            if preset.isBuiltInGlobalProtect,
-               beforeServices.isMainRunning,
-               beforeServices.protectedRunning.isEmpty,
-               beforeServices.unprivilegedProtectedRunning.isEmpty {
-                let unloadedUI = await lifecycle.unloadUserLaunchAgents(for: preset.globalProtectInterfaceOnly)
-                diagnosticJobs += unloadedUI.jobs
-                guard unloadedUI.succeeded else {
-                    lifecycleReport = LifecycleReport(title: "GlobalProtect UI Recovery", jobs: unloadedUI.jobs)
-                    message = "Could not close GlobalProtect's stalled interface. Its VPN service was not stopped."
-                    diagnosticReason = .userLaunchAgentFailed
-                    commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                    return
-                }
-                let stoppedUI = await lifecycle.terminateMainProcess(for: preset)
-                await lifecycle.settleAfterProcessChange()
-                guard [.signalled, .noMatchingProcesses, .targetsExited].contains(stoppedUI),
-                      case .success(let afterUIStop) = await currentSnapshot(for: preset),
-                      !afterUIStop.isMainRunning else {
-                    message = "Could not verify that GlobalProtect's stalled interface closed; no second instance was started."
-                    diagnosticReason = .verificationUnavailable
-                    commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                    return
-                }
-                mainWasRunning = false
-            }
-
-            let ensuredDaemon = await lifecycle.ensureSystemLaunchDaemons(for: preset)
-            diagnosticJobs += ensuredDaemon.jobs
-            guard ensuredDaemon.succeeded else {
-                lifecycleReport = LifecycleReport(
-                    title: "\(preset.displayName) Service Results",
-                    jobs: ensuredDaemon.jobs
-                )
-                message = "Could not open \(preset.displayName): \(ensuredDaemon.failureSummary ?? "required service failed")."
-                diagnosticReason = .systemServiceFailed
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-            // Bootstrap clears the override in the same administrator request.
-            // Only a daemon that was already loaded can still need enabling.
-            let systemEnable = preset.isBuiltInGlobalProtect
-                ? await lifecycle.enableSystemLaunchDaemons(for: preset) : .notNeeded
-            diagnosticJobs += systemEnable.jobs
-            let daemonResult = LifecycleBatchResult(jobs: ensuredDaemon.jobs + systemEnable.jobs)
-            guard systemEnable.succeeded else {
-                lifecycleReport = LifecycleReport(title: "\(preset.displayName) Service Results", jobs: daemonResult.jobs)
-                message = "Could not restore GlobalProtect: \(systemEnable.failureSummary ?? "system service could not be enabled")."
-                diagnosticReason = .systemServiceFailed
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-
-            let wasKeptOff = isPresetKeptOffProvider?(preset) ?? false
-            let enableResult: LifecycleBatchResult
-            // launchd overrides outlive TaskScope preferences (including reset
-            // or reinstall). Explicit Open must recover them even without intent.
-            if wasKeptOff || preset.isBuiltInGlobalProtect {
-                enableResult = await lifecycle.enableUserLaunchAgents(for: preset)
-                diagnosticJobs += enableResult.jobs
-                guard enableResult.succeeded else {
-                    lifecycleReport = LifecycleReport(
-                        title: "\(preset.displayName) Service Results",
-                        jobs: daemonResult.jobs + enableResult.jobs
-                    )
-                    message = "Could not allow \(preset.displayName) to run: \(enableResult.failureSummary ?? "user launch agent could not be enabled")."
-                    diagnosticReason = .userLaunchAgentFailed
-                    commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                    return
-                }
-            } else {
-                enableResult = .notNeeded
-            }
-
-            let agentResult = await lifecycle.bootstrapUserLaunchAgents(for: preset)
-            diagnosticJobs += agentResult.jobs
-            guard agentResult.succeeded else {
-                lifecycleReport = LifecycleReport(
-                    title: "\(preset.displayName) Service Results",
-                    jobs: daemonResult.jobs + enableResult.jobs + agentResult.jobs
-                )
-                message = "Could not open \(preset.displayName): \(agentResult.failureSummary ?? "required user job failed")."
-                diagnosticReason = .userLaunchAgentFailed
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-            if wasKeptOff || preset.isBuiltInGlobalProtect {
-                setPresetKeptOffHandler?(preset, false)
-            }
-            let serviceJobs = daemonResult.jobs + enableResult.jobs + agentResult.jobs
-            let restored = daemonResult.didChangeState
-                || enableResult.didChangeState
-                || agentResult.didChangeState
-            lifecycleReport = serviceJobs.isEmpty || (preset.isBuiltInGlobalProtect && !restored)
-                ? nil
-                : LifecycleReport(
-                    title: "\(preset.displayName) Service Results",
-                    jobs: serviceJobs
-                )
-
-            // Late failures happen after Keep Off may have been cleared and the
-            // services restored, so their messages say what already changed.
-            var changes: [String] = []
-            if wasKeptOff { changes.append("Keep Off was turned off") }
-            if restored { changes.append("required services were restored") }
-            let changeText = changes.joined(separator: " and ")
-            let changeDetail = changeText.isEmpty
-                ? ""
-                : changeText.prefix(1).uppercased() + changeText.dropFirst() + ". "
-
-            // Restoring the user launch agents can itself start the main process
-            // (GlobalProtect's `pangpa` agent runs the main binary). Re-check with
-            // a fresh inventory before opening so a second instance is never
-            // launched, and fail closed when that check cannot be made.
-            let afterServiceRead = await currentSnapshot(for: preset)
-            if case .failure(.cancelled) = afterServiceRead { cancelledRead = true; return }
-            guard !Task.isCancelled else { return }
-            guard case .success(let afterServices) = afterServiceRead else {
-                message = changeDetail + "Could not verify whether \(preset.displayName) started with its services; no app launch was requested."
-                diagnosticReason = .inventoryUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-            let alreadyRunning = afterServices.isMainRunning
-            // An app that was already running before Open changed anything is
-            // brought forward by a plain `open`, which reuses the running
-            // instance. One that appeared only after its agents were restored was
-            // started by launchd and is not opened again. GlobalProtect's UI is
-            // never opened over a running one.
-            let activatesRunningApp = alreadyRunning
-                && mainWasRunning
-                && !preset.isBuiltInGlobalProtect
-            let reportsAlreadyRunning = alreadyRunning
-                && mainWasRunning
-                && !activatesRunningApp
-
-            let openResult: AppBundleOpenResult = alreadyRunning && !activatesRunningApp
-                ? .opened
-                : await lifecycle.openAppBundle(at: preset.appPath)
-            if case .failed(let detail) = openResult {
-                let reason = detail.hasSuffix(".") ? String(detail.dropLast()) : detail
-                message = changeDetail + "Could not open \(preset.displayName): \(reason)."
-                diagnosticReason = .launchFailed
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-                return
-            }
-
-            if !alreadyRunning {
-                _ = await lifecycle.waitForMainProcess(
-                    for: preset,
-                    timeoutSeconds: 5
-                )
-            }
-            guard !Task.isCancelled else { return }
-            let finalInventory = await refreshInventoryAfterMutation()
-            if finalInventory == nil, lastInventoryReadWasCancelled { cancelledRead = true; return }
-
-            let priorState = alreadyRunning ? "was running" : "was launched"
-            if finalInventory == nil {
-                message = changeDetail + "\(preset.displayName) \(priorState), but TaskScope could not verify its final state."
-                diagnosticReason = .verificationUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-            } else if let finalInventory,
-                      snapshot(for: preset, inventory: finalInventory).isMainRunning {
-                if reportsAlreadyRunning {
-                    message = changeDetail + "\(preset.displayName) is already running."
-                } else {
-                    message = restored
-                        ? "Opened \(preset.displayName) after restoring required services."
-                        : "Opened \(preset.displayName)."
-                }
-                commandResult = TaskScopeCommandResult(status: .completed, message: message)
-            } else {
-                message = changeDetail + "\(preset.displayName) \(priorState), but its main process could not be verified."
-                diagnosticReason = .verificationUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: message)
-            }
+            let outcome = await lifecycleCoordinator.open(preset, host: self)
+            publish(outcome)
+            commandResult = outcome.result
         }
         if !ran {
             return TaskScopeCommandResult(status: .rejected, message: "Open for \(preset.displayName) was cancelled.")
@@ -729,15 +485,10 @@ final class ProcessManager: ObservableObject {
         return commandResult
     }
 
-    /// Persists intent and disables user jobs. An explicit built-in GlobalProtect
-    /// action also disables/unloads the fixed system service with authorization;
-    /// background enforcement only verifies it and never requests privileges.
-    ///
-    /// With `recordIntent == false` this is background enforcement. It re-checks
-    /// the persisted intent *inside* the operation gate: a poll tick that decided
-    /// to enforce can be queued behind a user's Open, which clears the intent, and
-    /// running the enforcement afterwards would re-disable the agents the user
-    /// just restored and quit the app they just opened.
+    /// Persists intent and disables user jobs; see
+    /// `PresetLifecycleCoordinator.keepOff`. With `recordIntent == false` this
+    /// is background enforcement, which re-checks the persisted intent inside
+    /// the operation gate.
     @discardableResult
     func keepOff(
         _ preset: WatchedAppPreset,
@@ -756,211 +507,22 @@ final class ProcessManager: ObservableObject {
         recordIntent: Bool,
         confirmedFailureID: UUID? = nil
     ) async -> TaskScopeCommandResult {
-        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
+        if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
+        // Pending from the request on, including time queued behind the gate.
         let tracksPendingAction = recordIntent && preset.isBuiltInGlobalProtect
         if tracksPendingAction { keepOffActivity.begin(preset.id) }
         defer {
             if tracksPendingAction { keepOffActivity.end(preset.id) }
         }
-        var commandResult = TaskScopeCommandResult(
-            status: .failed,
-            message: "Keep Off did not complete."
-        )
+        var commandResult = TaskScopeCommandResult(status: .failed, message: "Keep Off did not complete.")
         // Background enforcement was not just requested by the user, so the
         // processes it stops are still announced.
         await runAction(kind: .mutation, announcesTransitions: !recordIntent) {
-            // Check before disconnect and again afterwards: settings or the
-            // preset may change while the vendor UI is settling.
-            @MainActor func preparationRefusal() -> String? {
-                guard recordIntent else { return nil }
-                if isKeepOffIntentWritableProvider?() == false {
-                    return "Settings are unreadable. Reset settings in Settings → General before changing Keep Off."
-                }
-                if preset.isBuiltInGlobalProtect,
-                   let presets = watchedAppsProvider?(),
-                   !presets.contains(where: { $0.id == preset.id && $0.isBuiltInGlobalProtect }) {
-                    return "The built-in GlobalProtect preset was removed. Keep Off was not recorded and no services were disabled."
-                }
-                return nil
-            }
-            if let refusal = preparationRefusal() {
-                commandResult = TaskScopeCommandResult(status: .rejected, message: refusal)
-                message = refusal
-                return
-            }
-            if let confirmedFailureID {
-                guard recordIntent, preset.isBuiltInGlobalProtect,
-                      confirmedFailureID == globalProtectDisconnectFailureID else {
-                    commandResult = TaskScopeCommandResult(status: .rejected, message: "This disconnect failure is no longer current. Choose Keep GlobalProtect Off again.")
-                    message = commandResult.message
-                    return
-                }
-            }
-            var diagnosticReason: LifecycleDiagnosticFailure.Reason = .incomplete
-            var diagnosticJobs: [LifecycleJobResult] = []
-            var report: LifecycleReport?
-            var shouldPublishReport = false
-            defer {
-                if !recordIntent && Task.isCancelled {
-                    commandResult = TaskScopeCommandResult(status: .rejected, message: "Keep Off enforcement cancelled; it will retry on the next poll.")
-                } else {
-                    let failure = BackgroundKeepOffFailure(message: commandResult.message, jobs: diagnosticJobs)
-                    let isDuplicate = !recordIntent && commandResult.status == .failed
-                        && backgroundKeepOffFailures[preset.id] == failure
-                    if recordIntent || commandResult.status == .completed {
-                        backgroundKeepOffFailures[preset.id] = nil
-                    } else if commandResult.status == .failed {
-                        backgroundKeepOffFailures[preset.id] = failure
-                    }
-                    if !isDuplicate {
-                        if commandResult.status != .rejected { message = commandResult.message }
-                        if shouldPublishReport { lifecycleReport = report }
-                        if commandResult.status == .failed {
-                            lifecycleDiagnostics.record(
-                                presetID: preset.id, action: .keepOff,
-                                backgroundEnforcement: !recordIntent, reason: diagnosticReason,
-                                jobs: diagnosticJobs, at: now()
-                            )
-                        }
-                    }
-                }
-            }
-            guard recordIntent || !Task.isCancelled else { return }
-            if !recordIntent, isPresetKeptOffProvider?(preset) != true {
-                commandResult = TaskScopeCommandResult(
-                    status: .rejected,
-                    message: "Keep Off is no longer enabled for \(preset.displayName); enforcement skipped."
-                )
-                return
-            }
-
-            if recordIntent && preset.isBuiltInGlobalProtect {
-                globalProtectDisconnectFailureID = nil
-                if confirmedFailureID == nil {
-                    message = "Disconnecting GlobalProtect before stopping its services…"
-                    if case .failed(let detail) = await lifecycle.disconnectGlobalProtectIfNeeded() {
-                        globalProtectDisconnectFailureID = UUID()
-                        globalProtectDisconnectGraceUntil = now().addingTimeInterval(Self.disconnectFailureGraceSeconds)
-                        message = detail
-                        diagnosticReason = .disconnectFailed
-                        commandResult = TaskScopeCommandResult(status: .failed, message: detail)
-                        return
-                    }
-                }
-            }
-            if let refusal = preparationRefusal() {
-                commandResult = TaskScopeCommandResult(status: .rejected, message: refusal)
-                message = refusal
-                return
-            }
-            // Record after a clean disconnect or separately confirmed recovery,
-            // while holding the gate so polling cannot race the preparation.
-            if recordIntent {
-                setPresetKeptOffHandler?(preset, true)
-            }
-            if recordIntent && preset.isBuiltInGlobalProtect {
-                message = "Stopping GlobalProtect and its services…"
-            }
-
-            let inventoryWasAvailable: Bool
-            switch await currentSnapshot(for: preset) {
-            case .success:
-                inventoryWasAvailable = true
-            case .failure:
-                inventoryWasAvailable = false
-            }
-            guard recordIntent || !Task.isCancelled else { return }
-            let userDisable = await lifecycle.disableUserLaunchAgents(for: preset, preservingVPNService: !recordIntent)
-            guard recordIntent || !Task.isCancelled else { return }
-            let systemDisable = preset.isBuiltInGlobalProtect
-                ? await lifecycle.disableSystemLaunchDaemons(for: preset, allowAdministratorPrompt: recordIntent)
-                : .notNeeded
-            guard recordIntent || !Task.isCancelled else { return }
-            let disableResult = LifecycleBatchResult(jobs: userDisable.jobs + systemDisable.jobs)
-            diagnosticJobs += disableResult.jobs
-            // Background enforcement runs on every launch and poll tick; only a
-            // failure is worth interrupting the user with a report sheet.
-            if recordIntent || !disableResult.succeeded {
-                shouldPublishReport = true
-                report = disableResult.jobs.isEmpty
-                    ? nil
-                    : LifecycleReport(
-                        title: "\(preset.displayName) Keep Off",
-                        jobs: disableResult.jobs
-                    )
-            }
-
-            var resultMessage = message
-            guard inventoryWasAvailable else {
-                resultMessage = disableResult.succeeded
-                    ? "Keep Off disabled relaunch jobs, but the process list was unavailable; running processes were not signalled and enforcement will retry."
-                    : "Keep Off remains enabled, but TaskScope could neither verify processes nor disable relaunch jobs."
-                diagnosticReason = .inventoryUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-                return
-            }
-
-            let terminationOutcomes = await terminateProcesses(for: preset, scope: .all)
-            if recordIntent && preset.isBuiltInGlobalProtect {
-                self.message = "Verifying GlobalProtect is off…"
-            }
-            await lifecycle.settleAfterProcessChange()
-            let finalInventory = await refreshInventoryAfterMutation()
-            guard recordIntent || !Task.isCancelled else { return }
-            let nowSnapshot = snapshot(for: preset, inventory: finalInventory ?? [])
-            let serviceObservation = preset.isBuiltInGlobalProtect
-                ? await globalProtectServiceObservationProvider?() : nil
-            guard recordIntent || !Task.isCancelled else { return }
-
-            if !disableResult.succeeded {
-                resultMessage = "Keep Off was requested, but stopping services failed: \(disableResult.failureSummary ?? "unknown failure")."
-                diagnosticReason = systemDisable.succeeded ? .userLaunchAgentFailed : .systemServiceFailed
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if terminationOutcomes.contains(.inventoryUnavailable) {
-                resultMessage = "Keep Off disabled relaunch jobs, but the process list became unavailable before app processes could be stopped."
-                diagnosticReason = .inventoryUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if terminationOutcomes.contains(.signalRejected) {
-                resultMessage = "Keep Off disabled relaunch jobs, but a running process rejected the stop signal."
-                diagnosticReason = .signalRejected
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if terminationOutcomes.contains(.escalationUnavailable) || finalInventory == nil
-                || serviceObservation?.session == .unknown || serviceObservation?.system == .unknown {
-                resultMessage = "Keep Off is enabled, but TaskScope could not verify the final process state."
-                diagnosticReason = .verificationUnavailable
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if preset.isBuiltInGlobalProtect
-                && (serviceObservation?.system == .running
-                    || (serviceObservation == nil && !nowSnapshot.protectedRunning.isEmpty)) {
-                resultMessage = "Keep Off was requested, but a privileged VPN service is still running. Check the service report and your organization's policy before retrying."
-                diagnosticReason = .stillRunning
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if recordIntent && serviceObservation?.session == .running {
-                resultMessage = "Keep Off was requested, but the login-session VPN service is still running. Choose Apply Keep Off to retry the session stop."
-                diagnosticReason = .stillRunning
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else if nowSnapshot.hasBackgroundKeepOffTargets
-                || (recordIntent && serviceObservation == nil && nowSnapshot.hasCurrentUserLaunchAgent) {
-                resultMessage = "Keep Off is enabled, but user-facing GlobalProtect processes may still run."
-                diagnosticReason = .stillRunning
-                commandResult = TaskScopeCommandResult(status: .failed, message: resultMessage)
-            } else {
-                if preset.isBuiltInGlobalProtect && !recordIntent
-                    && (serviceObservation?.session == .running
-                        || (serviceObservation == nil && nowSnapshot.hasCurrentUserLaunchAgent)) {
-                    resultMessage = "Keep Off disabled relaunch jobs. The running login-session VPN service was preserved; choose Apply Keep Off for a confirmed disconnect and stop."
-                } else if preset.isBuiltInGlobalProtect {
-                    resultMessage = "GlobalProtect is off. Its user agents are disabled; the system VPN service is disabled or not installed. Choose Open to restore them without reinstalling."
-                } else if !nowSnapshot.protectedRunning.isEmpty {
-                    resultMessage = "\(preset.displayName) app is kept off. Protected system service remains available."
-                } else if !nowSnapshot.unprivilegedProtectedRunning.isEmpty {
-                    let names = nowSnapshot.unprivilegedProtectedRunning.joined(separator: ", ")
-                    resultMessage = "\(preset.displayName) is kept off. Its user launch agents are disabled; a per-user \(names) instance is still running and should exit as launchd finishes unloading it."
-                } else {
-                    resultMessage = "\(preset.displayName) is kept off. Its user launch agents are disabled."
-                }
-                commandResult = TaskScopeCommandResult(status: .completed, message: resultMessage)
-            }
+            let outcome = await lifecycleCoordinator.keepOff(
+                preset, recordIntent: recordIntent, confirmedFailureID: confirmedFailureID, host: self
+            )
+            publish(outcome)
+            commandResult = outcome.result
         }
         if !recordIntent && Task.isCancelled {
             return TaskScopeCommandResult(status: .rejected, message: "Keep Off enforcement cancelled; it will retry on the next poll.")
@@ -968,79 +530,14 @@ final class ProcessManager: ObservableObject {
         return commandResult
     }
 
-    private func clearKeepOffOverrides(
-        _ preset: WatchedAppPreset
-    ) async -> (result: TaskScopeCommandResult, jobs: [LifecycleJobResult]) {
-        let systemEnable = preset.isBuiltInGlobalProtect
-            ? await lifecycle.enableSystemLaunchDaemons(for: preset) : .notNeeded
-        // Do not start restoring user jobs after a cancelled system request.
-        let userEnable = systemEnable.succeeded
-            ? await lifecycle.enableUserLaunchAgents(for: preset) : .notNeeded
-        let enableResult = LifecycleBatchResult(jobs: systemEnable.jobs + userEnable.jobs)
-        // Show the report only when something changed or failed; verified,
-        // already-enabled jobs are not a restoration.
-        lifecycleReport = enableResult.didChangeState || !enableResult.succeeded
-            ? LifecycleReport(
-                title: "\(preset.displayName) Keep Off",
-                jobs: enableResult.jobs
-            )
-            : nil
-        guard enableResult.succeeded else {
-            let failure = enableResult.failureSummary ?? "service could not be enabled"
-            message = isPresetKeptOffProvider?(preset) == true
-                ? "Keep Off remains requested: \(failure)."
-                : "Could not allow \(preset.displayName) to run: \(failure)."
-            return (
-                TaskScopeCommandResult(status: .failed, message: message),
-                enableResult.jobs
-            )
-        }
-        setPresetKeptOffHandler?(preset, false)
-        message = "\(preset.displayName) is allowed to run. Nothing was started."
-        return (TaskScopeCommandResult(status: .completed, message: message), enableResult.jobs)
+    /// Enforces persisted Keep Off intent; see
+    /// `PresetLifecycleCoordinator.enforceKeptOffPresets`.
+    func enforceKeptOffPresets(force: Bool = false, usingFreshSnapshots: Bool = false) async {
+        await lifecycleCoordinator.enforceKeptOffPresets(force: force, usingFreshSnapshots: usingFreshSnapshots, host: self)
     }
 
-    /// Enforces persisted Keep Off intent after startup and if a user-facing job
-    /// is restored externally. The system disable override persists in launchd;
-    /// polling never requests authorization or repeatedly fights a restored system
-    /// service. Its running state stays visible with an explicit retry action.
-    ///
-    /// Enforcement never queues behind a user-initiated mutation: while one runs
-    /// the user is changing exactly the state enforcement would act on, and the
-    /// gated re-check inside `keepOff` is the last line of defence for a tick
-    /// that had already decided before the mutation started.
-    ///
-    /// A tick that has just applied fresh snapshots passes `usingFreshSnapshots`,
-    /// so deciding whether enforcement is needed costs no second read. `keepOff`
-    /// still reads uncached inside the gate before it disables or signals.
-    func enforceKeptOffPresets(force: Bool = false, usingFreshSnapshots: Bool = false) async {
-        for preset in keptOffPresetsProvider?() ?? [] {
-            guard !operationGate.isMutationActive else { continue }
-            // A failed explicit disconnect sent the user to GlobalProtect to
-            // answer its request, and enforcement would close that UI. Leave it
-            // for a bounded time, or until the next explicit action clears the
-            // failure.
-            if preset.isBuiltInGlobalProtect,
-               globalProtectDisconnectFailureID != nil,
-               let graceUntil = globalProtectDisconnectGraceUntil,
-               now() < graceUntil {
-                continue
-            }
-            if !force {
-                let current: WatchedAppSnapshot
-                if usingFreshSnapshots, let fresh = snapshots.first(where: { $0.preset == preset }) {
-                    current = fresh
-                } else {
-                    guard case .success(let fresh) = await currentSnapshot(for: preset) else { continue }
-                    current = fresh
-                }
-                guard current.hasBackgroundKeepOffTargets else {
-                    backgroundKeepOffFailures[preset.id] = nil
-                    continue
-                }
-            }
-            _ = await keepOff(preset, recordIntent: false)
-        }
+    func enforceKeepOff(_ preset: WatchedAppPreset) async {
+        _ = await keepOff(preset, recordIntent: false)
     }
 
     @discardableResult
@@ -1069,72 +566,39 @@ final class ProcessManager: ObservableObject {
     }
 
     private func stop(_ preset: WatchedAppPreset, scope: PresetStopScope) async -> TaskScopeCommandResult {
-        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
-        var result = PresetStopResult.failed(scope.incompleteMessage, reason: .incomplete)
-        var cancelled = false
+        if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
+        var commandResult = PresetStopResult.failed(scope.incompleteMessage, reason: .incomplete).commandResult
         let ran = await runAction(kind: .mutation, announcesTransitions: false) {
             // Admission is the cancellation boundary for Stop. Once admitted,
             // finish all scoped stops and verification even if its caller leaves.
-            await Task { @MainActor in
-                var diagnosticJobs: [LifecycleJobResult] = []
-                let previousMessage = message
-                message = scope.progressMessage(for: preset)
-                defer {
-                    message = cancelled ? previousMessage : result.message
-                    if !cancelled, let reason = result.failureReason {
-                        lifecycleDiagnostics.record(
-                            presetID: preset.id, action: scope.diagnosticAction,
-                            backgroundEnforcement: false, reason: reason,
-                            jobs: diagnosticJobs, at: now()
-                        )
-                    }
-                }
-                let initial = await currentSnapshot(for: preset)
-                if case .failure(.cancelled) = initial {
-                    cancelled = true
-                    return
-                }
-                guard case .success(let before) = initial else {
-                    result = scope.inventoryFailure(for: preset)
-                    return
-                }
-                // These scopes never disconnect the VPN, so for GlobalProtect they
-                // leave its session VPN service loaded; Keep Off/Quit All stops it
-                // only after a verified disconnect.
-                let agentPreset = preset.stopScopeAgentPreset
-                let agents: LifecycleBatchResult
-                if scope == .helpers {
-                    // Unloading an agent running the main binary would also quit the app.
-                    agents = await lifecycle.unloadUserLaunchAgents(
-                        for: agentPreset, preservingPIDs: before.mainProcessPIDs
-                    )
-                } else {
-                    agents = await lifecycle.unloadUserLaunchAgents(for: agentPreset)
-                }
-                diagnosticJobs = agents.jobs
-                lifecycleReport = agents.jobs.isEmpty
-                    ? nil
-                    : LifecycleReport(title: "\(preset.displayName) Relaunch Jobs", jobs: agents.jobs)
-                let terminations = await terminateProcesses(for: preset, scope: scope)
-                await lifecycle.settleAfterProcessChange()
-                let finalInventory = await refreshInventoryAfterMutation()
-                result = scope.result(
-                    before: before, after: snapshot(for: preset, inventory: finalInventory ?? []),
-                    terminations: terminations, agents: agents, refreshed: finalInventory != nil
-                )
+            commandResult = await Task { @MainActor in
+                let outcome = await lifecycleCoordinator.stop(preset, scope: scope, host: self)
+                publish(outcome)
+                return outcome.result
             }.value
         }
-        if !ran || cancelled {
+        if !ran {
             return TaskScopeCommandResult(status: .rejected, message: "Stop for \(preset.displayName) was cancelled.")
         }
-        return result.commandResult
+        return commandResult
     }
 
-    private func terminateProcesses(
-        for preset: WatchedAppPreset,
-        scope: PresetStopScope
-    ) async -> [ProcessTerminationOutcome] {
-        await lifecycle.terminateProcesses(for: preset, scope: scope)
+    /// Shows what a preset lifecycle action decided: its status line, report
+    /// and, for a failure, its diagnostic.
+    private func publish(_ outcome: PresetLifecycleOutcome) {
+        if let message = outcome.message { self.message = message }
+        if case .replace(let report) = outcome.report { lifecycleReport = report }
+        if let diagnostic = outcome.diagnostic {
+            lifecycleDiagnostics.record(
+                presetID: diagnostic.presetID, action: diagnostic.action,
+                backgroundEnforcement: diagnostic.backgroundEnforcement, reason: diagnostic.reason,
+                jobs: diagnostic.jobs, at: now()
+            )
+        }
+    }
+
+    func showProgress(_ text: String) {
+        message = text
     }
 
     @discardableResult
@@ -1281,7 +745,7 @@ final class ProcessManager: ObservableObject {
         await refreshInventoryAfterMutation() != nil
     }
 
-    private func refreshInventoryAfterMutation() async -> [AppProcess]? {
+    func refreshInventoryAfterMutation() async -> [AppProcess]? {
         switch await verificationInventory.load(fetchExtendedStats: hasLoadedProcessList && fetchExtendedStats) {
         case .success(let inventory):
             recordInventorySuccess()
@@ -1314,7 +778,7 @@ final class ProcessManager: ObservableObject {
         }
     }
 
-    private func currentSnapshot(
+    func currentSnapshot(
         for preset: WatchedAppPreset
     ) async -> Result<WatchedAppSnapshot, ProcessInventoryError> {
         switch await verificationInventory.load(fetchExtendedStats: false) {
@@ -1358,11 +822,10 @@ final class ProcessManager: ObservableObject {
     }
 
     private func snapshots(from inventory: [AppProcess]) -> [WatchedAppSnapshot] {
-        let presets = watchedAppsProvider?() ?? []
-        return snapshotBuilder.snapshots(for: presets, in: inventory)
+        snapshotBuilder.snapshots(for: dependencies.watchedPresets(), in: inventory)
     }
 
-    private func snapshot(
+    func snapshot(
         for preset: WatchedAppPreset,
         inventory: [AppProcess]
     ) -> WatchedAppSnapshot {
@@ -1503,11 +966,45 @@ final class ProcessManager: ObservableObject {
         }
     }
 
-    var watchedAppsProvider: (() -> [WatchedAppPreset])?
-    var processListLimitProvider: (() -> Int)?
-    var keptOffPresetsProvider: (() -> [WatchedAppPreset])?
-    var isPresetKeptOffProvider: ((WatchedAppPreset) -> Bool)?
-    var isKeepOffIntentWritableProvider: (() -> Bool)?
-    var globalProtectServiceObservationProvider: (() async -> GlobalProtectServiceObservation)?
-    var setPresetKeptOffHandler: ((WatchedAppPreset, Bool) -> Void)?
+}
+
+extension ProcessManager: PresetLifecycleHost {}
+
+extension ProcessManager {
+    /// What ProcessManager reads from settings and presets, passed whole at
+    /// construction. No member is optional, so a dependency that is not wired
+    /// is a compile error instead of a default that silently fails open. The
+    /// app builds it with `.app`; tests start from `.inert`.
+    struct Dependencies {
+        /// The watched presets, in display order.
+        var watchedPresets: @MainActor () -> [WatchedAppPreset]
+        /// How many rows the process list shows.
+        var processListLimit: @MainActor () -> Int
+        /// The presets background enforcement keeps off.
+        var keptOffPresets: @MainActor () -> [WatchedAppPreset]
+        var isPresetKeptOff: @MainActor (WatchedAppPreset) -> Bool
+        /// False while settings are unreadable: Keep Off intent cannot be
+        /// written, so explicit Keep Off is refused.
+        var isKeepOffIntentWritable: @MainActor () -> Bool
+        /// GlobalProtect's session and system VPN service state, read after a
+        /// built-in Keep Off; nil when there is no reading, so the final
+        /// process snapshot decides.
+        var globalProtectServiceObservation: @MainActor () async -> GlobalProtectServiceObservation?
+        /// Records or clears a preset's Keep Off intent.
+        var setPresetKeptOff: @MainActor (WatchedAppPreset, Bool) -> Void
+
+        /// No presets, the default list limit, nothing kept off, writable Keep
+        /// Off intent, no service reading, and intent writes ignored.
+        static var inert: Dependencies {
+            Dependencies(
+                watchedPresets: { [] },
+                processListLimit: { SettingsStore.defaultProcessListLimit },
+                keptOffPresets: { [] },
+                isPresetKeptOff: { _ in false },
+                isKeepOffIntentWritable: { true },
+                globalProtectServiceObservation: { nil },
+                setPresetKeptOff: { _, _ in }
+            )
+        }
+    }
 }

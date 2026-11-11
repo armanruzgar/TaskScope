@@ -126,7 +126,7 @@ final class Batch10WiringTests: XCTestCase {
         defer { fixture.stores.cleanup() }
         let settings = fixture.stores.settings
         settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.setPresetKeptOffHandler = { preset, keptOff in
+        fixture.manager.dependencies.setPresetKeptOff = { preset, keptOff in
             guard preset.id == WatchedAppPreset.globalProtectID else { return }
             settings.keepGlobalProtectOff = keptOff
         }
@@ -421,7 +421,7 @@ final class Batch10WiringTests: XCTestCase {
         let cold = Batch10.process(52, name: "Cold", cpu: 1)
         let fixture = await Batch10.fixture(processes: [hot, cold])
         defer { fixture.stores.cleanup() }
-        fixture.manager.processListLimitProvider = { 1 }
+        fixture.manager.dependencies.processListLimit = { 1 }
         fixture.manager.applyCurrentDisplayLimit()
         fixture.manager.select([cold])
         XCTAssertFalse(fixture.manager.displayProcesses(for: ProcessListQuery(searchText: "", filterMode: .all, watchedScopes: [], cpuHighlightThreshold: 50, memoryHighlightThresholdMB: 1_000)).contains { $0.pid == cold.pid }, "setup: the selection is outside the display limit")
@@ -525,11 +525,12 @@ final class Batch10WiringTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: signaler, lifecycle: Batch10HeldOpenLifecycle(gate: gate),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let stores = Batch10.stores(inventory: inventory)
-        manager.watchedAppsProvider = { stores.watchedApps.presets }
+        manager.dependencies.watchedPresets = { stores.watchedApps.presets }
         await manager.loadProcessList(showMessage: false)
         return UIFixture(manager: manager, signaler: signaler, stores: stores, lifecycle: UILifecycle())
     }

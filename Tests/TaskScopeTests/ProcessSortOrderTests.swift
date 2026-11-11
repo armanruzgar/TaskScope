@@ -185,7 +185,8 @@ final class ProcessSortOrderTests: XCTestCase {
         let inventory = UIInventory(processes: rows)
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
-            processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(), settleAfterProcessChange: {}
+            processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(), settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         await manager.loadProcessList(showMessage: false)

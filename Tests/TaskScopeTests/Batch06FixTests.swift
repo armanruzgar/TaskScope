@@ -358,7 +358,8 @@ private func batch06Manager(
         lifecycle: Batch06InertLifecycle(),
         settleAfterProcessChange: {},
         pollingController: ProcessPollingController { await sleeper.sleep(interval: $0) },
-        processHistory: history
+        processHistory: history,
+        dependencies: .inert
     )
     manager.enableNotifications = false
     return manager

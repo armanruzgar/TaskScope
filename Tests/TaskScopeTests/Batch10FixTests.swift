@@ -323,7 +323,7 @@ final class Batch10FixTests: XCTestCase {
             defer { fixture.stores.cleanup() }
             XCTAssertTrue(fixture.stores.savedSelections.save(name: "Example", processes: [Batch10.process(51)]))
             let inventory = UIScriptedInventory(results: success ? [.success([Batch10.process(51)])] : [.failure(.commandFailed("ps timed out."))])
-            let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: fixture.signaler, lifecycle: fixture.lifecycle, settleAfterProcessChange: {})
+            let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: fixture.signaler, lifecycle: fixture.lifecycle, settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             var modified = fixture; modified.manager = manager
             let state = ProcessConfirmationState()

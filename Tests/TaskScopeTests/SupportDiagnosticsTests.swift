@@ -233,9 +233,9 @@ final class SupportDiagnosticsTests: XCTestCase {
         let lifecycle = DiagnosticsLifecycleService()
         let manager = ProcessManager(processInventory: DiagnosticsInventory(), verificationInventory: DiagnosticsInventory(),
                                      processSignaler: DiagnosticsSignaler(), lifecycle: lifecycle,
-                                     settleAfterProcessChange: {}, now: { self.date })
+                                     settleAfterProcessChange: {}, now: { self.date }, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
         await manager.openApp(preset)
         await manager.quitMainApp(preset)
         await manager.quitHelpers(preset)
@@ -257,10 +257,10 @@ final class SupportDiagnosticsTests: XCTestCase {
         let preset = Self.privatePreset
         let manager = ProcessManager(processInventory: DiagnosticsInventory(fails: true),
                                      verificationInventory: DiagnosticsInventory(fails: true), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(appExists: false), settleAfterProcessChange: {})
+                                     lifecycle: DiagnosticsLifecycleService(appExists: false), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         // Missing-bundle Open restores overrides without reading inventory.
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         await manager.openApp(preset)
         await manager.quitAllKillable(preset)
         let failures = manager.lifecycleDiagnostics.failures(for: preset.id)
@@ -280,7 +280,7 @@ final class SupportDiagnosticsTests: XCTestCase {
         for (service, expected) in cases {
             let manager = ProcessManager(processInventory: DiagnosticsInventory(), verificationInventory: DiagnosticsInventory(),
                                          processSignaler: DiagnosticsSignaler(), lifecycle: service,
-                                         settleAfterProcessChange: {})
+                                         settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             await manager.openApp(preset)
             XCTAssertEqual(manager.lifecycleDiagnostics.failures(for: preset.id).first?.reason, expected)
@@ -292,17 +292,17 @@ final class SupportDiagnosticsTests: XCTestCase {
         let preset = Self.privatePreset
         let manager = ProcessManager(processInventory: DiagnosticsInventory(),
                                      verificationInventory: DiagnosticsInventory(), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(fails: false), settleAfterProcessChange: {})
+                                     lifecycle: DiagnosticsLifecycleService(fails: false), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
         await manager.quitAllKillable(preset)
         await manager.keepOff(preset, recordIntent: false)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
 
         let failing = ProcessManager(processInventory: DiagnosticsInventory(fails: true),
                                      verificationInventory: DiagnosticsInventory(fails: true), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(), settleAfterProcessChange: {})
-        failing.isPresetKeptOffProvider = { _ in true }
+                                     lifecycle: DiagnosticsLifecycleService(), settleAfterProcessChange: {}, dependencies: .inert)
+        failing.dependencies.isPresetKeptOff = { _ in true }
         await failing.keepOff(preset, recordIntent: false)
         XCTAssertEqual(failing.lifecycleDiagnostics.failures(for: preset.id).first?.backgroundEnforcement, true)
     }

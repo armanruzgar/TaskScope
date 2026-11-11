@@ -184,10 +184,11 @@ final class Batch09ProcessManagerNotificationTests: XCTestCase {
         let lifecycle = Batch09StoppingLifecycle(inventory: inventory)
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
-            processSignaler: Batch09InertSignaler(), lifecycle: lifecycle, settleAfterProcessChange: {}
+            processSignaler: Batch09InertSignaler(), lifecycle: lifecycle, settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = true
-        manager.watchedAppsProvider = { [self.preset] }
+        manager.dependencies.watchedPresets = { [self.preset] }
         manager.refreshNotificationAuthorization = {}
         var calls: [String] = []
         manager.notifyTransitions = { calls.append("diff:\(Set($0.flatMap(\.runningNames)).sorted())") }
@@ -217,7 +218,8 @@ final class Batch09ProcessManagerNotificationTests: XCTestCase {
                 processInventory: Batch09MutableInventory([]), verificationInventory: Batch09MutableInventory([]),
                 processSignaler: Batch09InertSignaler(), lifecycle: Batch09StoppingLifecycle(inventory: nil),
                 settleAfterProcessChange: {},
-                pollingController: ProcessPollingController { await sleeper.sleep(interval: $0) }
+                pollingController: ProcessPollingController { await sleeper.sleep(interval: $0) },
+                dependencies: .inert
             )
             manager.notifyTransitions = { _ in }
             manager.primeNotificationBaseline = { _ in }

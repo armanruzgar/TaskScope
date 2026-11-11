@@ -137,10 +137,11 @@ final class MenuBarStatusTests: XCTestCase {
                 diskReadBytes: nil, diskWriteBytes: nil
             )]),
             processSignaler: MenuBarInertSignaler(),
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { watchedApps.presets }
+        manager.dependencies.watchedPresets = { watchedApps.presets }
         func label() -> TaskScopeMenuBarStatusLabel {
             TaskScopeMenuBarStatusLabel(
                 processManager: manager, watchedApps: watchedApps, autoStopRules: rules, settings: settings
@@ -150,7 +151,7 @@ final class MenuBarStatusTests: XCTestCase {
         XCTAssertEqual(label().status, .statusUnknown, "nothing has been read yet")
         await manager.refreshWatchedStatus(showMessage: false)
         XCTAssertEqual(label().status, .watchedAppRunning)
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         XCTAssertEqual(label().status, .watchedAppRunning, "no service is running")
 
         settings.showsMenuBarStatus = false

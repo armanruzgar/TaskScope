@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-/// Connects the stores to ProcessManager and runs the app's background work:
+/// Runs the app's background work around ProcessManager:
 /// polling, the Auto Stop engine, launch-time Keep Off enforcement and the
 /// reactions to settings changes. TaskScopeApp builds it once; AppDelegate
 /// starts it as soon as the launch context is resolved, so none of this depends
@@ -48,22 +48,7 @@ final class TaskScopeRuntime {
         watchedApps = stores.watchedApps
         autoStopRules = stores.autoStopRules
 
-        let settings = stores.settings
         let watchedApps = stores.watchedApps
-        processManager.watchedAppsProvider = { watchedApps.presets }
-        processManager.isKeepOffIntentWritableProvider = { !settings.isReadOnlyAfterCorruption }
-        processManager.keptOffPresetsProvider = {
-            settings.keepGlobalProtectOff
-                ? watchedApps.presets.filter { $0.isBuiltInGlobalProtect }
-                : []
-        }
-        processManager.isPresetKeptOffProvider = { preset in
-            preset.isBuiltInGlobalProtect && settings.keepGlobalProtectOff
-        }
-        processManager.setPresetKeptOffHandler = { preset, keptOff in
-            guard preset.isBuiltInGlobalProtect else { return }
-            settings.keepGlobalProtectOff = keptOff
-        }
         let coordinator = AppCommandCoordinator(
             processManager: processManager,
             presets: { watchedApps.presets },
@@ -84,7 +69,6 @@ final class TaskScopeRuntime {
         didStart = true
         self.requestShortcutParameterRefresh = requestShortcutParameterRefresh
 
-        processManager.processListLimitProvider = { [settings] in settings.processListLimit }
         processManager.sortOrder = settings.sortOrder
         processManager.enableNotifications = settings.enableNotifications
         observeSettings()
@@ -215,5 +199,36 @@ final class TaskScopeRuntime {
     private func eligibleNotificationSnapshots() -> [WatchedAppSnapshot] {
         let enabledPresetIDs = Set(watchedApps.presets.filter(\.notificationsEnabled).map(\.id))
         return processManager.snapshots.filter { enabledPresetIDs.contains($0.preset.id) }
+    }
+}
+
+extension ProcessManager.Dependencies {
+    /// The app's wiring: presets, the list limit and Keep Off intent come from
+    /// the stores; GlobalProtect's service state from `globalProtectServiceObservation`
+    /// (the app reads launchd, a test passes a fake).
+    @MainActor
+    static func app(
+        settings: SettingsStore,
+        watchedApps: WatchedAppsStore,
+        globalProtectServiceObservation: @escaping @MainActor () async -> GlobalProtectServiceObservation?
+    ) -> Self {
+        Self(
+            watchedPresets: { watchedApps.presets },
+            processListLimit: { settings.processListLimit },
+            keptOffPresets: {
+                settings.keepGlobalProtectOff
+                    ? watchedApps.presets.filter(\.isBuiltInGlobalProtect)
+                    : []
+            },
+            isPresetKeptOff: { preset in
+                preset.isBuiltInGlobalProtect && settings.keepGlobalProtectOff
+            },
+            isKeepOffIntentWritable: { !settings.isReadOnlyAfterCorruption },
+            globalProtectServiceObservation: globalProtectServiceObservation,
+            setPresetKeptOff: { preset, keptOff in
+                guard preset.isBuiltInGlobalProtect else { return }
+                settings.keepGlobalProtectOff = keptOff
+            }
+        )
     }
 }

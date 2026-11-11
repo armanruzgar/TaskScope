@@ -11,7 +11,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
             lifecycle.onUnload = { await store.replace(with: []) }
             let inventory = Inventory([.success(exampleProcesses)])
             let manager = manager(inventory: inventory, lifecycle: lifecycle)
-            manager.watchedAppsProvider = { store.presets }
+            manager.dependencies.watchedPresets = { store.presets }
 
             let result = await stop(manager, preset: preset, scope: scope)
 
@@ -31,7 +31,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
             var lifecycle = FakeLifecycle()
             lifecycle.onUnload = { await store.replace(with: [replacement]) }
             let manager = manager(inventory: Inventory([.success(exampleProcesses)]), lifecycle: lifecycle)
-            manager.watchedAppsProvider = { store.presets }
+            manager.dependencies.watchedPresets = { store.presets }
 
             let result = await stop(manager, preset: preset, scope: scope)
 
@@ -46,7 +46,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         var lifecycle = FakeLifecycle(calls: calls)
         lifecycle.bundleExists = false
         let manager = manager(inventory: Inventory([.success([])]), lifecycle: lifecycle)
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
 
@@ -62,7 +62,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         lifecycle.bundleExists = false
         lifecycle.systemEnableResult = batch(.failed, detail: "Approval cancelled")
         let manager = manager(inventory: Inventory([.success([])]), lifecycle: lifecycle)
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
 
@@ -82,7 +82,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         lifecycle.systemEnableResult = batch(.verified)
         lifecycle.bootstrapResult = batch(.alreadyLoaded)
         let manager = manager(inventory: Inventory([.success(globalProtectProcesses)]), lifecycle: lifecycle)
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
 
@@ -99,7 +99,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         var lifecycle = FakeLifecycle()
         lifecycle.enableRuntime = runtime.runtime
         let manager = manager(inventory: Inventory([.success(globalProtectProcesses)]), lifecycle: lifecycle)
-        manager.isPresetKeptOffProvider = { _ in false }
+        manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
 
@@ -162,7 +162,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
             var lifecycle = FakeLifecycle()
             lifecycle.unloadResult = batch(.failed, detail: "bootout denied")
             let manager = manager(inventory: Inventory([.success(exampleProcesses), finalRead]), lifecycle: lifecycle)
-            manager.watchedAppsProvider = { [self.examplePreset] }
+            manager.dependencies.watchedPresets = { [self.examplePreset] }
             let result = await manager.quitMainApp(examplePreset)
             XCTAssertEqual(result.status, .failed)
             let prefix: String
@@ -226,7 +226,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
     private func manager(inventory: Inventory, lifecycle: FakeLifecycle) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory,
                                      processSignaler: NoopSignaler(), lifecycle: lifecycle,
-                                     settleAfterProcessChange: {})
+                                     settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }

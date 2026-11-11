@@ -8,6 +8,8 @@ final class SettingsStore: ObservableObject {
     /// the stored value, instead of finding a payload it cannot decode.
     nonisolated static let allProcessesLimit = 100_000
     nonisolated static let processListLimitRange: ClosedRange<Int> = 10...200
+    /// Rows the process list shows until the user changes it.
+    nonisolated static let defaultProcessListLimit = 80
 
     /// The memory slider's grid. 1024 (the default) is on it: 128 + 14 × 64.
     nonisolated static let memoryThresholdRange: ClosedRange<Double> = 128...8192
@@ -288,7 +290,7 @@ final class SettingsStore: ObservableObject {
         static let defaults = CodableSettings(
             schemaVersion: currentSchemaVersion,
             refreshIntervalSeconds: 10,
-            processListLimit: 80,
+            processListLimit: SettingsStore.defaultProcessListLimit,
             cpuHighlightThreshold: 30,
             memHighlightThresholdMB: 1024,
             autoRefreshProcessList: false,

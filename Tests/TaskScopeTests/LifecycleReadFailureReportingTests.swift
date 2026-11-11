@@ -15,7 +15,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
             inventory: P8QueuedInventory(results: [.failure(.commandFailed("ps timed out"))]),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         let result = await manager.quitAllKillable(preset)
 
@@ -48,7 +48,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
             ]),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.refreshWatchedStatus(showMessage: false)
         XCTAssertEqual(manager.snapshots.count, 1, "precondition: a good snapshot exists")
@@ -72,7 +72,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
             ]),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
-        manager.watchedAppsProvider = { [preset] }
+        manager.dependencies.watchedPresets = { [preset] }
 
         await manager.refreshWatchedStatus(showMessage: false)
         XCTAssertTrue(manager.snapshots[0].isMainRunning, "precondition: stale snapshot says running")
@@ -96,7 +96,8 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
             processInventory: inventory,
             processSignaler: P8NoopSignaler(),
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
         return manager

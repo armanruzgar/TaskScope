@@ -25,9 +25,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
         for quitAll in [true, false] {
             let lifecycle = KeepOffLifecycle()
             let manager = makeManager(lifecycle: lifecycle)
-            manager.isKeepOffIntentWritableProvider = { false }
+            manager.dependencies.isKeepOffIntentWritable = { false }
             var writes = 0
-            manager.setPresetKeptOffHandler = { _, _ in writes += 1 }
+            manager.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
             let result = quitAll ? await manager.quitAll(.globalProtect) : await manager.keepOff(.globalProtect)
             XCTAssertEqual(result.status, .rejected)
             XCTAssertTrue(result.message.contains("Reset settings"))
@@ -40,9 +40,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
     func testSettingsRecoveryIsRecheckedAfterDisconnect() async {
         let lifecycle = KeepOffLifecycle()
         let manager = makeManager(lifecycle: lifecycle)
-        await lifecycle.setOnDisconnect { manager.isKeepOffIntentWritableProvider = { false } }
+        await lifecycle.setOnDisconnect { manager.dependencies.isKeepOffIntentWritable = { false } }
         var writes = 0
-        manager.setPresetKeptOffHandler = { _, _ in writes += 1 }
+        manager.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
         let result = await manager.quitAll(.globalProtect)
         XCTAssertEqual(result.status, .rejected)
         XCTAssertEqual(writes, 0)
@@ -55,9 +55,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let manager = makeManager(lifecycle: lifecycle)
         _ = await manager.keepOff(.globalProtect)
         let failure = try XCTUnwrap(manager.globalProtectDisconnectFailureID)
-        manager.isKeepOffIntentWritableProvider = { false }
+        manager.dependencies.isKeepOffIntentWritable = { false }
         var writes = 0
-        manager.setPresetKeptOffHandler = { _, _ in writes += 1 }
+        manager.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
         let result = await manager.stopGlobalProtectAfterFailedDisconnect(failureID: failure)
         XCTAssertEqual(result.status, .rejected)
         XCTAssertEqual(writes, 0)
@@ -69,7 +69,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let lifecycle = KeepOffLifecycle()
         let manager = makeManager(lifecycle: lifecycle)
         var presets: [WatchedAppPreset] = [.globalProtect]
-        manager.watchedAppsProvider = { presets }
+        manager.dependencies.watchedPresets = { presets }
         await lifecycle.setOnDisconnect {
             XCTAssertTrue(manager.isGlobalProtectKeepOffPending)
             XCTAssertNotNil(PresetDeletionPolicy.keepOffRefusal(
@@ -79,7 +79,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
             presets = []
         }
         var writes = 0
-        manager.setPresetKeptOffHandler = { _, _ in writes += 1 }
+        manager.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
         let result = await manager.quitAll(.globalProtect)
         XCTAssertEqual(result.status, .rejected)
         XCTAssertTrue(result.message.contains("removed"))
@@ -94,9 +94,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let manager = makeManager(lifecycle: lifecycle)
         _ = await manager.keepOff(.globalProtect)
         let failure = try XCTUnwrap(manager.globalProtectDisconnectFailureID)
-        manager.watchedAppsProvider = { [] }
+        manager.dependencies.watchedPresets = { [] }
         var writes = 0
-        manager.setPresetKeptOffHandler = { _, _ in writes += 1 }
+        manager.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
         let recovered = await manager.stopGlobalProtectAfterFailedDisconnect(failureID: failure)
         XCTAssertEqual(recovered.status, .rejected)
         let stale = await manager.quitAll(.globalProtect)
@@ -136,7 +136,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
             let lifecycle = KeepOffLifecycle()
             let manager = makeManager(lifecycle: lifecycle, processes: [process(name: "Example", path: "/Applications/Example.app/Contents/MacOS/Example")])
             var presets = [preset]
-            manager.watchedAppsProvider = { presets }
+            manager.dependencies.watchedPresets = { presets }
             await lifecycle.setOnDisable {
                 if removed { presets = [] } else { presets[0].mainProcessName = "Renamed" }
             }
@@ -150,8 +150,8 @@ final class GpKeepoffRegressionTests: XCTestCase {
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "System state unknown")
         ]))
         let manager = makeManager(lifecycle: lifecycle, processes: [process()])
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         manager.setMessage("Previous action")
         for _ in 0..<3 { await manager.enforceKeptOffPresets() }
         XCTAssertEqual(manager.message, "Previous action")
@@ -174,8 +174,8 @@ final class GpKeepoffRegressionTests: XCTestCase {
 
     func testBackgroundFinalVerdictAcceptsThePreservedSessionService() async {
         let manager = makeManager(lifecycle: KeepOffLifecycle(), processes: [process()])
-        manager.isPresetKeptOffProvider = { _ in true }
-        manager.globalProtectServiceObservationProvider = { .init(session: .running, system: .absent) }
+        manager.dependencies.isPresetKeptOff = { _ in true }
+        manager.dependencies.globalProtectServiceObservation = { .init(session: .running, system: .absent) }
         let result = await manager.keepOff(.globalProtect, recordIntent: false)
         XCTAssertEqual(result.status, .completed)
         XCTAssertTrue(result.message.contains("preserved"))
@@ -189,8 +189,8 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let manager = makeManager(lifecycle: lifecycle, processes: [process(
             name: "GlobalProtect", path: GlobalProtectAccessibilityDisconnect.executable
         )])
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         await manager.enforceKeptOffPresets()
         XCTAssertEqual(manager.lifecycleDiagnostics.failures(for: WatchedAppPreset.globalProtectID).count, 1)
         manager.dismissLifecycleReport()
@@ -291,8 +291,8 @@ final class GpKeepoffRegressionTests: XCTestCase {
                 other.uid = owner
                 let lifecycle = KeepOffLifecycle()
                 let manager = makeManager(lifecycle: lifecycle, processes: [other])
-                manager.globalProtectServiceObservationProvider = { .init(session: .absent, system: .absent) }
-                manager.isPresetKeptOffProvider = { _ in true }
+                manager.dependencies.globalProtectServiceObservation = { .init(session: .absent, system: .absent) }
+                manager.dependencies.isPresetKeptOff = { _ in true }
                 let result = await manager.keepOff(.globalProtect, recordIntent: explicit)
                 XCTAssertEqual(result.status, .completed)
                 XCTAssertFalse(result.message.contains("login-session VPN service was preserved"))
@@ -307,7 +307,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
         service.uid = 0
         let lifecycle = KeepOffLifecycle()
         let manager = makeManager(lifecycle: lifecycle, processes: [service])
-        manager.globalProtectServiceObservationProvider = { .init(session: .running, system: .absent) }
+        manager.dependencies.globalProtectServiceObservation = { .init(session: .running, system: .absent) }
         let result = await manager.quitAll(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.contains("login-session"))
@@ -316,7 +316,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
 
     func testKeepOffCannotReportSuccessWithUnknownJobAttribution() async {
         let manager = makeManager(lifecycle: KeepOffLifecycle())
-        manager.globalProtectServiceObservationProvider = { .init(session: .unknown, system: .absent) }
+        manager.dependencies.globalProtectServiceObservation = { .init(session: .unknown, system: .absent) }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.contains("could not verify"))
@@ -349,9 +349,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let inventory = KeepOffInventory(processes: processes)
         let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory,
                                      processSignaler: KeepOffSignaler(), lifecycle: lifecycle,
-                                     settleAfterProcessChange: {})
+                                     settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [.globalProtect] }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
         return manager
     }
 

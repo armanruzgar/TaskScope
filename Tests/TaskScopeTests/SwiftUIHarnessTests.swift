@@ -150,7 +150,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         let fixture = await makeFixture(inventory: UIInventory(processes: []), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         for style in [TaskScopePresentationStyle.expandedWindow, .menuBarCompact] {
             let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState(), presentationStyle: style)
             let inspected = try view.inspect()
@@ -167,7 +167,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         ]), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let confirmation = ProcessConfirmationState()
         let view = makePopover(fixture: fixture, confirmationState: confirmation)
@@ -187,7 +187,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         ]), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         await fixture.manager.batchTerminate([process(pid: 42, parentPID: 1, name: "Example").identity])
         XCTAssertNotNil(fixture.manager.processLoadError)
@@ -202,7 +202,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         ]), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let confirmation = ProcessConfirmationState()
@@ -227,7 +227,7 @@ final class SwiftUIHarnessTests: XCTestCase {
                                       helperProcessNames: [], protectedProcessNames: [], appPath: "/Applications/Before.app")
         XCTAssertTrue(store.add(preset))
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { store.presets }
+        fixture.manager.dependencies.watchedPresets = { store.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let confirmation = ProcessConfirmationState()
         let view = makePopover(fixture: fixture, confirmationState: confirmation)
@@ -260,7 +260,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             process(pid: 83, parentPID: 1, name: "Other")
         ])
         defer { fixture.stores.cleanup() }
-        fixture.manager.processListLimitProvider = { 1 }
+        fixture.manager.dependencies.processListLimit = { 1 }
         for style in [TaskScopePresentationStyle.expandedWindow, .menuBarCompact] {
             fixture.stores.settings.searchText = ""
             let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState(), presentationStyle: style)
@@ -884,6 +884,7 @@ final class SwiftUIHarnessTests: XCTestCase {
     func testConfirmedWindowPresetActionShowsOnlyTheCompletedResult() async throws {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         let confirmation = ProcessConfirmationState()
         confirmation.requestPresetAction(.quitAll, preset: .globalProtect)
         var windowRequests = 0
@@ -987,7 +988,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let confirmation = ProcessConfirmationState()
         let view = makePopover(fixture: fixture, confirmationState: confirmation)
@@ -1027,6 +1028,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         for action in [ProcessConfirmationState.PresetAction.quitAll, .keepOff] {
             let fixture = await makeFixture(processes: [])
             defer { fixture.stores.cleanup() }
+            fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
             fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
             let confirmation = ProcessConfirmationState()
             confirmation.requestPresetAction(action, preset: .globalProtect)
@@ -1064,6 +1066,7 @@ final class SwiftUIHarnessTests: XCTestCase {
     func testMenuBarConfirmsGlobalProtectKeepOffOutsideTheMenuWindow() async throws {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         let confirmation = ProcessConfirmationState()
         let presenter = UIMenuBarConfirmation(answer: true)
@@ -1161,11 +1164,11 @@ final class SwiftUIHarnessTests: XCTestCase {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { [.globalProtect] }
+        fixture.manager.dependencies.watchedPresets = { [.globalProtect] }
         // Record the Keep Off intent in settings as the app does, so the
         // keepGlobalProtectOff assertion below can fail if Cancel ran the stop.
         let settings = fixture.stores.settings
-        fixture.manager.setPresetKeptOffHandler = { preset, keptOff in
+        fixture.manager.dependencies.setPresetKeptOff = { preset, keptOff in
             guard preset.id == WatchedAppPreset.globalProtectID else { return }
             settings.keepGlobalProtectOff = keptOff
         }
@@ -1237,7 +1240,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             "precondition: a name lookup for Beta resolves to Alpha"
         )
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { store.presets }
+        fixture.manager.dependencies.watchedPresets = { store.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
 
         let recorder = CommandRecorder()
@@ -1282,7 +1285,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.keepGlobalProtectOff = true
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let recorder = CommandRecorder()
         AppCommandBus.shared.install { command in
@@ -1318,7 +1321,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         // Production wires this provider from settings.processListLimit and
         // republishes via applyCurrentDisplayLimit(). A limit of 2 keeps the fixture
         // small; all that matters is that the inventory exceeds it.
-        fixture.manager.processListLimitProvider = { 2 }
+        fixture.manager.dependencies.processListLimit = { 2 }
         fixture.manager.applyCurrentDisplayLimit()
         fixture.stores.settings.searchText = "Needle"
 
@@ -1690,7 +1693,8 @@ final class SwiftUIHarnessTests: XCTestCase {
                 verificationInventory: UIInventory(processes: []),
                 processSignaler: UIRecordingSignaler(),
                 lifecycle: UILifecycle(),
-                settleAfterProcessChange: {}
+                settleAfterProcessChange: {},
+                dependencies: .inert
             )
         )
         let inspected = try view.inspect()
@@ -1739,7 +1743,8 @@ final class SwiftUIHarnessTests: XCTestCase {
             verificationInventory: inventory,
             processSignaler: signaler,
             lifecycle: lifecycle,
-            settleAfterProcessChange: {}
+            settleAfterProcessChange: {},
+            dependencies: .inert
         )
         manager.enableNotifications = false
 

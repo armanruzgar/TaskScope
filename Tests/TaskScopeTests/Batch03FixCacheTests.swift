@@ -21,7 +21,8 @@ final class Batch03CacheInvalidationTests: XCTestCase {
             processSignaler: Batch03Signaler(world: world),
             lifecycle: Batch03Lifecycle(),
             settleAfterProcessChange: {},
-            currentPID: 999_999
+            currentPID: 999_999,
+            dependencies: .inert
         )
         manager.enableNotifications = false
 

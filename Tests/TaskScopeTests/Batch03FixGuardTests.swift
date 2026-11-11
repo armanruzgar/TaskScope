@@ -90,9 +90,9 @@ final class Batch03GuardTests: XCTestCase {
         let manager = ProcessManager(processInventory: list, verificationInventory: verification ?? list,
                                      processSignaler: signaler, lifecycle: lifecycle,
                                      settleAfterProcessChange: {}, currentPID: ownPID,
-                                     pollingController: ProcessPollingController(sleep: { _ in false }))
+                                     pollingController: ProcessPollingController(sleep: { _ in false }), dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [] }
+        manager.dependencies.watchedPresets = { [] }
         return manager
     }
 
@@ -173,9 +173,9 @@ final class Batch03GuardTests: XCTestCase {
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "Same failure")
         ])
         let manager = manager(inventory, lifecycle: Batch03GuardLifecycle(systemResult: failed))
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         return manager
     }
 

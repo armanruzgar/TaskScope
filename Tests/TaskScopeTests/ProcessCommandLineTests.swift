@@ -327,7 +327,8 @@ final class ProcessCommandLineCopyTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(),
-            settleAfterProcessChange: {}, detailReader: detailReader
+            settleAfterProcessChange: {}, detailReader: detailReader,
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let fixture = await Batch10.fixture(processes: [process])

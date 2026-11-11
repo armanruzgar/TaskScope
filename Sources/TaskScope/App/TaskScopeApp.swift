@@ -573,7 +573,7 @@ struct TaskScopeMenuBarStatusLabel: View {
             presets: watchedApps.presets,
             snapshots: manager.snapshots,
             availability: manager.watchedStatusAvailability,
-            isKeptOff: { manager.isPresetKeptOffProvider?($0) ?? false },
+            isKeptOff: { manager.dependencies.isPresetKeptOff($0) },
             pendingPromptCount: autoStopRules.pendingPrompts.count
         )
     }
@@ -615,11 +615,13 @@ struct TaskScopeApp: App {
             processInventory: sharedInventory,
             verificationInventory: systemInventory,
             processHistory: processHistory,
-            keepOffActivity: stores.keepOffActivity
+            keepOffActivity: stores.keepOffActivity,
+            dependencies: .app(
+                settings: stores.settings,
+                watchedApps: stores.watchedApps,
+                globalProtectServiceObservation: { await GlobalProtectServiceObservation.read(runtime: .live) }
+            )
         )
-        processManager.globalProtectServiceObservationProvider = {
-            await GlobalProtectServiceObservation.read(runtime: .live)
-        }
         let appRuntime = TaskScopeRuntime(
             session: launchSession,
             stores: stores,

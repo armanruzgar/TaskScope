@@ -286,11 +286,12 @@ struct ReadmeScreenshotFixture {
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(), settleAfterProcessChange: {},
             currentPID: ReadmeScreenshotData.rendererPID,
-            now: { updatedAt }
+            now: { updatedAt },
+            dependencies: .inert
         )
         manager.enableNotifications = false
         let watchedApps = watchedApps
-        manager.watchedAppsProvider = { watchedApps.presets }
+        manager.dependencies.watchedPresets = { watchedApps.presets }
         settings.sortKeyRaw = ProcessSortKey.cpu.rawValue
         manager.sortKey = .cpu
         await manager.loadProcessList(showMessage: false)

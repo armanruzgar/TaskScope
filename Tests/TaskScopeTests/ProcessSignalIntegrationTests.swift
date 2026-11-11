@@ -53,7 +53,8 @@ final class ProcessSignalIntegrationTests: XCTestCase {
             processSignaler: signaler,
             settleAfterProcessChange: {
                 try? await Task.sleep(nanoseconds: 1_400_000_000)
-            }
+            },
+            dependencies: .inert
         )
         manager.enableNotifications = false
 

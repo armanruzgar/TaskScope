@@ -27,7 +27,7 @@ final class Batch03FixTests: XCTestCase {
                          now: @escaping () -> Date = Date.init) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: verification,
                                      processSignaler: signaler, lifecycle: lifecycle,
-                                     settleAfterProcessChange: settle, currentPID: 999_999, now: now)
+                                     settleAfterProcessChange: settle, currentPID: 999_999, now: now, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }
@@ -237,8 +237,8 @@ final class Batch03FixTests: XCTestCase {
             if system { lifecycle.systemEnableResult = failed } else { lifecycle.agentEnableResult = failed }
             let manager = manager(ManagerTestInventory(results: [.success([])]), lifecycle: lifecycle)
             var keptOff = true
-            manager.isPresetKeptOffProvider = { _ in keptOff }
-            manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+            manager.dependencies.isPresetKeptOff = { _ in keptOff }
+            manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
             let result = await manager.openApp(system ? .globalProtect : preset)
             XCTAssertEqual(result.status, .failed)
             XCTAssertTrue(keptOff)
@@ -260,8 +260,8 @@ final class Batch03FixTests: XCTestCase {
             ])
             let manager = manager(inventory, lifecycle: lifecycle)
             var keptOff = true
-            manager.isPresetKeptOffProvider = { _ in keptOff }
-            manager.setPresetKeptOffHandler = { _, value in keptOff = value }
+            manager.dependencies.isPresetKeptOff = { _ in keptOff }
+            manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
             let result = await manager.openApp(preset)
 
@@ -329,8 +329,9 @@ final class Batch03FixTests: XCTestCase {
         lifecycle.disconnectResult = .failed("Complete the request in GlobalProtect.")
         var time = Date(timeIntervalSince1970: 1_000)
         let manager = manager(ManagerTestInventory(results: [.success([])]), lifecycle: lifecycle, now: { time })
-        manager.keptOffPresetsProvider = { [.globalProtect] }
-        manager.isPresetKeptOffProvider = { _ in true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.keptOffPresets = { [.globalProtect] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
         XCTAssertNotNil(manager.globalProtectDisconnectFailureID)
@@ -350,7 +351,7 @@ final class Batch03FixTests: XCTestCase {
         await manager.refreshWatchedStatus()
         await manager.refreshWatchedStatus()
         let lastRead = manager.lastSuccessfulWatchedReadAt
-        manager.keptOffPresetsProvider = { [self.preset] }
+        manager.dependencies.keptOffPresets = { [self.preset] }
         await manager.enforceKeptOffPresets()
         XCTAssertNil(manager.processLoadError)
         XCTAssertEqual(manager.watchedStatusLoadError, "watched failed")

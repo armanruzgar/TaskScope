@@ -523,10 +523,10 @@ final class Batch02QuitTests: XCTestCase {
         let inventory = Batch02FixedInventory(result: .success([]))
         let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory,
                                      processSignaler: Batch02InertSignaler(), lifecycle: lifecycle,
-                                     settleAfterProcessChange: {})
+                                     settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
-        manager.watchedAppsProvider = { [.globalProtect] }
-        manager.isKeepOffIntentWritableProvider = { true }
+        manager.dependencies.watchedPresets = { [.globalProtect] }
+        manager.dependencies.isKeepOffIntentWritable = { true }
 
         let recorder = Batch02DelegateRecorder()
         let session = makeBatch02Session(.loginItem)
