@@ -549,10 +549,10 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             exitCode: 1
         )
 
-        XCTAssertEqual(ProcessLifecycleController.launchJobInspection(from: loaded), .loaded)
-        XCTAssertEqual(ProcessLifecycleController.launchJobInspection(from: notLoaded), .notLoaded)
+        XCTAssertEqual(ProcessLifecycleController.launchJobInspection(from: loaded, label: "example"), .loaded)
+        XCTAssertEqual(ProcessLifecycleController.launchJobInspection(from: notLoaded, label: "example"), .notLoaded)
         XCTAssertEqual(
-            ProcessLifecycleController.launchJobInspection(from: failed),
+            ProcessLifecycleController.launchJobInspection(from: failed, label: "example"),
             .failed("Operation not permitted")
         )
     }
@@ -751,7 +751,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             runtime: harness.runtime
         )
 
-        XCTAssertTrue(opened)
+        XCTAssertTrue(opened.succeeded)
         XCTAssertEqual(harness.commands, ["/usr/bin/open '/Applications/Example.app'"])
     }
 
@@ -1088,7 +1088,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
                 result(stdout: launchctlPrintOutput(pid: 42), exitCode: 0)
             ],
             inventory: [
-                process(pid: 42, command: "/Library/Application Support/PaloAltoNetworks/GlobalProtect/PanGPS"),
+                process(pid: 42, command: "/Library/Application Support/PaloAltoNetworks/GlobalProtect/PanGPS", uid: 0),
                 process(pid: 99, command: "/Applications/UnrelatedListener")
             ]
         )
@@ -1141,7 +1141,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
                 result(stdout: launchctlPrintOutput(pid: 42), exitCode: 0)
             ],
             inventory: [
-                process(pid: 42, command: "/Library/Application Support/PaloAltoNetworks/GlobalProtect/PanGPS")
+                process(pid: 42, command: "/Library/Application Support/PaloAltoNetworks/GlobalProtect/PanGPS", uid: 0)
             ]
         )
 
@@ -1181,8 +1181,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
                     SystemLaunchDaemonJob(
                         label: "example.daemon",
                         plistPath: "/Library/LaunchDaemons/example.plist",
-                        processName: "ExampleDaemon",
-                        servicePort: nil
+                        processName: "ExampleDaemon"
                     )
                 ]
             ),
@@ -1282,7 +1281,7 @@ private final class DisabledJobLaunchd: @unchecked Sendable {
             if command.contains(" print ") {
                 return loaded
                     ? ShellCommandResult(command: command, stdout: launchctlPrintOutput(pid: 42), stderr: "", exitCode: 0)
-                    : ShellCommandResult(command: command, stdout: "", stderr: "Could not find service", exitCode: 113)
+                    : ShellCommandResult(command: command, stdout: "", stderr: launchctlNotFoundMessage(command: command), exitCode: 113)
             }
             if command.contains(" enable ") {
                 enabled = true
@@ -1308,7 +1307,7 @@ private final class DisabledJobLaunchd: @unchecked Sendable {
     }
 }
 
-private final class LifecycleRuntimeHarness: @unchecked Sendable {
+final class LifecycleRuntimeHarness: @unchecked Sendable {
     private let lock = NSLock()
     private let existingPaths: Set<String>
     private let launchAgentLabels: [String: String]
@@ -1352,7 +1351,7 @@ private final class LifecycleRuntimeHarness: @unchecked Sendable {
                 existingPaths.contains(path)
             },
             launchAgentLabel: { [self] path in
-                launchAgentLabels[path]
+                launchAgentLabels[path] ?? (path.contains("LaunchDaemons/") ? "com.paloaltonetworks.gp.pangpsd" : nil)
             },
             runCommand: { [self] command, timeout in
                 lock.withLock {
@@ -1370,6 +1369,9 @@ private final class LifecycleRuntimeHarness: @unchecked Sendable {
                         )
                     }
                     var response = commandResults.removeFirst()
+                    if response.stderr == "Could not find service" {
+                        response.stderr = launchctlNotFoundMessage(command: command)
+                    }
                     response.command = command
                     return response
                 }
@@ -1409,7 +1411,10 @@ private final class LifecycleRuntimeHarness: @unchecked Sendable {
                     recordedSleepDurations.append(duration)
                 }
             },
-            systemUptime: { 0 }
+            systemUptime: { 0 },
+            isAppBundle: { [self] path in
+                existingPaths.contains(path)
+            }
         )
     }
 

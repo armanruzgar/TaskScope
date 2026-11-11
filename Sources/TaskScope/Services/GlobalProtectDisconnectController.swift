@@ -46,9 +46,13 @@ struct GlobalProtectDisconnectDeadline: Sendable {
     var remainingTime: TimeInterval { max(0, expiresAt - now()) }
 }
 
+enum GlobalProtectDisconnectPressResult: Sendable {
+    case pressed, notPressable, unconfirmed
+}
+
 protocol GlobalProtectDisconnectRuntime: Sendable {
     func connectionState(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectConnectionState
-    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> Bool
+    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectDisconnectPressResult
     func waitForNextObservation(deadline: GlobalProtectDisconnectDeadline) async
 }
 
@@ -89,7 +93,7 @@ enum GlobalProtectDisconnectController {
                 if !requested {
                     let pressed = await runtime.pressDisconnect(deadline: deadline)
                     guard deadline.remainingTime > 0 else { return timedOut }
-                    guard pressed else {
+                    guard pressed != .notPressable else {
                         return .failed("GlobalProtect's Disconnect control is unavailable. Its services were left running.")
                     }
                     requested = true

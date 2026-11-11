@@ -222,10 +222,10 @@ private actor FakeDisconnectRuntime: GlobalProtectDisconnectRuntime {
         return states[0]
     }
 
-    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> Bool {
+    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectDisconnectPressResult {
         presses += 1
         clock?.advance(pressSeconds)
-        return pressSucceeds
+        return pressSucceeds ? .pressed : .notPressable
     }
 
     func waitForNextObservation(deadline: GlobalProtectDisconnectDeadline) async {

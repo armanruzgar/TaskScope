@@ -14,7 +14,7 @@ struct GlobalProtectCompatibilityReport: Equatable, Sendable {
         var displayName: String {
             switch self {
             case .pangpa: "pangpa (user agent)"
-            case .pangps: "pangps (optional user agent)"
+            case .pangps: "pangps (login-session VPN service, optional install)"
             case .pangpsd: "pangpsd (protected system service)"
             }
         }
@@ -104,6 +104,7 @@ struct GlobalProtectCompatibilityReport: Equatable, Sendable {
     let processes: [ProcessCounts]
     let inventoryFailure: UnknownReason?
     let systemProcessVerified: Bool
+    var sessionProcessVerified: Bool = false
 
     /// One representation is used for preview, clipboard, and UTF-8 export.
     /// Never append raw stderr, launchd dumps, plist values, or process paths.
@@ -136,7 +137,17 @@ struct GlobalProtectCompatibilityReport: Equatable, Sendable {
                 lines.append("\(process.name.rawValue): current user \(process.currentUser), root \(process.root), other user \(process.otherUser), unverified identity/owner \(process.unverified)")
             }
             lines.append("Counts require a kernel executable path in the known product directories and a known owner. Name-only candidates are unverified.")
-            lines.append("Current-user PanGPS is the user instance, not the protected daemon.")
+            lines.append("Root PanGPS can belong to the login-session job (setuid) or the system daemon; owner alone does not identify its launch job.")
+        }
+        lines += ["", "Login-session VPN service process:"]
+        if inventoryFailure != nil {
+            lines.append("Unknown (process inventory unavailable).")
+        } else if sessionProcessVerified {
+            lines.append("Verified PanGPS matching the login-session launchd PID, owner and known product path.")
+        } else if jobs.first(where: { $0.service == .pangps })?.loaded == .notLoaded {
+            lines.append("Not loaded.")
+        } else {
+            lines.append("Not verified. Loaded does not mean running or healthy.")
         }
         lines += ["", "Protected system-service process:"]
         if inventoryFailure != nil {

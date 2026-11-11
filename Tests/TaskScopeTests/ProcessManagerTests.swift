@@ -969,7 +969,7 @@ final class ProcessManagerTests: XCTestCase {
         let result = await manager.quitAllKillable(.globalProtect)
 
         XCTAssertEqual(result.status, .completed)
-        XCTAssertEqual(result.message, "No watched app or user helpers found.")
+        XCTAssertEqual(result.message, "No watched app or user helpers found. Its VPN service (PanGPS) is still running and the VPN was not disconnected; use Quit All in TaskScope to disconnect and stop it.")
         XCTAssertEqual(manager.snapshots.first?.protectedRunning, ["PanGPS"])
         XCTAssertFalse(lifecycle.calls.contains { $0.contains("PanGPS") || $0.contains("daemon") })
     }
@@ -1857,8 +1857,7 @@ final class ProcessManagerTests: XCTestCase {
                 SystemLaunchDaemonJob(
                     label: "example.daemon",
                     plistPath: "/Library/LaunchDaemons/example.plist",
-                    processName: "ExampleDaemon",
-                    servicePort: 1234
+                    processName: "ExampleDaemon"
                 )
             ]
         )
@@ -2009,9 +2008,9 @@ private final class FakeLifecycleService: ProcessLifecycleServicing, @unchecked 
         return waitResult
     }
 
-    func openAppBundle(at path: String) async -> Bool {
+    func openAppBundle(at path: String) async -> AppBundleOpenResult {
         calls.append("open")
-        return openResult
+        return openResult ? .opened : .failed("Fake launch failed.")
     }
 }
 

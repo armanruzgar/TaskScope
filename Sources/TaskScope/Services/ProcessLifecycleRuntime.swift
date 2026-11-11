@@ -5,19 +5,9 @@ struct ProcessLifecycleRuntime: Sendable {
     var userID: uid_t
     var fileExists: @Sendable (String) -> Bool
     var launchAgentLabel: @Sendable (String) -> String? = { path in
-        guard let data = FileManager.default.contents(atPath: path),
-              let propertyList = try? PropertyListSerialization.propertyList(
-                  from: data,
-                  options: [],
-                  format: nil
-              ),
-              let dictionary = propertyList as? [String: Any],
-              let label = dictionary["Label"] as? String else {
-            return nil
-        }
-        let normalized = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized.isEmpty ? nil : normalized
+        LaunchctlJobListing.plistLabel(at: path)
     }
+
     var runCommand: @Sendable (String, TimeInterval) async -> ShellCommandResult
     var loadProcessInventory: @Sendable () async -> Result<[AppProcess], ProcessInventoryError>
     var executablePathForPID: @Sendable (Int32) -> String? = {
@@ -34,6 +24,9 @@ struct ProcessLifecycleRuntime: Sendable {
     }
     var sleep: @Sendable (UInt64) async -> Void
     var systemUptime: @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    /// True when a path leads to an app bundle after following links. Open
+    /// checks it first and again right before launching.
+    var isAppBundle: @Sendable (String) -> Bool = { SystemProcessLifecycleService.isAppBundle(at: $0) }
 
     /// A signal to a target that no longer exists (`ESRCH`) counts as delivered:
     /// the process is not running, which is what the caller asked for. Any pid

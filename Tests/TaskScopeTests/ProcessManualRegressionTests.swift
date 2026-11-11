@@ -535,25 +535,26 @@ private final class ManualLifecycle: ProcessLifecycleServicing, @unchecked Senda
     func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
         terminatedNames.append(preset.mainProcessName)
         guard let runtime else { return .signalled }
-        let result = await ProcessLifecycleController.terminateProcess(
-            named: preset.mainProcessName, policy: .gracefulThenForce,
-            expectedExecutableDirectory: preset.mainExecutableDirectory, currentPID: 99999, runtime: runtime
-        )
+        let result = await SystemProcessLifecycleService(runtime: runtime).terminateMainProcess(for: preset)
         sawCancellation = Task.isCancelled
         return result
     }
     func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
         terminatedNames.append(name)
         guard let runtime else { return .signalled }
-        return await ProcessLifecycleController.terminateProcess(
-            named: name, policy: .gracefulThenForce,
-            expectedExecutableDirectory: preset.bundleContentsDirectory, currentPID: 99999, runtime: runtime
-        )
+        return await SystemProcessLifecycleService(runtime: runtime).terminateHelperProcess(named: name, for: preset)
     }
     func isProcessNamedRunning(_ name: String) async -> Bool { false }
     func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { await onWait?() ?? true }
-    func openAppBundle(at path: String) async -> Bool { openRequests += 1; return true }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { openRequests += 1; return .opened }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await onWait?() ?? true }
+
 }

@@ -169,8 +169,7 @@ final class WatchedAppsStoreTests: XCTestCase {
             SystemLaunchDaemonJob(
                 label: "daemon",
                 plistPath: "/Library/LaunchDaemons/daemon.plist",
-                processName: "daemon",
-                servicePort: 70_000
+                processName: "daemon"
             )
         ]
         XCTAssertFalse(store.add(invalidPort))
@@ -334,8 +333,7 @@ final class WatchedAppsStoreTests: XCTestCase {
             SystemLaunchDaemonJob(
                 label: "com.example.daemon",
                 plistPath: "/Library/LaunchDaemons/com.example.daemon.plist",
-                processName: "ExampleDaemon",
-                servicePort: nil
+                processName: "ExampleDaemon"
             )
         ]
         XCTAssertFalse(store.add(daemon))
@@ -355,8 +353,7 @@ final class WatchedAppsStoreTests: XCTestCase {
             SystemLaunchDaemonJob(
                 label: "com.example.unsafe",
                 plistPath: "/Library/LaunchDaemons/com.example.unsafe.plist",
-                processName: "UnsafeDaemon",
-                servicePort: nil
+                processName: "UnsafeDaemon"
             )
         ]
         let original = try JSONEncoder().encode([valid, unsafe])

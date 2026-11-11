@@ -274,6 +274,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
                 for: .globalProtect, allowAdministratorPrompt: true, runtime: harness.runtime
             )
             XCTAssertFalse(stopped.succeeded)
+            XCTAssertEqual(stopped.jobs.first?.detail, "The system service plist is missing or its label does not match. Nothing was disabled; restoration could not be guaranteed.")
             let commands = await harness.commands
             XCTAssertFalse(commands.contains { $0.contains("osascript") })
         }
@@ -442,18 +443,96 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             Outcome(osascript(stderr: "0:242: execution error: The command exited with a non-zero status. (1)", exitCode: 1)),
             .failed("The command exited with a non-zero status.")
         )
+        XCTAssertEqual(Outcome(osascript(stderr: "0:242: execution error: Cancelled (-60006)", exitCode: 1)), .cancelled)
         XCTAssertEqual(Outcome(osascript(stderr: "User canceled.", exitCode: 1)), .failed("exited with status 1"))
         XCTAssertEqual(
             Outcome(osascript(exitCode: ShellCommandRunner.timedOutExitCode)),
-            .failed("exited with status \(ShellCommandRunner.timedOutExitCode)")
+            .timedOut
         )
     }
+    func testBatch04SessionOpenWorksWithDisabledUnloadedSystemDaemon() async {
+        let fake = ServiceHarness(disabled: true, loaded: false, sessionLoaded: true)
+        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        var runtime = fake.runtime
+        let exists = runtime.fileExists
+        runtime.fileExists = { $0 == session.plistPath || exists($0) }
+        runtime.launchAgentLabel = { $0 == session.plistPath ? session.label : ServiceHarness.label }
+        let opened = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: runtime)
+        XCTAssertTrue(opened.succeeded)
+        let commands = await fake.commands
+        XCTAssertFalse(commands.contains { $0.contains("system/") || $0.contains("osascript") })
+        let state = await fake.state
+        XCTAssertTrue(state.disabled)
+        XCTAssertFalse(state.loaded)
+    }
+
+    func testBatch04ApprovedEnableMustClearOverride() async {
+        let fake = ServiceHarness(disabled: true, loaded: false, adminFailure: .enableIgnored)
+        let enabled = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
+        XCTAssertFalse(enabled.succeeded)
+        XCTAssertTrue(enabled.failureSummary?.contains("Could not verify that the system service was re-enabled") == true)
+    }
+
+    func testBatch04AdministratorTimeoutHasActionableTextAndWaitsOnlyAfterDisable() async {
+        for disabled in [false, true] {
+            let fake = ServiceHarness(adminFailure: disabled ? .timedOutAfterChange : .timedOut, delayedStopProbes: 3)
+            let stopped = await ProcessLifecycleController.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: true, runtime: fake.runtime)
+            XCTAssertEqual(stopped.succeeded, disabled)
+            if !disabled { XCTAssertTrue(stopped.failureSummary?.contains("approval may not have been given") == true) }
+            let commands = await fake.commands
+            XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
+            XCTAssertTrue(commands.first { $0.contains("osascript") }?.contains("with prompt") == true)
+        }
+        let fake = ServiceHarness(disabled: true, loaded: false, adminFailure: .timedOut)
+        let enabled = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
+        XCTAssertTrue(enabled.failureSummary?.contains("approval may not have been given") == true)
+    }
+
+    func testBatch04MissingDaemonPlistCountsAsOffOnlyWhenNothingIsLoaded() async {
+        for allowPrompt in [false, true] {
+            let absent = ServiceHarness(loaded: false, plistLabel: nil)
+            let off = await ProcessLifecycleController.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: allowPrompt, runtime: absent.runtime)
+            XCTAssertEqual(off.jobs.map(\.state), [.alreadyUnloaded])
+            let loaded = ServiceHarness(loaded: true, plistLabel: nil)
+            let refused = await ProcessLifecycleController.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: allowPrompt, runtime: loaded.runtime)
+            XCTAssertFalse(refused.succeeded)
+            XCTAssertFalse(refused.failureSummary?.contains("login-session") == true)
+            for harness in [absent, loaded] {
+                let commands = await harness.commands
+                XCTAssertFalse(commands.contains { $0.contains("osascript") })
+            }
+        }
+    }
+
+    func testBatch04LateApprovedEnableIsVerifiedFromLaunchd() async {
+        let fake = ServiceHarness(disabled: true, loaded: false, adminFailure: .timedOutAfterChange)
+        let enabled = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
+        XCTAssertEqual(enabled.jobs.map(\.state), [.changed])
+        XCTAssertTrue(enabled.jobs.first?.detail.contains("after the administrator request timed out") == true)
+        let commands = await fake.commands
+        XCTAssertTrue(commands.first { $0.contains("osascript") }?.contains("with prompt") == true)
+    }
+
+    func testBatch04SessionOnlyInstallNeedsNoSystemDisableOverrideOrPrompt() async {
+        let fake = ServiceHarness(disabled: false, loaded: false)
+        let session = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
+        var runtime = fake.runtime
+        runtime.fileExists = { $0 == session.plistPath }
+        let stopped = await ProcessLifecycleController.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: false, runtime: runtime)
+        XCTAssertTrue(stopped.succeeded)
+        XCTAssertEqual(stopped.jobs.first?.state, .alreadyUnloaded)
+        XCTAssertTrue(stopped.jobs.first?.detail.contains("No system VPN daemon is installed or loaded") == true)
+        let commands = await fake.commands
+        XCTAssertFalse(commands.contains { $0.contains("osascript") })
+    }
+
 }
 
 private actor ServiceHarness {
     /// `bootoutFailed` leaves the daemon loaded; `bootoutNonzeroAfterExit`
     /// reports a nonzero bootout while launchd still removes the job.
-    enum AdminFailure { case cancelled, denied, disableFailed, bootoutFailed, bootoutNonzeroAfterExit }
+    enum AdminFailure { case cancelled, denied, disableFailed, bootoutFailed, bootoutNonzeroAfterExit, enableIgnored, timedOut, timedOutAfterChange }
+    var sessionLoaded: Bool
     var state: (disabled: Bool, loaded: Bool)
     var commands: [String] = []
     let adminFailure: AdminFailure?
@@ -464,7 +543,8 @@ private actor ServiceHarness {
     static let label = "com.paloaltonetworks.gp.pangpsd"
 
     init(disabled: Bool = false, loaded: Bool = true, adminFailure: AdminFailure? = nil,
-         plistLabel: String? = label, disabledProbe: ShellCommandResult? = nil, delayedStopProbes: Int = 0) {
+         plistLabel: String? = label, disabledProbe: ShellCommandResult? = nil, delayedStopProbes: Int = 0, sessionLoaded: Bool = true) {
+        self.sessionLoaded = sessionLoaded
         state = (disabled, loaded)
         self.adminFailure = adminFailure
         self.plistLabel = plistLabel
@@ -497,6 +577,10 @@ private actor ServiceHarness {
             return disabledProbe ?? result("disabled services = {\n\"\(Self.label)\" => \(state.disabled ? "disabled" : "enabled")\n}")
         }
         if command.hasPrefix("/bin/launchctl print ") {
+            if command.contains("gui/501/com.paloaltonetworks.gp.pangps") {
+                return sessionLoaded ? result(launchctlPrintOutput(pid: 42))
+                    : result("", error: "Could not find service \"com.paloaltonetworks.gp.pangps\" in domain", code: 113)
+            }
             if stopAcknowledged {
                 state.loaded = delayedStopProbes > 0
                 delayedStopProbes = max(0, delayedStopProbes - 1)
@@ -505,6 +589,7 @@ private actor ServiceHarness {
                 : result("", error: "Could not find service \"\(Self.label)\" in domain for system", code: 113)
         }
         if command.hasPrefix("/usr/bin/osascript") {
+            if adminFailure == .timedOut { return result("", code: ShellCommandRunner.timedOutExitCode) }
             // osascript's own report of a refused authorization.
             if adminFailure == .cancelled {
                 return result("", error: "0:242: execution error: User canceled. (-128)", code: 1)
@@ -517,6 +602,11 @@ private actor ServiceHarness {
                     return result("", error: "0:242: execution error: Could not disable service: Operation not permitted (1)", code: 1)
                 }
                 state.disabled = true
+                if adminFailure == .timedOutAfterChange {
+                    stopAcknowledged = true
+                    state.loaded = delayedStopProbes > 0
+                    return result("", code: ShellCommandRunner.timedOutExitCode)
+                }
                 // `do shell script` returns stdout only when the script exits 0.
                 let phase = command.contains("echo TASKSCOPE_SYSTEM_DISABLED") ? "TASKSCOPE_SYSTEM_DISABLED" : ""
                 switch adminFailure {
@@ -535,8 +625,9 @@ private actor ServiceHarness {
                 state.disabled = false
                 state.loaded = true
                 stopAcknowledged = false
-            } else if command.contains("launchctl enable") {
+            } else if command.contains("launchctl enable"), adminFailure != .enableIgnored {
                 state.disabled = false
+                if adminFailure == .timedOutAfterChange { return result("", code: ShellCommandRunner.timedOutExitCode) }
             }
             return result("")
         }

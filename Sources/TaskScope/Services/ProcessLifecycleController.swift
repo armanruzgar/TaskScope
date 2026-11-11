@@ -37,26 +37,6 @@ enum ProcessLifecycleController {
         await ProcessTerminationController.settle(runtime: runtime)
     }
 
-    /// Signals processes named `name` that run from `expectedExecutableDirectory`.
-    /// The directory is required: a name-only match is never sufficient to
-    /// signal a process.
-    @discardableResult
-    static func terminateProcess(
-        named name: String,
-        forceIfStillRunning: Bool,
-        expectedExecutableDirectory: String,
-        currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
-        runtime: ProcessLifecycleRuntime = .live
-    ) async -> ProcessTerminationOutcome {
-        await ProcessTerminationController.terminate(
-            named: name,
-            policy: forceIfStillRunning ? .gracefulThenForce : .graceful,
-            expectedExecutableDirectory: expectedExecutableDirectory,
-            excludingPID: currentPID,
-            runtime: runtime
-        )
-    }
-
     @discardableResult
     static func terminateProcess(
         named name: String,
@@ -71,41 +51,6 @@ enum ProcessLifecycleController {
             expectedExecutableDirectory: expectedExecutableDirectory,
             excludingPID: currentPID,
             runtime: runtime
-        )
-    }
-
-    static func isProcessNamedRunning(
-        _ name: String,
-        expectedExecutableDirectory: String? = nil,
-        runtime: ProcessLifecycleRuntime = .live
-    ) async -> Bool {
-        await ProcessTerminationController.isRunning(
-            named: name,
-            expectedExecutableDirectory: expectedExecutableDirectory,
-            runtime: runtime
-        )
-    }
-
-    static func matchingProcesses(
-        named name: String,
-        in inventory: [AppProcess]
-    ) -> [AppProcess] {
-        ProcessTerminationController.matchingProcesses(named: name, in: inventory)
-    }
-
-    static func terminationTargets(
-        named name: String,
-        expectedExecutableDirectory: String?,
-        excludingPID: Int32,
-        currentUID: uid_t = getuid(),
-        in inventory: [AppProcess]
-    ) -> [AppProcess] {
-        ProcessTerminationController.terminationTargets(
-            named: name,
-            expectedExecutableDirectory: expectedExecutableDirectory,
-            excludingPID: excludingPID,
-            currentUID: currentUID,
-            in: inventory
         )
     }
 
@@ -134,7 +79,7 @@ enum ProcessLifecycleController {
             }
             let target = "gui/\(uid)/\(job.label)"
             let plistExists = runtime.fileExists(job.plistPath)
-            let status = await inspectLaunchJob(target, runtime: runtime)
+            let status = await inspectLaunchJob(target, label: job.label, runtime: runtime)
             switch status.inspection {
             case .notLoaded:
                 // An absent plist is not a failure when the goal is to *stop* the
@@ -160,6 +105,15 @@ enum ProcessLifecycleController {
                 break
             }
 
+            // A loaded job whose pid cannot be read may be running the main
+            // process the caller asked to keep. Leave it loaded and say so.
+            if !preservingPIDs.isEmpty, status.pid == nil, !status.hasNoRunningPID {
+                results.append(LifecycleJobResult(
+                    label: job.label, state: .failed,
+                    detail: "Left loaded: its pid could not be read, so TaskScope could not confirm that it does not run the main \(preset.mainProcessName) process."
+                ))
+                continue
+            }
             if let loadedPID = status.pid, preservingPIDs.contains(loadedPID) {
                 results.append(LifecycleJobResult(
                     label: job.label,
@@ -171,7 +125,7 @@ enum ProcessLifecycleController {
 
             let command = "/bin/launchctl bootout \(ShellCommandRunner.shellQuoted(target))"
             let result = await runtime.runCommand(command, launchAgentBootoutTimeout)
-            let after = await inspectAfterBootout(target, commandResult: result, runtime: runtime)
+            let after = await inspectAfterBootout(target, label: job.label, commandResult: result, runtime: runtime)
             let didUnload = after == .notLoaded
             results.append(LifecycleJobResult(
                 label: job.label,
@@ -242,7 +196,7 @@ enum ProcessLifecycleController {
                 continue
             }
 
-            switch await inspectLaunchJob(target, runtime: runtime).inspection {
+            switch await inspectLaunchJob(target, label: job.label, runtime: runtime).inspection {
             case .notLoaded:
                 results.append(LifecycleJobResult(
                     label: job.label,
@@ -260,7 +214,7 @@ enum ProcessLifecycleController {
                     "/bin/launchctl bootout \(ShellCommandRunner.shellQuoted(target))",
                     launchAgentBootoutTimeout
                 )
-                let after = await inspectAfterBootout(target, commandResult: bootout, runtime: runtime)
+                let after = await inspectAfterBootout(target, label: job.label, commandResult: bootout, runtime: runtime)
                 let didUnload = after == .notLoaded
                 results.append(LifecycleJobResult(
                     label: job.label,
@@ -390,7 +344,7 @@ enum ProcessLifecycleController {
             }
 
             let target = "gui/\(uid)/\(job.label)"
-            switch await inspectLaunchJob(target, runtime: runtime).inspection {
+            switch await inspectLaunchJob(target, label: job.label, runtime: runtime).inspection {
             case .loaded:
                 results.append(LifecycleJobResult(
                     label: job.label,
@@ -448,7 +402,12 @@ enum ProcessLifecycleController {
                 "/bin/launchctl bootstrap \(ShellCommandRunner.shellQuoted("gui/\(uid)")) \(ShellCommandRunner.shellQuoted(job.plistPath))",
                 15
             )
-            guard bootstrap.succeeded else {
+            // A nonzero bootstrap is not a verdict: the job may have been loaded
+            // by something else in the meantime. Only launchd's state decides.
+            let loadedAnyway = bootstrap.succeeded
+                ? false
+                : await inspectLaunchJob(target, label: job.label, runtime: runtime).inspection == .loaded
+            guard bootstrap.succeeded || loadedAnyway else {
                 results.append(LifecycleJobResult(
                     label: job.label,
                     state: .failed,
@@ -461,12 +420,16 @@ enum ProcessLifecycleController {
                 "/bin/launchctl kickstart \(ShellCommandRunner.shellQuoted(target))",
                 15
             )
-            let verified = await inspectLaunchJob(target, runtime: runtime).inspection == .loaded
+            // launchd's state decides the result, not kickstart's exit status, so
+            // a retry that finds the job loaded agrees with this attempt.
+            let verified = await inspectLaunchJob(target, label: job.label, runtime: runtime).inspection == .loaded
             results.append(LifecycleJobResult(
                 label: job.label,
-                state: kickstart.succeeded && verified ? .changed : .failed,
-                detail: kickstart.succeeded && verified
-                    ? "Loaded and verified."
+                state: verified ? .changed : .failed,
+                detail: verified
+                    ? (kickstart.succeeded
+                        ? "Loaded and verified."
+                        : "Loaded; the start request failed: \(commandFailure(kickstart, fallback: kickstart.failureDescription))")
                     : commandFailure(kickstart, fallback: "Job could not be verified.")
             ))
         }
@@ -538,12 +501,23 @@ enum ProcessLifecycleController {
                 break
             }
 
+            // As the privileged disable path does, never ask root to bootstrap a
+            // plist whose Label is not this job's.
+            guard runtime.launchAgentLabel(job.plistPath) == job.label else {
+                results.append(LifecycleJobResult(
+                    label: job.label,
+                    state: .failed,
+                    detail: "The system service plist has an unreadable or mismatched Label; no administrator command was requested."
+                ))
+                continue
+            }
+
             let result = await requestAdminBootstrap(for: job, runtime: runtime)
             guard result.succeeded else {
                 results.append(LifecycleJobResult(
                     label: job.label,
                     state: .failed,
-                    detail: commandFailure(result, fallback: "Administrator approval or bootstrap failed.")
+                    detail: administratorBootstrapFailure(result)
                 ))
                 continue
             }
@@ -570,12 +544,29 @@ enum ProcessLifecycleController {
         let target = "gui/\(runtime.userID)/\(job.label)"
         let deadline = runtime.systemUptime() + systemDaemonReadinessTimeout
         let attempts = Int(systemDaemonReadinessTimeout / 0.5)
+        var requestedStart = loaded.didChangeState
         for attempt in 0...attempts {
             let remaining = deadline - runtime.systemUptime()
             guard remaining > 0, !Task.isCancelled else { break }
             let inspection = await runtime.runCommand(
                 "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))", min(remaining, 15)
             )
+            // A loaded job whose complete listing shows no pid is idle (for
+            // example after PanGPS exited 0). Start it once. A plain kickstart,
+            // unlike `kickstart -k`, never restarts a running job.
+            if !requestedStart, inspection.succeeded, LaunchctlJobListing.hasNoRunningPID(inspection.stdout) {
+                requestedStart = true
+                let start = await runtime.runCommand(
+                    "/bin/launchctl kickstart \(ShellCommandRunner.shellQuoted(target))", min(remaining, 15)
+                )
+                guard start.succeeded else {
+                    let reason = commandFailure(start, fallback: start.failureDescription)
+                    return LifecycleBatchResult(jobs: [LifecycleJobResult(
+                        label: job.label, state: .failed,
+                        detail: "Could not start the idle login-session VPN service (\(reason.hasSuffix(".") ? String(reason.dropLast()) : reason)). Choose Quit All, then Open to retry."
+                    )])
+                }
+            }
             if let pid = launchJobPID(from: inspection),
                case .success(let inventory) = await runtime.loadProcessInventory(),
                let process = inventory.first(where: { $0.pid == pid }),
@@ -598,7 +589,7 @@ enum ProcessLifecycleController {
         }
         return LifecycleBatchResult(jobs: [LifecycleJobResult(
             label: job.label, state: .failed,
-            detail: "The login-session VPN service was loaded, but a matching PanGPS process could not be verified. No separate system daemon was started."
+            detail: "The login-session VPN service was loaded, but a matching PanGPS process could not be verified. No separate system daemon was started. Choose Quit All, then Open to retry."
         )])
     }
 
@@ -622,24 +613,32 @@ enum ProcessLifecycleController {
     static func openAppBundle(
         at path: String,
         runtime: ProcessLifecycleRuntime = .live
-    ) async -> Bool {
-        guard runtime.fileExists(path) else { return false }
+    ) async -> AppBundleOpenResult {
+        guard runtime.fileExists(path) else { return .failed("The app bundle is missing.") }
         let result = await runtime.runCommand(
             "/usr/bin/open \(ShellCommandRunner.shellQuoted(path))",
             15
         )
-        return result.succeeded
+        if result.succeeded { return .opened }
+        let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .failed(result.exitCode == ShellCommandRunner.timedOutExitCode
+            ? "The launch request timed out." : (detail.isEmpty ? result.failureDescription : detail))
     }
 
     private static func inspectLaunchJob(
         _ target: String,
+        label: String,
         runtime: ProcessLifecycleRuntime
-    ) async -> (inspection: LaunchJobInspection, pid: Int32?) {
+    ) async -> (inspection: LaunchJobInspection, pid: Int32?, hasNoRunningPID: Bool) {
         let result = await runtime.runCommand(
             "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))",
             15
         )
-        return (launchJobInspection(from: result), launchJobPID(from: result))
+        return (
+            launchJobInspection(from: result, label: label),
+            launchJobPID(from: result),
+            result.succeeded && LaunchctlJobListing.hasNoRunningPID(result.stdout)
+        )
     }
 
     /// bootout can return before removal finishes, including a nonzero answer
@@ -648,6 +647,7 @@ enum ProcessLifecycleController {
     /// definitive refusal needs only one inspection, not a disappearance wait.
     private static func inspectAfterBootout(
         _ target: String,
+        label: String,
         commandResult: ShellCommandResult,
         runtime: ProcessLifecycleRuntime
     ) async -> LaunchJobInspection {
@@ -661,32 +661,20 @@ enum ProcessLifecycleController {
             || detail.isEmpty
         let attempts = shouldWait ? Int(launchAgentBootoutTimeout / 0.5) : 0
         for attempt in 0...attempts {
-            let state = await inspectLaunchJob(target, runtime: runtime).inspection
+            let state = await inspectLaunchJob(target, label: label, runtime: runtime).inspection
             guard state == .loaded, attempt < attempts else { return state }
             await runtime.sleep(500_000_000)
         }
         return .loaded
     }
 
-    static func launchJobInspection(from result: ShellCommandResult) -> LaunchJobInspection {
-        if result.succeeded {
-            return .loaded
-        }
-
-        let detail = [result.stderr, result.stdout]
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalized = detail.lowercased()
-        // Only launchd's own "service not found" answer confirms absence. A bare
-        // exit 113, a timeout, or a signal says nothing about the job and must
-        // not let a stop report "already unloaded".
-        if result.terminatedBySignal == nil,
-           result.exitCode != ShellCommandRunner.timedOutExitCode,
-           normalized.contains("could not find service")
-            || normalized.contains("service not found")
-            || normalized.contains("no such process") {
-            return .notLoaded
-        }
+    /// Only launchd's own answer for this label confirms absence. Any other
+    /// failure, a timeout, or a signal says nothing about the job and must not
+    /// let a stop report "already unloaded".
+    static func launchJobInspection(from result: ShellCommandResult, label: String) -> LaunchJobInspection {
+        if result.succeeded { return .loaded }
+        if LaunchctlJobListing.confirmsAbsence(result, label: label) { return .notLoaded }
+        let detail = [result.stderr, result.stdout].joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         return .failed(detail.isEmpty ? "launchctl \(result.failureDescription)." : detail)
     }
 
@@ -701,7 +689,7 @@ enum ProcessLifecycleController {
             "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))",
             timeout
         )
-        switch launchJobInspection(from: inspection) {
+        switch launchJobInspection(from: inspection, label: job.label) {
         case .notLoaded:
             return .notLoaded
         case .failed(let detail):
@@ -710,9 +698,17 @@ enum ProcessLifecycleController {
             break
         }
 
+        // Like the session service and the service observation, bind PanGPS to
+        // launchd's pid, a root owner, and a kernel path in the product.
         guard let jobPID = launchJobPID(from: inspection),
               case .success(let inventory) = await runtime.loadProcessInventory(),
-              inventory.contains(where: { $0.pid == jobPID && $0.name == job.processName }),
+              var process = inventory.first(where: { $0.pid == jobPID && $0.name == job.processName }),
+              process.uid == 0,
+              let path = runtime.executablePathForPID(jobPID) else {
+            return .loadedButNotReady
+        }
+        process.executablePath = path
+        guard GlobalProtectCompatibilityChecker.trustedName(process) == .panGPS,
               runtime.systemUptime() <= deadline, !Task.isCancelled else {
             return .loadedButNotReady
         }
@@ -766,11 +762,31 @@ enum ProcessLifecycleController {
         runtime: ProcessLifecycleRuntime
     ) async -> ShellCommandResult {
         let rootCommand = adminBootstrapScript(for: job)
-        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(rootCommand)) with administrator privileges"
+        // The prompt names who asks and why; the dialog otherwise shows only
+        // the stock "osascript wants to make changes" text.
+        let prompt = "TaskScope needs administrator approval to start the GlobalProtect system VPN service (\(job.label))."
+        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(rootCommand))"
+            + " with administrator privileges with prompt \(ShellCommandRunner.appleScriptString(prompt))"
         return await runtime.runCommand(
             "/usr/bin/osascript -e \(ShellCommandRunner.shellQuoted(appleScript))",
             60
         )
+    }
+
+    /// Names a refused approval plainly instead of showing osascript's raw
+    /// error text. A timeout says nothing about whether root ran the script.
+    private static func administratorBootstrapFailure(_ result: ShellCommandResult) -> String {
+        if result.exitCode == ShellCommandRunner.timedOutExitCode {
+            return "The administrator request was not completed within 60 seconds; approval may not have been given."
+        }
+        if let error = AdministratorStopOutcome.appleScriptError(in: result.stderr) {
+            switch error.number {
+            case -128, -60006: return "Administrator approval was cancelled; nothing was started."
+            case -60005, -60007: return "Administrator approval was denied or could not be requested (AppleScript error \(error.number))."
+            default: break
+            }
+        }
+        return commandFailure(result, fallback: "Administrator approval or bootstrap failed.")
     }
 
     private static func commandFailure(_ result: ShellCommandResult, fallback: String) -> String {

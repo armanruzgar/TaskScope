@@ -947,10 +947,10 @@ final class Batch07GuardTests: XCTestCase {
 
     // T04-12 (3): launchd's own PID is never taken for a job's PID.
     func testLaunchdPIDOneIsNeverAJobPID() {
-        XCTAssertNil(GlobalProtectCompatibilityChecker.topLevelPID("system/com.paloaltonetworks.gp.pangpsd = {\n pid = 1\n}"))
-        XCTAssertEqual(GlobalProtectCompatibilityChecker.topLevelPID("system/com.paloaltonetworks.gp.pangpsd = {\n pid = 2\n}"), 2)
+        XCTAssertNil(GlobalProtectCompatibilityChecker.topLevelPID("system/com.paloaltonetworks.gp.pangpsd = {\n\tpid = 1\n}"))
+        XCTAssertEqual(GlobalProtectCompatibilityChecker.topLevelPID("system/com.paloaltonetworks.gp.pangpsd = {\n\tpid = 2\n}"), 2)
         XCTAssertNil(ProcessLifecycleController.launchJobPID(from: ShellCommandResult(
-            command: "fixture", stdout: "gui/501/com.example.agent = {\n pid = 1\n}", stderr: "", exitCode: 0
+            command: "fixture", stdout: "gui/501/com.example.agent = {\n\tpid = 1\n}", stderr: "", exitCode: 0
         )))
     }
 }
@@ -990,7 +990,7 @@ private final class Batch07RecordingLifecycle: ProcessLifecycleServicing, @unche
     }
 
     func appBundleExists(at path: String) -> Bool { record("appBundleExists"); return true }
-    func openAppBundle(at path: String) async -> Bool { record("openAppBundle"); return true }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { record("openAppBundle"); return .opened }
     func settleAfterProcessChange() async { record("settle") }
     func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
         record("terminateMainProcess")
@@ -1005,6 +1005,12 @@ private final class Batch07RecordingLifecycle: ProcessLifecycleServicing, @unche
     func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("unloadUserLaunchAgents"); return .notNeeded }
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("bootstrapUserLaunchAgents"); return .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("ensureSystemLaunchDaemons"); return .notNeeded }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { record("unloadUserLaunchAgents"); return .notNeeded }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { record("disableUserLaunchAgents"); return .notNeeded }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enableUserLaunchAgents"); return .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { record("disableSystemLaunchDaemons"); return .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enableSystemLaunchDaemons"); return .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { record("waitForMainProcess"); return true }
 }
 
 /// Never touches the vendor interface. The first read can be held open so a
@@ -1062,9 +1068,9 @@ private final class Batch07DisconnectRuntime: GlobalProtectDisconnectRuntime, @u
         continuation?.resume(returning: firstState)
     }
 
-    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> Bool {
+    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectDisconnectPressResult {
         lock.withLock { presses += 1 }
-        return true
+        return .pressed
     }
 
     func waitForNextObservation(deadline: GlobalProtectDisconnectDeadline) async {}

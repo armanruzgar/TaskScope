@@ -31,7 +31,7 @@ final class AdminBootstrapShellSyntaxTests: XCTestCase {
             Self.unAppleScriptString(
                 between: "do shell script ",
                 and: " with administrator privileges",
-                in: appleScript
+                in: String(appleScript.components(separatedBy: " with prompt ")[0])
             ),
             "Could not recover the shell script from \(appleScript)"
         )
@@ -165,7 +165,7 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
             fileExists: { [self] path in
                 existingPaths.contains(path)
             },
-            launchAgentLabel: { _ in nil },
+            launchAgentLabel: { _ in "com.paloaltonetworks.gp.pangpsd" },
             runCommand: { [self] command, _ in
                 lock.withLock {
                     recordedCommands.append(command)
@@ -178,6 +178,9 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
                         )
                     }
                     var response = commandResults.removeFirst()
+                    if response.stderr == "Could not find service" {
+                        response.stderr = launchctlNotFoundMessage(command: command)
+                    }
                     response.command = command
                     return response
                 }

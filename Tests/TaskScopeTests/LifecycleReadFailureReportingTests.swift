@@ -4,7 +4,7 @@ import XCTest
 /// Regression coverage for P8 — a stop that signals nothing must not report
 /// success when its fresh inventory gate is unavailable.
 @MainActor
-final class P8SilentStopReportsSuccessTests: XCTestCase {
+final class LifecycleReadFailureReportingTests: XCTestCase {
 
     // MARK: - An unreadable process list fails closed
 
@@ -13,7 +13,7 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
         let preset = presetWithoutLaunchAgentJobs()
         let manager = makeManager(
             inventory: P8QueuedInventory(results: [.failure(.commandFailed("ps timed out"))]),
-            lifecycle: P8RealControllerLifecycleService(runtime: harness.runtime)
+            lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.watchedAppsProvider = { [preset] }
 
@@ -29,15 +29,12 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
         XCTAssertEqual(manager.processLoadError, "ps timed out")
 
         // The failure must not be converted into a successful "nothing to do."
-        XCTAssertNotEqual(
-            result.status,
-            .completed,
-            "process list was unreadable and nothing was signalled, but the stop reports success: \(result.message)"
-        )
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.message, "Could not read the process list; Example was not stopped.")
         XCTAssertNotEqual(result.message, "No watched app or user helpers found.")
     }
 
-    // MARK: - P8 proof: stale snapshot from a successful refresh that predates the failure
+    // MARK: - A stale snapshot does not bypass the fresh inventory gate
 
     func testStopFailsWhenStaleSnapshotPredatesTheReadFailure() async {
         let harness = P8LifecycleRuntimeHarness(inventoryResult: .failure(.commandFailed("ps timed out")))
@@ -49,7 +46,7 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
                 // Everything afterwards fails, while the app has since been launched.
                 .failure(.commandFailed("ps timed out"))
             ]),
-            lifecycle: P8RealControllerLifecycleService(runtime: harness.runtime)
+            lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.watchedAppsProvider = { [preset] }
 
@@ -59,11 +56,8 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
 
         let result = await manager.quitAllKillable(preset)
 
-        XCTAssertNotEqual(
-            result.status,
-            .completed,
-            "stop ran against a stale snapshot and an unreadable process list, but reports: \(result.message)"
-        )
+        XCTAssertEqual(result.status, .failed)
+        XCTAssertEqual(result.message, "Could not read the process list; Example was not stopped.")
     }
 
     // MARK: - Adversarial control: stale running state still yields an explicit read failure
@@ -76,7 +70,7 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
                 .success([process(pid: 42, name: "Example")]),
                 .failure(.commandFailed("ps timed out"))
             ]),
-            lifecycle: P8RealControllerLifecycleService(runtime: harness.runtime)
+            lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.watchedAppsProvider = { [preset] }
 
@@ -141,66 +135,6 @@ final class P8SilentStopReportsSuccessTests: XCTestCase {
     }
 }
 
-// MARK: - Real controller behind the ProcessManager seam
-
-private struct P8RealControllerLifecycleService: ProcessLifecycleServicing {
-    let runtime: ProcessLifecycleRuntime
-
-    func appBundleExists(at path: String) -> Bool {
-        runtime.fileExists(path)
-    }
-
-    func settleAfterProcessChange() async {
-        await ProcessLifecycleController.settleAfterProcessChange(runtime: runtime)
-    }
-
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await ProcessLifecycleController.terminateProcess(
-            named: preset.mainProcessName,
-            forceIfStillRunning: true,
-            expectedExecutableDirectory: preset.mainExecutableDirectory,
-            runtime: runtime
-        )
-    }
-
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await ProcessLifecycleController.terminateProcess(
-            named: name,
-            forceIfStillRunning: true,
-            expectedExecutableDirectory: preset.bundleContentsDirectory,
-            runtime: runtime
-        )
-    }
-
-    func isProcessNamedRunning(_ name: String) async -> Bool {
-        await ProcessLifecycleController.isProcessNamedRunning(name, runtime: runtime)
-    }
-
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.unloadUserLaunchAgents(for: preset, runtime: runtime)
-    }
-
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.bootstrapUserLaunchAgents(for: preset, runtime: runtime)
-    }
-
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.ensureSystemLaunchDaemons(for: preset, runtime: runtime)
-    }
-
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool {
-        await ProcessLifecycleController.waitForProcessNamed(
-            name,
-            timeoutSeconds: timeoutSeconds,
-            runtime: runtime
-        )
-    }
-
-    func openAppBundle(at path: String) async -> Bool {
-        await ProcessLifecycleController.openAppBundle(at: path, runtime: runtime)
-    }
-}
-
 // MARK: - Fakes (same shape as ProcessLifecycleMatchingTests.LifecycleRuntimeHarness)
 
 private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
@@ -233,6 +167,10 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
                 lock.withLock { recordedInventoryLoads += 1 }
                 return inventoryResult
             },
+            // Never the live defaults: these stops must not reach a real process.
+            executablePathForPID: { _ in nil },
+            sendSignal: { _, _ in XCTFail("No stop signal may be sent"); return false },
+            isProcessAlive: { _ in false },
             sleep: { [self] duration in
                 lock.withLock {
                     recordedSleepDurations.append(duration)

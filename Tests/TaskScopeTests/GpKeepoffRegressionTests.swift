@@ -8,6 +8,8 @@ import XCTest
 final class GpKeepoffRegressionTests: XCTestCase {
     func testRecoveryCardDisablesEveryIntentWriterAndExplainsWhy() throws {
         let card = makeCard(enabled: false, recovery: {})
+        XCTAssertTrue(try card.inspect().find(ViewType.Toggle.self).isDisabled())
+        XCTAssertFalse(try makeCard(enabled: true).inspect().find(ViewType.Toggle.self).isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Quit All").isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Apply Keep Off…").isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Stop Services Anyway…").isDisabled())
@@ -324,7 +326,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
             // Fixed job output is simulated, including another session's absent local jobs.
             let inspected: GlobalProtectCompatibilityReport.Service = command.contains("system/") ? .pangpsd : .pangps
             if inspected == service {
-                return ShellCommandResult(command: command, stdout: "job = {\n pid = 4242\n}", stderr: "", exitCode: 0)
+                return ShellCommandResult(command: command, stdout: "job = {\n\tpid = 4242\n}", stderr: "", exitCode: 0)
             }
             return ShellCommandResult(command: command, stdout: "", stderr: "Could not find service \"\(inspected.label)\" in domain", exitCode: 113)
         }, loadProcessInventory: { .success(processes) }, executablePathForPID: {
@@ -364,7 +366,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
                 return ShellCommandResult(command: command, stdout: "disabled services = {\n}", stderr: "", exitCode: 0)
             }
             if command.hasPrefix("/bin/launchctl print ") {
-                return ShellCommandResult(command: command, stdout: unknown ? "" : "system/com.paloaltonetworks.gp.pangpsd = {\n state = running\n pid = 4242\n}",
+                return ShellCommandResult(command: command, stdout: unknown ? "" : "system/com.paloaltonetworks.gp.pangpsd = {\n state = running\n\tpid = 4242\n}",
                                           stderr: unknown ? "Access denied" : "", exitCode: unknown ? 1 : 0)
             }
             XCTFail("Unexpected fake command: \(command)")
@@ -415,7 +417,11 @@ private actor KeepOffLifecycle: ProcessLifecycleServicing {
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     nonisolated func appBundleExists(at path: String) -> Bool { false }
-    func openAppBundle(at path: String) async -> Bool { XCTFail("No launch is permitted"); return false }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { XCTFail("No launch is permitted"); return .failed("Fake launch failed.") }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
 private actor KeepOffPause {

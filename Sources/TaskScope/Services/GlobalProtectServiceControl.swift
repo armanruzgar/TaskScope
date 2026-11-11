@@ -20,7 +20,7 @@ struct GlobalProtectServiceObservation: Equatable, Sendable {
                 return .unknown
             case .loaded:
                 guard let pid = ProcessLifecycleController.launchJobPID(from: inspection) else {
-                    return hasNoRunningPID(inspection.stdout) ? .absent : .unknown
+                    return LaunchctlJobListing.hasNoRunningPID(inspection.stdout) ? .absent : .unknown
                 }
                 guard case .success(let inventory) = await runtime.loadProcessInventory(),
                       var process = inventory.first(where: { $0.pid == pid }),
@@ -33,35 +33,6 @@ struct GlobalProtectServiceObservation: Equatable, Sendable {
         let session = await state(for: .pangps)
         let system = await state(for: .pangpsd)
         return Self(session: session, system: system)
-    }
-
-    /// A complete job listing with state but no top-level PID describes a
-    /// loaded job without a running process. Empty, truncated, or malformed PID
-    /// output remains unknown rather than bypassing service attribution.
-    private static func hasNoRunningPID(_ output: String) -> Bool {
-        var depth = 0
-        var sawRoot = false
-        var sawState = false
-        for raw in output.split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if depth == 1 {
-                if line.hasPrefix("pid") { return false }
-                if line.hasPrefix("state = "), line.count > 8 { sawState = true }
-            }
-            if line.hasSuffix("{") {
-                if depth == 0 {
-                    guard !sawRoot, line.hasSuffix(" = {") else { return false }
-                    sawRoot = true
-                }
-                depth += 1
-            } else if line == "}" {
-                depth -= 1
-                if depth < 0 { return false }
-            } else if depth == 0, !line.isEmpty {
-                return false
-            }
-        }
-        return sawRoot && sawState && depth == 0
     }
 }
 
@@ -81,12 +52,20 @@ extension ProcessLifecycleController {
         }
         let sessionJob = WatchedAppPreset.globalProtectUserLaunchAgentJobs[1]
         let preservesLoadedDaemon = runtime.fileExists(sessionJob.plistPath)
-        if preservesLoadedDaemon {
+        let daemonInstalled = runtime.fileExists(job.plistPath)
+        if preservesLoadedDaemon || !daemonInstalled {
             let inspection = await runtime.runCommand(
                 "/bin/launchctl print \(ShellCommandRunner.shellQuoted("system/\(job.label)"))", 15
             )
-            guard GlobalProtectCompatibilityChecker.loadedState(inspection, service: .pangpsd) == .notLoaded else {
+            let notLoaded = GlobalProtectCompatibilityChecker.loadedState(inspection, service: .pangpsd) == .notLoaded
+            if preservesLoadedDaemon, !notLoaded {
                 return systemResult(job, .failed, "The system VPN service is loaded or its state is unknown. Its override and loaded state were preserved because this installation restores the login-session service. Keep Off is incomplete.")
+            }
+            // With no daemon plist installed and launchd confirming that nothing
+            // is loaded, there is nothing to disable. An override is still never
+            // written without a matching plist.
+            if !daemonInstalled, notLoaded {
+                return systemResult(job, .alreadyUnloaded, "No system VPN daemon is installed or loaded; nothing to disable. Reinstalling GlobalProtect can add it again.")
             }
         }
         guard allowAdministratorPrompt else {
@@ -99,7 +78,9 @@ extension ProcessLifecycleController {
             return systemResult(job, .failed, "The system service plist is missing or its label does not match. Nothing was disabled; restoration could not be guaranteed.")
         }
         let result = await requestAdminServiceChange(
-            adminDisableScript(for: job, preservingLoadedDaemon: preservesLoadedDaemon), runtime: runtime
+            adminDisableScript(for: job, preservingLoadedDaemon: preservesLoadedDaemon),
+            prompt: "TaskScope needs administrator approval to stop and disable the GlobalProtect system VPN service (\(job.label)). Open restores it.",
+            runtime: runtime
         )
         let retry = "Choose Open to restore GlobalProtect or Apply Keep Off to retry."
         let reason: String
@@ -113,6 +94,17 @@ extension ProcessLifecycleController {
             }
             let bootout = bootoutStatus.map { " launchctl bootout exited with status \($0)." } ?? ""
             return systemResult(job, .failed, "\(remaining)\(bootout) \(retry)")
+        case .timedOut:
+            // A late approval may already have run the disable step, and
+            // launchd may still be removing the job; then wait as for `.disabled`.
+            let timedOut = "The administrator request was not completed within 90 seconds; approval may not have been given."
+            if await systemDisabledState(job, runtime: runtime) == .disabled {
+                guard let remaining = await waitForSystemOff(job, runtime: runtime) else {
+                    return systemResult(job, .changed, "System VPN service disabled persistently and unloaded; verified after the administrator request timed out.")
+                }
+                return systemResult(job, .failed, "\(timedOut) \(remaining) \(retry)")
+            }
+            reason = timedOut
         case .cancelled:
             reason = "Administrator approval was cancelled; TaskScope made no change."
         case .denied(let code):
@@ -140,10 +132,14 @@ extension ProcessLifecycleController {
         /// launchd may still be removing the job, or may already have.
         case disabled(bootoutStatus: Int32?)
         case cancelled
+        case timedOut
         case denied(Int)
         case failed(String)
 
         init(_ result: ShellCommandResult) {
+            // The runner stopped osascript at its time limit. Whether root ran
+            // the script is unknown; launchd inspection decides.
+            if result.exitCode == ShellCommandRunner.timedOutExitCode { self = .timedOut; return }
             if result.stdout.contains(ProcessLifecycleController.systemDisablePhaseMarker) {
                 let status = result.stdout
                     .range(of: ProcessLifecycleController.systemBootoutStatusPrefix)
@@ -215,8 +211,19 @@ extension ProcessLifecycleController {
             return systemResult(job, .verified, "This installation uses the login-session VPN service. The separate system daemon remains disabled; no administrator approval is needed to restore the session service.")
         }
         let script = "/bin/launchctl enable \(ShellCommandRunner.shellQuoted("system/\(job.label)"))"
-        let result = await requestAdminServiceChange(script, runtime: runtime)
+        let result = await requestAdminServiceChange(
+            script,
+            prompt: "TaskScope needs administrator approval to re-enable the GlobalProtect system VPN service (\(job.label)). Nothing is started.",
+            runtime: runtime
+        )
         let after = await systemDisabledState(job, runtime: runtime)
+        if result.exitCode == ShellCommandRunner.timedOutExitCode {
+            // A late approval may still have cleared the override; launchd decides.
+            guard after == .enabled else {
+                return systemResult(job, .failed, "The administrator request was not completed within 90 seconds; approval may not have been given. Choose Open to retry.")
+            }
+            return systemResult(job, .changed, "Persistent system disable cleared and verified after the administrator request timed out; no process was started.")
+        }
         guard result.succeeded, after == .enabled else {
             return systemResult(job, .failed, "Could not verify that the system service was re-enabled. Administrator approval may have been cancelled or policy may have rejected the change. Choose Open to retry.")
         }
@@ -242,9 +249,12 @@ extension ProcessLifecycleController {
     }
 
     private static func requestAdminServiceChange(
-        _ script: String, runtime: ProcessLifecycleRuntime
+        _ script: String, prompt: String, runtime: ProcessLifecycleRuntime
     ) async -> ShellCommandResult {
-        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(script)) with administrator privileges"
+        // The prompt names who asks and why; the dialog otherwise shows only
+        // the stock "osascript wants to make changes" text.
+        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(script))"
+            + " with administrator privileges with prompt \(ShellCommandRunner.appleScriptString(prompt))"
         // The daemon declares ExitTimeOut=20; allow time for authorization plus
         // launchd's graceful shutdown. No direct signal is sent to PanGPS.
         return await runtime.runCommand(

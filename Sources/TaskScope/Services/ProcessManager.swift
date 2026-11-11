@@ -540,14 +540,10 @@ final class ProcessManager: ObservableObject {
             }
             let alreadyRunning = afterServices.isMainRunning
 
-            let didOpen: Bool
-            if alreadyRunning {
-                didOpen = true
-            } else {
-                didOpen = await lifecycle.openAppBundle(at: preset.appPath)
-            }
-            guard didOpen else {
-                message = "Could not open \(preset.displayName)."
+            let openResult: AppBundleOpenResult = alreadyRunning ? .opened : await lifecycle.openAppBundle(at: preset.appPath)
+            if case .failed(let detail) = openResult {
+                let reason = detail.hasSuffix(".") ? String(detail.dropLast()) : detail
+                message = "Could not open \(preset.displayName): \(reason)."
                 diagnosticReason = .launchFailed
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
                 return
@@ -809,7 +805,7 @@ final class ProcessManager: ObservableObject {
                         || (serviceObservation == nil && nowSnapshot.hasCurrentUserLaunchAgent)) {
                     resultMessage = "Keep Off disabled relaunch jobs. The running login-session VPN service was preserved; choose Apply Keep Off for a confirmed disconnect and stop."
                 } else if preset.hasCanonicalGlobalProtectIdentity {
-                    resultMessage = "GlobalProtect is off. Its user agents and system VPN service are disabled. Choose Open to restore them without reinstalling."
+                    resultMessage = "GlobalProtect is off. Its user agents are disabled; the system VPN service is disabled or not installed. Choose Open to restore them without reinstalling."
                 } else if !nowSnapshot.protectedRunning.isEmpty {
                     resultMessage = "\(preset.displayName) app is kept off. Protected system service remains available."
                 } else if !nowSnapshot.unprivilegedProtectedRunning.isEmpty {

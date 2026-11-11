@@ -273,9 +273,9 @@ private struct FakeLifecycle: ProcessLifecycleServicing {
     }
     func isProcessNamedRunning(_ name: String) async -> Bool { false }
     func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> Bool {
+    func openAppBundle(at path: String) async -> AppBundleOpenResult {
         await calls.record("open")
-        return true
+        return .opened
     }
     func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
         await onUnload()
@@ -292,6 +292,10 @@ private struct FakeLifecycle: ProcessLifecycleServicing {
         guard let enableRuntime else { return .notNeeded }
         return await ProcessLifecycleController.enableUserLaunchAgents(for: preset, runtime: enableRuntime)
     }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
 private actor Inventory: ProcessInventoryProviding {
@@ -348,7 +352,7 @@ private final class CommandRuntime: @unchecked Sendable {
                 if bootoutFailure { error = "Operation now in progress"; code = 36 }
             } else if command.contains(" print ") {
                 if bootoutRequested && delayedReads == 0 {
-                    error = "Could not find service"; code = 113
+                    error = launchctlNotFoundMessage(command: command); code = 113
                 } else {
                     output = launchctlPrintOutput(pid: 42)
                     if bootoutRequested { delayedReads -= 1 }

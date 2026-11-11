@@ -25,6 +25,7 @@ struct GlobalProtectCompatibilityRuntime: Sendable {
     var runProbe: @Sendable (Probe) async -> ShellCommandResult
     var loadInventory: @Sendable () async -> Result<[AppProcess], ProcessInventoryError>
     var versions: @Sendable () -> (taskScope: String?, taskScopeBuild: String?, globalProtect: String?, globalProtectBuild: String?)
+    var executablePathForPID: @Sendable (Int32) -> String? = { _ in nil }
     var now: @Sendable () -> Date = { Date() }
 
     static let live = Self(
@@ -54,7 +55,8 @@ struct GlobalProtectCompatibilityRuntime: Sendable {
                 gp?["CFBundleShortVersionString"] as? String,
                 gp?["CFBundleVersion"] as? String
             )
-        }
+        },
+        executablePathForPID: { ProcessListReader.executablePath(for: $0) }
     )
 
     static func taskScopeVersionMetadata(_ info: [String: Any]?) -> (version: String?, build: String?) {
@@ -97,6 +99,7 @@ struct GlobalProtectCompatibilityChecker: Sendable {
         var counts = Report.ProcessName.allCases.map { Report.ProcessCounts(name: $0) }
         var inventoryFailure: Report.UnknownReason?
         var systemProcessVerified = false
+        var sessionProcessVerified = false
         switch inventory {
         case .failure(let error):
             inventoryFailure = error == .cancelled ? .cancelled : .unavailable
@@ -112,6 +115,15 @@ struct GlobalProtectCompatibilityChecker: Sendable {
                 if uid == 0 { counts[index].root += 1 }
                 else if uid == runtime.userID { counts[index].currentUser += 1 }
                 else { counts[index].otherUser += 1 }
+            }
+            let sessionResult = results[.service(.pangps)]!
+            if Self.loadedState(sessionResult, service: .pangps) == .loaded,
+               let pid = Self.topLevelPID(sessionResult.stdout),
+               var process = processes.first(where: { $0.pid == pid }),
+               process.uid == 0 || process.uid == runtime.userID,
+               let path = runtime.executablePathForPID(pid) {
+                process.executablePath = path
+                sessionProcessVerified = Self.trustedName(process) == .panGPS
             }
             let systemResult = results[.service(.pangpsd)]!
             if Self.loadedState(systemResult, service: .pangpsd) == .loaded,
@@ -141,7 +153,8 @@ struct GlobalProtectCompatibilityChecker: Sendable {
             jobs: jobs,
             processes: counts,
             inventoryFailure: inventoryFailure,
-            systemProcessVerified: systemProcessVerified
+            systemProcessVerified: systemProcessVerified,
+            sessionProcessVerified: sessionProcessVerified
         )
     }
 
@@ -149,7 +162,7 @@ struct GlobalProtectCompatibilityChecker: Sendable {
         guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil),
               let dictionary = plist as? [String: Any],
               let label = dictionary["Label"] as? String else { return .unreadable }
-        guard label == service.label else { return .labelMismatch }
+        guard LaunchctlJobListing.normalizedLabel(label) == service.label else { return .labelMismatch }
         if let value = dictionary["Disabled"] {
             guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
                 return .unreadable
@@ -183,28 +196,14 @@ struct GlobalProtectCompatibilityChecker: Sendable {
         if result.succeeded { return .loaded }
         // A missing GUI domain, denied read, signal, or arbitrary exit 113 must
         // not be mistaken for a confirmed absent service.
-        let detail = result.stdout + "\n" + result.stderr
-        if result.terminatedBySignal == nil, result.exitCode == 113,
-           detail.contains("Could not find service \"\(service.label)\" in domain") {
+        if LaunchctlJobListing.confirmsAbsence(result, label: service.label) {
             return .notLoaded
         }
         return .unknown(failureReason(result))
     }
 
     static func topLevelPID(_ output: String) -> Int32? {
-        var depth = 0
-        var pid: Int32?
-        for raw in output.split(separator: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if depth == 1, line.hasPrefix("pid = ") {
-                guard pid == nil, let value = Int32(line.dropFirst(6)), value > 1 else { return nil }
-                pid = value
-            }
-            if line.hasSuffix("{") { depth += 1 }
-            if line == "}" { depth -= 1 }
-            if depth < 0 { return nil }
-        }
-        return depth == 0 ? pid : nil
+        LaunchctlJobListing.pid(output)
     }
 
     static func trustedName(_ process: AppProcess) -> Report.ProcessName? {

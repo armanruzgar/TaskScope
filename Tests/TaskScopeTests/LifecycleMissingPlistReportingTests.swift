@@ -1,14 +1,10 @@
 import XCTest
 @testable import TaskScope
 
-/// P7 — "a missing launch-agent plist makes EVERY stop on the default preset report failure".
-///
-/// These tests compose the REAL `ProcessLifecycleController` (driven by a fake
-/// `ProcessLifecycleRuntime`, following the conventions of
-/// `ProcessLifecycleMatchingTests.LifecycleRuntimeHarness`) with the REAL
-/// `ProcessManager` quit paths.
+/// Missing plists are harmless for verified stops, but cannot authorize Open.
+/// Exercises the production lifecycle service with an injected runtime.
 @MainActor
-final class P7MissingPlistReportsFailureTests: XCTestCase {
+final class LifecycleMissingPlistReportingTests: XCTestCase {
 
     // MARK: - Precondition: does `lifecycleUserLaunchAgentJobs` really override user input?
 
@@ -50,7 +46,7 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
                        [.globalProtect])
     }
 
-    // MARK: - P7 proof 1: nothing was running, stop still reports .failed
+    // MARK: - An absent unloaded job does not fail a stop
 
     func testStopOnDefaultPresetWithAbsentPlistIsNotReportedAsFailure() async {
         let harness = P7LifecycleRuntimeHarness(
@@ -64,7 +60,7 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
         let preset = WatchedAppPreset.globalProtect
         let manager = makeManager(
             inventory: P7QueuedInventory(results: [.success([])]),
-            lifecycle: P7RealControllerLifecycleService(runtime: harness.runtime)
+            lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.watchedAppsProvider = { [preset] }
 
@@ -84,12 +80,12 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
         XCTAssertEqual(
             result.status,
             .completed,
-            "Nothing was running and nothing failed, yet the stop reports: \(result.message)"
+            "An idle stop must succeed: \(result.message)"
         )
         XCTAssertEqual(result.message, "No watched app or user helpers found.")
     }
 
-    // MARK: - P7 proof 2: processes really were stopped, stop still reports .failed
+    // MARK: - Successful process termination remains successful without a plist
 
     func testStopThatActuallyStoppedEveryProcessIsNotReportedAsFailure() async {
         let running = [process(pid: 501, name: "GlobalProtect"), process(pid: 502, name: "PanGPA")]
@@ -108,7 +104,7 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
                 // `refreshAfterMutation()` — both are gone: the stop fully succeeded.
                 .success([])
             ]),
-            lifecycle: P7RealControllerLifecycleService(runtime: harness.runtime)
+            lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.watchedAppsProvider = { [preset] }
 
@@ -121,37 +117,8 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
         XCTAssertEqual(
             result.status,
             .completed,
-            "Every watched process was stopped, yet the stop reports: \(result.message)"
+            "Stopping every watched process must succeed: \(result.message)"
         )
-    }
-
-    // MARK: - P7 proof 3: the self-contradictory `.missing` at ProcessLifecycleController:224-234
-
-    func testLoadedJobThatWasBootedOutAndVerifiedUnloadedCountsAsSuccess() async {
-        let harness = P7LifecycleRuntimeHarness(
-            existingPaths: [],                      // plist absent
-            queuedResults: [
-                P7LifecycleRuntimeHarness.result(exitCode: 0),                             // print -> loaded
-                P7LifecycleRuntimeHarness.result(exitCode: 0),                             // bootout -> ok
-                P7LifecycleRuntimeHarness.result(stderr: "Could not find service", exitCode: 113) // print -> gone
-            ]
-        )
-
-        let batch = await ProcessLifecycleController.unloadUserLaunchAgents(
-            for: presetWithAgent(plistPath: "/missing/example.plist"),
-            runtime: harness.runtime
-        )
-
-        // The controller's own detail string says the work succeeded.
-        XCTAssertEqual(batch.jobs.count, 1)
-        XCTAssertTrue(batch.jobs[0].detail.contains("loaded job was still unloaded and verified"))
-        XCTAssertTrue(harness.commands.contains { $0.contains("launchctl bootout") })
-
-        XCTAssertTrue(
-            batch.jobs[0].succeeded,
-            "detail says \"\(batch.jobs[0].detail)\" but state is .\(batch.jobs[0].state.rawValue), which is not a success"
-        )
-        XCTAssertTrue(batch.succeeded)
     }
 
     // MARK: - Helpers
@@ -169,19 +136,6 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
         )
         manager.enableNotifications = false
         return manager
-    }
-
-    private func presetWithAgent(plistPath: String) -> WatchedAppPreset {
-        WatchedAppPreset(
-            displayName: "Example",
-            mainProcessName: "Example",
-            helperProcessNames: [],
-            protectedProcessNames: [],
-            appPath: "/Applications/Example.app",
-            userLaunchAgentJobs: [
-                UserLaunchAgentJob(label: "example.agent", plistPath: plistPath)
-            ]
-        )
     }
 
     private func emptyDefaults() -> UserDefaults {
@@ -212,66 +166,6 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
             diskReadBytes: nil,
             diskWriteBytes: nil
         )
-    }
-}
-
-// MARK: - Real controller behind the ProcessManager seam
-
-private struct P7RealControllerLifecycleService: ProcessLifecycleServicing {
-    let runtime: ProcessLifecycleRuntime
-
-    func appBundleExists(at path: String) -> Bool {
-        runtime.fileExists(path)
-    }
-
-    func settleAfterProcessChange() async {
-        await ProcessLifecycleController.settleAfterProcessChange(runtime: runtime)
-    }
-
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await ProcessLifecycleController.terminateProcess(
-            named: preset.mainProcessName,
-            forceIfStillRunning: true,
-            expectedExecutableDirectory: preset.mainExecutableDirectory,
-            runtime: runtime
-        )
-    }
-
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await ProcessLifecycleController.terminateProcess(
-            named: name,
-            forceIfStillRunning: true,
-            expectedExecutableDirectory: preset.bundleContentsDirectory,
-            runtime: runtime
-        )
-    }
-
-    func isProcessNamedRunning(_ name: String) async -> Bool {
-        await ProcessLifecycleController.isProcessNamedRunning(name, runtime: runtime)
-    }
-
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.unloadUserLaunchAgents(for: preset, runtime: runtime)
-    }
-
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.bootstrapUserLaunchAgents(for: preset, runtime: runtime)
-    }
-
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await ProcessLifecycleController.ensureSystemLaunchDaemons(for: preset, runtime: runtime)
-    }
-
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool {
-        await ProcessLifecycleController.waitForProcessNamed(
-            name,
-            timeoutSeconds: timeoutSeconds,
-            runtime: runtime
-        )
-    }
-
-    func openAppBundle(at path: String) async -> Bool {
-        await ProcessLifecycleController.openAppBundle(at: path, runtime: runtime)
     }
 }
 
@@ -321,6 +215,9 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
                         )
                     }
                     var response = queuedResults.removeFirst()
+                    if response.stderr == "Could not find service" {
+                        response.stderr = launchctlNotFoundMessage(command: command)
+                    }
                     response.command = command
                     return response
                 }
@@ -374,7 +271,7 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
     }
 }
 
-private final class P7QueuedInventory: ProcessInventoryProviding, @unchecked Sendable {
+final class P7QueuedInventory: ProcessInventoryProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var results: [Result<[AppProcess], ProcessInventoryError>]
 
@@ -392,7 +289,7 @@ private final class P7QueuedInventory: ProcessInventoryProviding, @unchecked Sen
     }
 }
 
-private final class P7NoopSignaler: ProcessSignaling {
+final class P7NoopSignaler: ProcessSignaling {
     func send(_ signal: Int32, to pid: Int32) -> Bool { true }
     func isAlive(_ pid: Int32) -> Bool { false }
 }

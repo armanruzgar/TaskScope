@@ -49,7 +49,6 @@ struct SystemLaunchDaemonJob: Codable, Equatable, Hashable, Sendable {
     var label: String
     var plistPath: String
     var processName: String
-    var servicePort: Int?
 }
 
 struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -256,8 +255,7 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
         SystemLaunchDaemonJob(
             label: "com.paloaltonetworks.gp.pangpsd",
             plistPath: "/Library/LaunchDaemons/com.paloaltonetworks.gp.pangpsd.plist",
-            processName: "PanGPS",
-            servicePort: 4767
+            processName: "PanGPS"
         )
     ]
 }

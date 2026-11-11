@@ -93,31 +93,39 @@ enum PresetStopScope {
             return .failed(message, reason: .verificationUnavailable)
         }
 
+        func completed(_ message: String) -> PresetStopResult {
+            let vpnRemains = before.preset.hasSupportedGlobalProtectIdentity
+                && (!after.protectedRunning.isEmpty || !after.unprivilegedProtectedRunning.isEmpty)
+            return .completed(message + (vpnRemains
+                ? " Its VPN service (PanGPS) is still running and the VPN was not disconnected; use Quit All in TaskScope to disconnect and stop it."
+                : ""))
+        }
+
         switch self {
         case .app:
             if !before.isMainRunning && !after.isMainRunning {
-                return .completed("No \(name) app found.")
+                return completed(agents.didChangeState ? "No \(name) app was running; launch agents unloaded." : "No \(name) app found.")
             }
             if after.isMainRunning {
                 return .failed("\(name) may still run.", reason: .stillRunning)
             }
-            return .completed(agents.didChangeState
+            return completed(agents.didChangeState
                 ? "\(name) quit and launch agents unloaded."
                 : "\(name) quit.")
         case .helpers:
             if before.helpersRunning.isEmpty && after.helpersRunning.isEmpty {
-                return .completed("No user helpers found.")
+                return completed(agents.didChangeState ? "No user helpers were running; launch agents unloaded." : "No user helpers found.")
             }
             if !after.helpersRunning.isEmpty {
                 return .failed("User helpers may still run.", reason: .stillRunning)
             }
-            return .completed(agents.didChangeState
+            return completed(agents.didChangeState
                 ? "User helpers quit and launch agents unloaded."
                 : "User helpers quit.")
         case .all:
             if !before.isMainRunning && before.helpersRunning.isEmpty,
                !after.isMainRunning && after.helpersRunning.isEmpty {
-                return .completed("No watched app or user helpers found.")
+                return completed(agents.didChangeState ? "No watched app or user helpers were running; launch agents unloaded." : "No watched app or user helpers found.")
             }
             if after.isMainRunning {
                 return .failed("\(name) may still run.", reason: .stillRunning)
@@ -125,7 +133,7 @@ enum PresetStopScope {
             if !after.helpersRunning.isEmpty {
                 return .failed("User helpers may still run.", reason: .stillRunning)
             }
-            return .completed(agents.didChangeState
+            return completed(agents.didChangeState
                 ? "\(name) closed and launch agents unloaded."
                 : "\(name) and helpers quit.")
         }

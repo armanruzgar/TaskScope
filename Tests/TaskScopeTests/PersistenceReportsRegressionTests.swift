@@ -354,7 +354,7 @@ private struct ReportsSignaler: ProcessSignaling {
 
 private struct ReportsLifecycle: ProcessLifecycleServicing {
     func appBundleExists(at path: String) -> Bool { false }
-    func openAppBundle(at path: String) async -> Bool { XCTFail("Unexpected app launch"); return false }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { XCTFail("Unexpected app launch"); return .failed("Fake launch failed.") }
     func settleAfterProcessChange() async {}
     func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
     func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
@@ -364,4 +364,10 @@ private struct ReportsLifecycle: ProcessLifecycleServicing {
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult { .failed("private-fixture disconnect detail") }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

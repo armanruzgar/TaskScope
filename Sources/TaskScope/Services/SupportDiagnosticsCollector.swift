@@ -28,7 +28,7 @@ struct SupportDiagnosticsCollector {
                 if Task.isCancelled || result.terminatedBySignal != nil || result.exitCode < 0 {
                     state = .unknown
                 } else {
-                    switch ProcessLifecycleController.launchJobInspection(from: result) {
+                    switch ProcessLifecycleController.launchJobInspection(from: result, label: job.label) {
                     case .loaded: state = .loaded
                     case .notLoaded: state = .notLoaded
                     case .failed: state = .unknown

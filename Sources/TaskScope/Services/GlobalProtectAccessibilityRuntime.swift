@@ -76,9 +76,46 @@ enum GlobalProtectAccessibilityDisconnect {
     }
 }
 
+/// Thin queue-confined AX boundary. Tests supply in-memory elements while the
+/// adapter retains the same traversal, deadlines and identity checks.
+enum GlobalProtectAXValue {
+    case element(any GlobalProtectAXElement)
+    case elements([any GlobalProtectAXElement])
+    case string(String)
+    case boolean(Bool)
+}
+
+protocol GlobalProtectAXElement {
+    func copyAttribute(_ attribute: String) -> (AXError, GlobalProtectAXValue?)
+    func perform(_ action: String) -> AXError
+    func setFrontmost() -> AXError
+    func setMessagingTimeout(_ seconds: Float)
+}
+
+private struct SystemGlobalProtectAXElement: GlobalProtectAXElement {
+    let element: AXUIElement
+    func copyAttribute(_ attribute: String) -> (AXError, GlobalProtectAXValue?) {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard error == .success, let value else { return (error, nil) }
+        if CFGetTypeID(value) == AXUIElementGetTypeID() {
+            return (error, .element(Self(element: unsafeBitCast(value, to: AXUIElement.self))))
+        }
+        if let elements = value as? [AXUIElement] {
+            return (error, .elements(elements.map { Self(element: $0) }))
+        }
+        if let text = value as? String { return (error, .string(text)) }
+        if let boolean = value as? Bool { return (error, .boolean(boolean)) }
+        return (error, nil)
+    }
+    func perform(_ action: String) -> AXError { AXUIElementPerformAction(element, action as CFString) }
+    func setFrontmost() -> AXError { AXUIElementSetAttributeValue(element, kAXFrontmostAttribute as CFString, kCFBooleanTrue) }
+    func setMessagingTimeout(_ seconds: Float) { AXUIElementSetMessagingTimeout(element, seconds) }
+}
+
 /// AX elements never leave this worker's serial queue; slow vendor responses
 /// cannot block SwiftUI or reorder the lifecycle mutation gate.
-private final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRuntime, @unchecked Sendable {
+final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRuntime, @unchecked Sendable {
     private let queue = DispatchQueue(label: "TaskScope.GlobalProtectDisconnect", qos: .userInitiated)
     private let pid: Int32
     /// Set when an Accessibility request times out. Queue-confined. A hung
@@ -87,7 +124,19 @@ private final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRu
     private var isUnresponsive = false
     private var deadline = GlobalProtectDisconnectDeadline(timeLimit: 0)
 
-    init(pid: Int32) { self.pid = pid }
+    struct Environment: Sendable {
+        var executablePath: @Sendable (Int32) -> String? = { ProcessListReader.executablePath(for: $0) }
+        var application: @Sendable (Int32) -> any GlobalProtectAXElement = {
+            SystemGlobalProtectAXElement(element: AXUIElementCreateApplication($0))
+        }
+        var sleep: @Sendable (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
+    }
+    private let environment: Environment
+
+    init(pid: Int32, environment: Environment = Environment()) {
+        self.pid = pid
+        self.environment = environment
+    }
 
     func connectionState(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectConnectionState {
         await withCheckedContinuation { continuation in
@@ -115,32 +164,31 @@ private final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRu
                     // its controls were being read.
                     observation.status = string(item, kAXHelpAttribute)
                 }
-                continuation.resume(returning: isUnresponsive ? .unavailable : observation.state)
+                continuation.resume(returning: isUnresponsive || !hasVendorIdentity ? .unavailable : observation.state)
             }
         }
     }
 
-    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> Bool {
+    func pressDisconnect(deadline: GlobalProtectDisconnectDeadline) async -> GlobalProtectDisconnectPressResult {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
                 isUnresponsive = false
                 self.deadline = deadline
                 guard let app = application(), let item = statusItem() else {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: .notPressable)
                     return
                 }
-                func button() -> AXUIElement? {
+                func button() -> (any GlobalProtectAXElement)? {
                     find(in: elements(app, kAXWindowsAttribute), role: kAXButtonRole, title: "Disconnect")
                 }
                 revealControls(app: app, item: item, role: kAXButtonRole, title: "Disconnect")
                 guard let disconnectButton = button(), boolean(disconnectButton, kAXEnabledAttribute),
                       application() != nil, prepareRequest(disconnectButton) else {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: .notPressable)
                     return
                 }
-                continuation.resume(returning:
-                    AXUIElementPerformAction(disconnectButton, kAXPressAction as CFString) == .success
-                )
+                let result = disconnectButton.perform(kAXPressAction)
+                continuation.resume(returning: result == .success ? .pressed : (result == .cannotComplete ? .unconfirmed : .notPressable))
             }
         }
     }
@@ -149,70 +197,74 @@ private final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRu
         try? await Task.sleep(nanoseconds: UInt64(min(0.5, deadline.remainingTime) * 1_000_000_000))
     }
 
-    private func revealControls(app: AXUIElement, item: AXUIElement, role: String, title: String) {
+    private func revealControls(app: any GlobalProtectAXElement, item: any GlobalProtectAXElement, role: String, title: String) {
         // AXPress can succeed without leaving a usable popover when another
         // app owns focus. Activate the fixed vendor app before opening it.
         // Reacquire on every observation: a one-time reveal is invalidated by
         // TaskScope's window handoff or a user switching applications.
         guard application() != nil, prepareRequest(app) else { return }
-        _ = AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+        _ = app.setFrontmost()
         if find(in: elements(app, kAXWindowsAttribute), role: role, title: title) != nil { return }
-        guard prepareRequest(item), AXUIElementPerformAction(item, kAXPressAction as CFString) == .success else { return }
+        guard prepareRequest(item), item.perform(kAXPressAction) == .success else { return }
         for _ in 0..<20 {
             guard !isUnresponsive, deadline.remainingTime > 0 else { return }
-            Thread.sleep(forTimeInterval: min(0.1, deadline.remainingTime))
+            environment.sleep(min(0.1, deadline.remainingTime))
             if find(in: elements(app, kAXWindowsAttribute), role: role, title: title) != nil { return }
         }
     }
 
-    private func application() -> AXUIElement? {
+    private var hasVendorIdentity: Bool {
+        environment.executablePath(pid) == GlobalProtectAccessibilityDisconnect.executable
+    }
+
+    private func application() -> (any GlobalProtectAXElement)? {
         guard !isUnresponsive, deadline.remainingTime > 0,
-              ProcessListReader.executablePath(for: pid) == GlobalProtectAccessibilityDisconnect.executable else { return nil }
-        let app = AXUIElementCreateApplication(pid)
+              hasVendorIdentity else { return nil }
+        let app = environment.application(pid)
         guard prepareRequest(app) else { return nil }
         return app
     }
 
-    private func statusItem() -> AXUIElement? {
-        guard let app = application() else { return nil }
-        guard let value = copyAttribute(app, kAXExtrasMenuBarAttribute),
-              CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        let menuBar = unsafeBitCast(value, to: AXUIElement.self)
+    private func statusItem() -> (any GlobalProtectAXElement)? {
+        guard let app = application(),
+              case .element(let menuBar) = copyAttribute(app, kAXExtrasMenuBarAttribute) else { return nil }
         return find(in: elements(menuBar, kAXChildrenAttribute), role: kAXMenuBarItemRole)
     }
 
     /// Every AX request shares the controller's deadline, including tree walks
     /// within one observation. Zero would restore the global messaging timeout.
-    private func prepareRequest(_ element: AXUIElement) -> Bool {
+    private func prepareRequest(_ element: any GlobalProtectAXElement) -> Bool {
         let remaining = deadline.remainingTime
-        guard !isUnresponsive, remaining > 0 else { return false }
-        AXUIElementSetMessagingTimeout(element, Float(min(1, remaining)))
+        guard !isUnresponsive, remaining > 0, hasVendorIdentity else { return false }
+        element.setMessagingTimeout(Float(min(1, remaining)))
         return true
     }
 
     /// Reads one attribute, recording a timeout so callers stop walking a
     /// vendor UI that has stopped answering.
-    private func copyAttribute(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+    private func copyAttribute(_ element: any GlobalProtectAXElement, _ attribute: String) -> GlobalProtectAXValue? {
         guard prepareRequest(element) else { return nil }
-        var value: CFTypeRef?
-        let error = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        let (error, value) = element.copyAttribute(attribute)
         if error == .cannotComplete { isUnresponsive = true }
         return error == .success ? value : nil
     }
 
-    private func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
-        copyAttribute(element, attribute) as? [AXUIElement] ?? []
+    private func elements(_ element: any GlobalProtectAXElement, _ attribute: String) -> [any GlobalProtectAXElement] {
+        if case .elements(let values) = copyAttribute(element, attribute) { return values }
+        return []
     }
 
-    private func string(_ element: AXUIElement, _ attribute: String) -> String? {
-        copyAttribute(element, attribute) as? String
+    private func string(_ element: any GlobalProtectAXElement, _ attribute: String) -> String? {
+        if case .string(let value) = copyAttribute(element, attribute) { return value }
+        return nil
     }
 
-    private func boolean(_ element: AXUIElement, _ attribute: String) -> Bool {
-        copyAttribute(element, attribute) as? Bool == true
+    private func boolean(_ element: any GlobalProtectAXElement, _ attribute: String) -> Bool {
+        if case .boolean(let value) = copyAttribute(element, attribute) { return value }
+        return false
     }
 
-    private func find(in roots: [AXUIElement], role: String, title: String? = nil) -> AXUIElement? {
+    private func find(in roots: [any GlobalProtectAXElement], role: String, title: String? = nil) -> (any GlobalProtectAXElement)? {
         var pending = roots.map { ($0, 0) }
         var inspected = 0
         while !isUnresponsive, deadline.remainingTime > 0,

@@ -97,7 +97,7 @@ final class SupportDiagnosticsTests: XCTestCase {
         }
         let harness = DiagnosticsInspectionHarness(results: [
             .init(command: "", stdout: Self.secret, stderr: "", exitCode: 0),
-            .init(command: "", stdout: "", stderr: "Could not find service", exitCode: 113),
+            .init(command: "", stdout: "", stderr: "Could not find service \"com.acme.agent1\" in domain for user gui: 501", exitCode: 113),
             .init(command: "", stdout: "", stderr: Self.secret, exitCode: 1),
             .init(command: "", stdout: "service not found", stderr: Self.secret,
                   exitCode: ShellCommandRunner.timedOutExitCode),
@@ -366,5 +366,9 @@ private struct DiagnosticsLifecycleService: ProcessLifecycleServicing {
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
         systemServiceFails ? batch : .notNeeded
     }
-    func openAppBundle(at path: String) async -> Bool { false }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

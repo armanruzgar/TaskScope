@@ -186,7 +186,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
     }
 
     func testUnreadableJobOutputAndUnattributedPIDRemainUnknown() async {
-        for output in ["", "unrecognized", "service = {\n state = waiting\n pid = invalid\n}", "service = {\n state = running\n pid = 42\n}", "service = {\n state = waiting\n", "service = {\n state = waiting\n pid = 42\n pid = 43\n}"] {
+        for output in ["", "unrecognized", "service = {\n\tstate = waiting\n\tpid = invalid\n}", "service = {\n\tstate = running\n\tpid = 42\n}", "service = {\n\tstate = waiting\n", "service = {\n\tstate = waiting\n\tpid = 42\n\tpid = 43\n}"] {
             let commands = Commands(output: output)
             let state = await GlobalProtectServiceObservation.read(runtime: commands.runtime)
             XCTAssertEqual(state.session, .unknown)
@@ -285,8 +285,14 @@ private struct Lifecycle: ProcessLifecycleServicing {
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> Bool { false }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
     func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult { .disconnected }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
 private struct LoginService: LoginItemServicing {
@@ -301,7 +307,7 @@ private actor Commands {
     let output: String
     var prints = 0
     var pollingSleeps = 0
-    init(bootoutCode: Int32 = 0, output: String = "service = {\n state = waiting\n}") {
+    init(bootoutCode: Int32 = 0, output: String = "service = {\n\tstate = waiting\n}") {
         self.bootoutCode = bootoutCode; self.output = output
     }
     nonisolated var runtime: ProcessLifecycleRuntime {

@@ -40,7 +40,7 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
             switch probe {
             case .userDisabled:
                 Self.result("disabled services = {\n\"com.paloaltonetworks.gp.pangps\" => disabled\n}")
-            case .service(.pangps): Self.result("job = {\n pid = 32\n}")
+            case .service(.pangps): Self.result("job = {\n\tpid = 32\n}")
             default: Self.response(for: probe)
             }
         }
@@ -49,7 +49,7 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
         XCTAssertEqual(optional.plist, .missing)
         XCTAssertEqual(optional.disabled, .disabled)
         XCTAssertEqual(optional.loaded, .loaded)
-        XCTAssertTrue(report.redactedSummary.contains("optional user agent"))
+        XCTAssertTrue(report.redactedSummary.contains("login-session VPN service, optional install"))
     }
 
     func testDisabledParsesBothShippedFormatsWithoutConfusingNoOverrideWithEnabled() {
@@ -130,8 +130,8 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
     }
 
     func testNestedPIDAndMalformedOutputCannotVerifyTheProtectedProcess() {
-        XCTAssertEqual(Checker.topLevelPID("system/job = {\n pid = 55\n child = {\n pid = 99\n }\n}"), 55)
-        for output in ["job = {\n child = {\n pid = 99\n }\n}", "job = {\n pid = 0\n}", "job = {\n pid = 55\n", "job = {\n pid = 55\n pid = 56\n}"] {
+        XCTAssertEqual(Checker.topLevelPID("system/job = {\n\tpid = 55\n\tchild = {\n\t\tpid = 99\n\t}\n}"), 55)
+        for output in ["job = {\n\tchild = {\n\t\tpid = 99\n\t}\n}", "job = {\n\tpid = 0\n}", "job = {\n\tpid = 55\n", "job = {\n\tpid = 55\n\tpid = 56\n}"] {
             XCTAssertNil(Checker.topLevelPID(output))
         }
     }
@@ -227,7 +227,7 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
             inspectPlist: { _ in .installed(disabledByDefault: false) },
             runProbe: { probe in
                 if probe == .service(.pangpsd), let systemPID {
-                    return Self.result("system/job = {\n pid = \(systemPID)\n}")
+                    return Self.result("system/job = {\n\tpid = \(systemPID)\n}")
                 }
                 return Self.response(for: probe)
             },
