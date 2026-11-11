@@ -398,20 +398,44 @@ struct TaskScopePopoverView: View {
     /// Stop With Children: the process and its descendants from the last
     /// validated inventory, in the batch review that lists every target. The
     /// batch stop checks each one again before it signals it.
+    /// Offered only for a parent that Pause and Send Signal may reach; each
+    /// descendant must pass the same checks, or it is left out with its whole
+    /// subtree and the review says how many were left out.
     func requestStopWithChildren(_ process: AppProcess) {
-        guard !processManager.isCurrentProcess(process) else { return }
-        let children = ProcessFamily.descendants(
-            of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID
-        )
-        guard !children.isEmpty else { return }
-        let family = [process] + children
+        if let refusal = ProcessSignalEligibility.familyStopRefusal(
+            for: process, currentPID: currentProcessPID, currentUID: getuid()
+        ) {
+            processManager.setMessage("Stop With Children is not available for \(process.name). \(refusal)")
+            return
+        }
+        let members = ProcessFamily.descendants(of: process, in: processManager.inventorySnapshot) {
+            ProcessSignalEligibility.ineligibility(for: $0, currentPID: currentProcessPID, currentUID: getuid()) == nil
+        }
+        guard !members.included.isEmpty else {
+            processManager.setMessage(members.leftOutCount == 0
+                ? "\(process.name) has no child processes."
+                : "None of \(process.name)'s child processes can be stopped this way; use Stop for \(process.name) alone.")
+            return
+        }
+        let family = [process] + members.included
         let visible = Set(keyboardNavigationProcesses.map(\.identity))
         confirmationState.requestBatch(
             family.map(\.identity),
             mode: .normal,
             hiddenCount: family.filter { !visible.contains($0.identity) }.count,
-            familyParentName: process.name
+            familyParentName: process.name,
+            familyLeftOutCount: members.leftOutCount
         )
+    }
+
+    /// Why Stop With Children is unavailable for a row, or nil.
+    func stopWithChildrenUnavailableReason(for process: AppProcess) -> String? {
+        if let refusal = ProcessSignalEligibility.familyStopRefusal(
+            for: process, currentPID: currentProcessPID, currentUID: getuid()
+        ) {
+            return refusal
+        }
+        return processManager.hasChildProcesses(process) ? nil : "This process has no child processes."
     }
 
     private var currentProcessPID: Int32 {
@@ -1626,10 +1650,10 @@ struct TaskScopePopoverView: View {
             confirmationState.requestTermination(process, mode: .force)
         }
         .disabled(processManager.isCurrentProcess(process))
-        let hasChildren = !processManager.isCurrentProcess(process) && processManager.hasChildProcesses(process)
+        let familyStopUnavailable = stopWithChildrenUnavailableReason(for: process)
         Button("Stop With Children…") { requestStopWithChildren(process) }
-            .disabled(!hasChildren)
-            .help(hasChildren ? "Stop this process and every process it started" : "This process has no child processes.")
+            .disabled(familyStopUnavailable != nil)
+            .help(familyStopUnavailable ?? "Stop this process and every process it started")
         signalMenuItems(for: process)
         Divider()
         Button("Show Detail") {
@@ -1671,7 +1695,7 @@ struct TaskScopePopoverView: View {
             Button("Force Stop…") {
                 confirmationState.requestTermination(process, mode: .force)
             }
-            if processManager.hasChildProcesses(process) {
+            if stopWithChildrenUnavailableReason(for: process) == nil {
                 Button("Stop With Children…") { requestStopWithChildren(process) }
             }
             if signalRefusal(for: process) == nil {

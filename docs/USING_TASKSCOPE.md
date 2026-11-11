@@ -105,8 +105,12 @@ Monitor**; VoiceOver offers the same actions in its Actions rotor.
 last process list showed them, through the same review as Stop Selected: every
 target is listed, and each is checked again (PID, start time, and executable)
 right before it is sent `SIGTERM`, one process at a time; a process group is
-never signalled. It is unavailable for a process with no child processes and
-for TaskScope itself.
+never signalled. It is offered only for a process that Pause and Send Signal
+may reach (below), so never for launchd, TaskScope, GlobalProtect, another
+user's process, or a macOS component such as loginwindow, whose children are
+your whole session. A descendant that fails those checks is left out together
+with everything below it, and the review says how many were left out. It is
+also unavailable for a process with no child processes.
 
 **Pause…** sends `SIGSTOP` after a confirmation, and **Resume** sends
 `SIGCONT` without one. A paused process stays alive but does not run, and a

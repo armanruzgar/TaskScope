@@ -210,28 +210,51 @@ enum ProcessSignalEligibility {
     static let globalProtectBundle = "/Applications/GlobalProtect.app/"
     static let globalProtectNames: Set<String> = ["GlobalProtect", "PanGPA", "PanGPS"]
 
-    /// Why the signal actions are unavailable for `process`, or nil.
-    static func refusal(for process: AppProcess, currentPID: Int32, currentUID: uid_t) -> String? {
-        if process.pid == currentPID {
-            return "TaskScope does not pause or signal itself."
-        }
-        if !ProcessSignalGuard.isSignalablePID(process.pid) {
-            return "This PID cannot be signalled."
-        }
-        guard process.uid == currentUID else {
-            return "Only your own processes can be paused or signalled."
-        }
+    /// Why a process is not eligible.
+    enum Reason: Equatable, Sendable {
+        case taskScope, launchdOrKernel, otherUser, globalProtect, unverifiedExecutable, systemComponent
+    }
+
+    /// Why `process` is not eligible, or nil when it is.
+    static func ineligibility(for process: AppProcess, currentPID: Int32, currentUID: uid_t) -> Reason? {
+        if process.pid == currentPID { return .taskScope }
+        if !ProcessSignalGuard.isSignalablePID(process.pid) { return .launchdOrKernel }
+        guard process.uid == currentUID else { return .otherUser }
         let path = process.executablePath
         if globalProtectNames.contains(process.name) || path?.hasPrefix(globalProtectBundle) == true {
-            return "GlobalProtect is controlled only through its preset."
+            return .globalProtect
         }
-        guard let path else {
-            return "Its executable could not be verified."
+        guard let path else { return .unverifiedExecutable }
+        return isSystemComponent(path) ? .systemComponent : nil
+    }
+
+    /// Why Pause, Resume and Send Signal are unavailable for `process`, or nil.
+    static func refusal(for process: AppProcess, currentPID: Int32, currentUID: uid_t) -> String? {
+        switch ineligibility(for: process, currentPID: currentPID, currentUID: currentUID) {
+        case nil: nil
+        case .taskScope: "TaskScope does not pause or signal itself."
+        case .launchdOrKernel: "This PID cannot be signalled."
+        case .otherUser: "Only your own processes can be paused or signalled."
+        case .globalProtect: "GlobalProtect is controlled only through its preset."
+        case .unverifiedExecutable: "Its executable could not be verified."
+        case .systemComponent: "It is part of macOS; pausing or signalling it can leave your session unresponsive."
         }
-        if isSystemComponent(path) {
-            return "It is part of macOS; pausing or signalling it can leave your session unresponsive."
+    }
+
+    /// Why Stop With Children is unavailable with `process` as the parent, or
+    /// nil. The parent must pass the same checks as Pause and Send Signal:
+    /// otherwise its family can be most of the session (launchd's is nearly
+    /// every process, loginwindow's ends the session).
+    static func familyStopRefusal(for process: AppProcess, currentPID: Int32, currentUID: uid_t) -> String? {
+        switch ineligibility(for: process, currentPID: currentPID, currentUID: currentUID) {
+        case nil: nil
+        case .taskScope: "TaskScope cannot stop itself; use Quit to close TaskScope."
+        case .launchdOrKernel: "This is launchd or the kernel task; stopping its children would stop most of your session."
+        case .otherUser: "Only your own processes can be stopped with their children."
+        case .globalProtect: "GlobalProtect is controlled only through its preset."
+        case .unverifiedExecutable: "Its executable could not be verified."
+        case .systemComponent: "It is part of macOS; stopping it and its children can log you out or leave your session unresponsive."
         }
-        return nil
     }
 
     static func isSystemComponent(_ path: String) -> Bool {
@@ -242,23 +265,50 @@ enum ProcessSignalEligibility {
 
 /// A process and its descendants, as the last validated inventory shows them.
 enum ProcessFamily {
-    /// Every live descendant of `parent`, breadth first, children in PID order.
-    /// `excludedPID` (TaskScope) and its own descendants are left out, and a
-    /// recycled PID cannot make the walk loop.
-    static func descendants(of parent: AppProcess, in inventory: [AppProcess], excludingPID excludedPID: Int32) -> [AppProcess] {
+    struct Members: Equatable {
+        /// Eligible live descendants, breadth first, children in PID order.
+        var included: [AppProcess]
+        /// Live descendants left out: each ineligible one and everything below it.
+        var leftOutCount: Int
+    }
+
+    /// The live descendants of `parent`. A descendant that is not eligible is
+    /// left out together with its whole subtree, so nothing below a process
+    /// that may not be stopped is stopped; a recycled PID cannot make the walk
+    /// loop.
+    static func descendants(
+        of parent: AppProcess,
+        in inventory: [AppProcess],
+        isEligible: (AppProcess) -> Bool
+    ) -> Members {
         let children = Dictionary(grouping: inventory.filter { !$0.hasExited }, by: \.parentPID)
+        func sortedChildren(of pid: Int32) -> [AppProcess] {
+            (children[pid] ?? []).sorted { $0.pid < $1.pid }
+        }
         var visited: Set<Int32> = [parent.pid]
         var queue = [parent.pid]
-        var result: [AppProcess] = []
+        var members = Members(included: [], leftOutCount: 0)
         while !queue.isEmpty {
             let pid = queue.removeFirst()
-            for child in (children[pid] ?? []).sorted(by: { $0.pid < $1.pid }) {
-                guard child.pid != excludedPID, !visited.contains(child.pid) else { continue }
+            for child in sortedChildren(of: pid) where !visited.contains(child.pid) {
                 visited.insert(child.pid)
-                result.append(child)
-                queue.append(child.pid)
+                if isEligible(child) {
+                    members.included.append(child)
+                    queue.append(child.pid)
+                    continue
+                }
+                // Count the whole subtree under a process that is left out.
+                members.leftOutCount += 1
+                var skipped = [child.pid]
+                while !skipped.isEmpty {
+                    for descendant in sortedChildren(of: skipped.removeFirst()) where !visited.contains(descendant.pid) {
+                        visited.insert(descendant.pid)
+                        members.leftOutCount += 1
+                        skipped.append(descendant.pid)
+                    }
+                }
             }
         }
-        return result
+        return members
     }
 }

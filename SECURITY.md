@@ -40,8 +40,11 @@ Force Stop action that sends `SIGKILL`, subject to the same macOS permission
 boundary. Pause (`SIGSTOP`), Resume (`SIGCONT`), and Send Signal (`SIGHUP`,
 `SIGINT`, `SIGUSR1`, `SIGUSR2`) reach only the user's own processes, never
 TaskScope, GlobalProtect, or a macOS system component, one revalidated PID at a
-time; Stop With Children stops each descendant the same way. No action signals a
-process group. Only the immutable built-in GlobalProtect definition can request
+time. Stop With Children is offered only for a process those actions may reach
+(so never for launchd or a macOS session component such as loginwindow); it
+stops each descendant that passes the same checks, one revalidated PID at a
+time, and leaves out every other descendant with everything below it. No action
+signals a process group. Only the immutable built-in GlobalProtect definition can request
 administrator approval for its fixed `system/com.paloaltonetworks.gp.pangpsd` job:
 
 - The built-in preset's explicit in-app Keep Off / Apply Keep Off, GlobalProtect

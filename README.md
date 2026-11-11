@@ -192,8 +192,9 @@ processes**); a truncated list shows **Showing N of M**. Command-A adds the
 displayed matching rows to the selection. Review every captured target before
 Stop (`SIGTERM`, with which an app can quit without asking to save changes) or
 explicit Force Stop (`SIGKILL`); Stop waits up to three seconds for the process
-to exit and never escalates. **Stop With Children…** reviews and stops a process
-and its descendants one PID at a time, and **Pause…**, **Resume**, and **Send
+to exit and never escalates. **Stop With Children…** reviews and stops one of
+your own processes and its descendants one PID at a time, leaving out any it may
+not stop, and **Pause…**, **Resume**, and **Send
 Signal** reach only your own processes outside macOS system components; a
 paused row shows a **Paused** badge. TaskScope never signals itself or a process
 group, and rechecks process identity immediately before signaling. Unavailable readings remain

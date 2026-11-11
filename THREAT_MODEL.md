@@ -167,7 +167,11 @@ Required invariants:
 - collect Stop With Children targets from the last validated inventory into
   the same review and batch path as Stop Selected, which lists every target
   and checks each identity again before its `SIGTERM`; it never signals a
-  process group;
+  process group. It is offered only for a parent that Pause and Send Signal
+  may reach, so never for launchd (whose family is nearly every process) or a
+  session component such as loginwindow (stopping it ends the session), and a
+  descendant that fails those checks is left out with its whole subtree; the
+  review states how many were left out;
 - run a preset Restart (custom presets only) as Quit App and Helpers, then
   Open, in one admitted action with one confirmation and one report; Open
   runs only after the quit completed;

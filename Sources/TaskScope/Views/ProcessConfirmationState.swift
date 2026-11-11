@@ -48,6 +48,9 @@ final class ProcessConfirmationState: ObservableObject {
         /// Stop With Children: the process whose children were collected. The
         /// first target is that process; the rest are its descendants.
         var familyParentName: String? = nil
+        /// Stop With Children: descendants left out because they may not be
+        /// stopped this way, with everything below them.
+        var familyLeftOutCount: Int = 0
 
         struct Row: Equatable, Identifiable {
             var id: Int { index }
@@ -91,6 +94,11 @@ final class ProcessConfirmationState: ObservableObject {
             if let familyParentName {
                 let children = targets.count - 1
                 text = "\(action) \(familyParentName) and its \(children) child \(children == 1 ? "process" : "processes"), one at a time. Each is checked again before it is signalled; no process group is signalled."
+                if familyLeftOutCount > 0 {
+                    let noun = familyLeftOutCount == 1 ? "process" : "processes"
+                    let verb = familyLeftOutCount == 1 ? "is" : "are"
+                    text += " \(familyLeftOutCount) more \(noun) in its tree \(verb) left out: only your own processes, other than TaskScope, GlobalProtect and parts of macOS, are stopped, and nothing below a process that is left out."
+                }
             }
             if hiddenCount > 0 {
                 text += hiddenCount == 1
@@ -228,12 +236,14 @@ final class ProcessConfirmationState: ObservableObject {
         _ targets: [ProcessIdentity],
         mode: TerminationMode = .normal,
         hiddenCount: Int = 0,
-        familyParentName: String? = nil
+        familyParentName: String? = nil,
+        familyLeftOutCount: Int = 0
     ) {
         pendingBatchTermination = targets.isEmpty
             ? nil
             : PendingBatchTermination(
-                targets: targets, mode: mode, hiddenCount: hiddenCount, familyParentName: familyParentName
+                targets: targets, mode: mode, hiddenCount: hiddenCount,
+                familyParentName: familyParentName, familyLeftOutCount: familyLeftOutCount
             )
     }
 

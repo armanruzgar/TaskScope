@@ -250,6 +250,11 @@ final class ProcessControlActionsTests: XCTestCase {
 
     func testDescendantsComeFromTheInventoryWithoutTaskScopeOrLoops() {
         let ownPID: Int32 = 99_999
+        func descendants(of parent: AppProcess, in inventory: [AppProcess]) -> ProcessFamily.Members {
+            ProcessFamily.descendants(of: parent, in: inventory) {
+                ProcessSignalEligibility.ineligibility(for: $0, currentPID: ownPID, currentUID: getuid()) == nil
+            }
+        }
         let inventory = [
             row(pid: 100), row(pid: 101, parent: 100), row(pid: 103, parent: 100),
             row(pid: 102, parent: 101), row(pid: 104, parent: 103),
@@ -259,9 +264,11 @@ final class ProcessControlActionsTests: XCTestCase {
             // A recycled PID can make two rows each other's parent.
             row(pid: 300, parent: 301), row(pid: 301, parent: 300)
         ]
-        XCTAssertEqual(ProcessFamily.descendants(of: row(pid: 100), in: inventory, excludingPID: ownPID).map(\.pid), [101, 103, 102, 104])
-        XCTAssertEqual(ProcessFamily.descendants(of: row(pid: 300, parent: 301), in: inventory, excludingPID: ownPID).map(\.pid), [301])
-        XCTAssertTrue(ProcessFamily.descendants(of: row(pid: 201, parent: 200), in: inventory, excludingPID: ownPID).isEmpty)
+        let family = descendants(of: row(pid: 100), in: inventory)
+        XCTAssertEqual(family.included.map(\.pid), [101, 103, 102, 104])
+        XCTAssertEqual(family.leftOutCount, 2, "TaskScope and its child are left out")
+        XCTAssertEqual(descendants(of: row(pid: 300, parent: 301), in: inventory).included.map(\.pid), [301])
+        XCTAssertTrue(descendants(of: row(pid: 201, parent: 200), in: inventory).included.isEmpty)
     }
 
     func testStopWithChildrenUsesTheBatchReviewAndRevalidatesEachPID() async throws {
@@ -310,6 +317,66 @@ final class ProcessControlActionsTests: XCTestCase {
 
         await manager.loadProcessList(showMessage: false)
         XCTAssertFalse(manager.hasChildProcesses(parent), "The answer follows the newest read")
+    }
+
+    /// Review follow-up: on launchd the family is nearly every process, and a
+    /// session component's children include what keeps the session running.
+    func testStopWithChildrenIsRefusedForLaunchdAndSystemProcesses() async {
+        let launchd = row(pid: 1, parent: 0, path: "/sbin/launchd", uid: 0)
+        let loginwindow = row(pid: 840, parent: 1, path: "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow")
+        let app = row(pid: 841, parent: 1)
+        let fixture = await Batch10.fixture(processes: [
+            launchd, loginwindow, app,
+            row(pid: 842, parent: 841, path: "/opt/homebrew/bin/node"),
+            row(pid: 843, parent: 840, path: "/opt/homebrew/bin/node")
+        ])
+        defer { fixture.stores.cleanup() }
+        let state = ProcessConfirmationState()
+        let view = Batch10.popover(fixture, state: state)
+
+        view.requestStopWithChildren(launchd)
+        XCTAssertNil(state.pendingBatchTermination, "launchd's children are most of the session")
+        XCTAssertEqual(
+            fixture.manager.message,
+            "Stop With Children is not available for launchd. This is launchd or the kernel task; stopping its children would stop most of your session."
+        )
+        XCTAssertNotNil(view.stopWithChildrenUnavailableReason(for: launchd))
+
+        view.requestStopWithChildren(loginwindow)
+        XCTAssertNil(state.pendingBatchTermination)
+        XCTAssertEqual(
+            fixture.manager.message,
+            "Stop With Children is not available for loginwindow. It is part of macOS; stopping it and its children can log you out or leave your session unresponsive."
+        )
+
+        XCTAssertNil(view.stopWithChildrenUnavailableReason(for: app), "An ordinary app with a child is offered")
+        view.requestStopWithChildren(app)
+        XCTAssertEqual(state.pendingBatchTermination?.targets.map(\.pid), [841, 842])
+    }
+
+    func testIneligibleDescendantsAreLeftOutWithTheirSubtrees() async throws {
+        let parent = row(pid: 850)
+        let fixture = await Batch10.fixture(processes: [
+            parent,
+            row(pid: 851, parent: 850, path: "/Applications/Example.app/Contents/MacOS/Worker"),
+            // Not the user's: left out, and so is the user's process under it.
+            row(pid: 852, parent: 850, path: "/Library/PrivilegedHelperTools/com.example.helper", uid: 0),
+            row(pid: 853, parent: 852, path: "/opt/homebrew/bin/node"),
+            // A macOS component started for the app.
+            row(pid: 854, parent: 850, path: "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent")
+        ])
+        defer { fixture.stores.cleanup() }
+        let state = ProcessConfirmationState()
+        let view = Batch10.popover(fixture, state: state)
+
+        view.requestStopWithChildren(parent)
+
+        let pending = try XCTUnwrap(state.pendingBatchTermination)
+        XCTAssertEqual(pending.targets.map(\.pid), [850, 851])
+        XCTAssertTrue(
+            pending.summary.contains("3 more processes in its tree are left out: only your own processes, other than TaskScope, GlobalProtect and parts of macOS, are stopped, and nothing below a process that is left out."),
+            pending.summary
+        )
     }
 
     func testAProcessWithoutChildrenOffersNoFamilyStop() async {
