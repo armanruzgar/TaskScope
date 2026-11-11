@@ -80,7 +80,9 @@ say so. Review every field before acting. Imports cannot create or modify privil
 behavior. A configuration backup is untrusted in the same way: each part goes
 through its own validation, imported Auto-Stop rules arrive turned off until you
 review them, because a rule is an authority to stop processes, and a backup
-never carries Keep Off, so an import never turns on background enforcement.
+never carries Keep Off. A preset either import creates arrives with Keep Off
+off, even when Keep Off was left on for its identity, so an import never turns
+on background enforcement.
 
 The custom URL scheme accepts refresh only. Destructive preset actions and app
 quit are intentionally excluded because another local app or browser can open a

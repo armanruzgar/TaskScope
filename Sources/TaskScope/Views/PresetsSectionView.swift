@@ -133,10 +133,6 @@ struct PresetsSectionView: View {
                 Text("Keep GlobalProtect Off is not being enforced until presets are reset.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            if missingKeptOffPresetCount > 0 {
-                Text("Keep Off is not being enforced for \(missingKeptOffPresetCount) other preset\(missingKeptOffPresetCount == 1 ? "" : "s") until presets are reset.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
             OpenSettingsButton {
                 Text("Review in Settings…")
             }
@@ -145,15 +141,6 @@ struct PresetsSectionView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    /// Kept-off presets, other than the built-in one, that the recovered list
-    /// lacks.
-    private var missingKeptOffPresetCount: Int {
-        settings.keptOffPresetIDs
-            .subtracting(watchedApps.presets.map(\.id))
-            .subtracting([WatchedAppPreset.globalProtectID])
-            .count
     }
 
     /// Turns Keep Off off for a custom preset: its launchd overrides are

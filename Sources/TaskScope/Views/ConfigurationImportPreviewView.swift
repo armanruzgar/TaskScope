@@ -108,7 +108,7 @@ struct ConfigurationImportPreviewView: View {
                 Text("\(change.name): \(change.current) → \(change.imported)")
                     .font(.caption)
             }
-            Text("Keep Off is not part of a backup and stays as it is.")
+            Text("Keep Off is not part of a backup. Your presets keep theirs, and a preset the import adds arrives with Keep Off off.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .hotkey:

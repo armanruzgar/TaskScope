@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import XCTest
 @testable import TaskScope
 
@@ -259,6 +260,44 @@ final class Batch02RuntimeTests: XCTestCase {
         XCTAssertEqual(rig.runtime.backgroundPolling, .menuBarIcon)
     }
 
+    /// L11-17 review: Keep Off left for a preset that is gone has nothing to
+    /// enforce, and nothing in the app can turn it off, so it must not keep
+    /// background reads at the interval.
+    func testKeepOffForAPresetThatIsGoneDoesNotKeepTheInterval() async {
+        let rig = Batch02RuntimeRig()
+        defer { rig.tearDown() }
+        rig.stores.settings.refreshIntervalSeconds = 15
+        await rig.start(.interactive)
+        await waitUntil { !rig.polling.intervals.isEmpty }
+        XCTAssertEqual(rig.polling.intervals, [30])
+
+        rig.stores.settings.setKeptOff(true, for: UUID())
+        await waitUntil { rig.polling.intervals.count == 2 }
+        XCTAssertEqual(rig.polling.intervals, [30, 30], "nothing to enforce")
+        XCTAssertEqual(rig.runtime.backgroundPolling, .menuBarIcon)
+    }
+
+    /// The cadence follows the presets too: restoring the built-in preset (a
+    /// restore, not an import) brings its Keep GlobalProtect Off back into
+    /// force, as the recovery notice says, and enforcement needs every read.
+    func testAKeptOffPresetThatComesBackRestoresTheInterval() async throws {
+        let defaults = batch02Defaults()
+        defaults.set(try JSONEncoder().encode([WatchedAppPreset]()), forKey: WatchedAppsStore.defaultPersistenceKey)
+        let rig = Batch02RuntimeRig(defaults: defaults)
+        defer { rig.tearDown() }
+        rig.stores.settings.keepGlobalProtectOff = true
+        rig.stores.settings.refreshIntervalSeconds = 15
+        await rig.start(.interactive)
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(rig.polling.intervals, [], "Keep Off for a preset that is gone needs no background read")
+        XCTAssertEqual(rig.runtime.backgroundPolling, .off)
+
+        XCTAssertTrue(rig.stores.watchedApps.restoreBuiltInPreset())
+        await waitUntil { !rig.polling.intervals.isEmpty }
+        XCTAssertEqual(rig.polling.intervals, [15])
+        XCTAssertEqual(rig.runtime.backgroundPolling, .interval)
+    }
+
     /// L11-21: with no preset there is nothing for the icon to show.
     func testMenuBarStatusNeedsNoBackgroundReadsWithoutPresets() async throws {
         let defaults = batch02Defaults()
@@ -269,6 +308,79 @@ final class Batch02RuntimeTests: XCTestCase {
         await rig.start(.interactive)
         for _ in 0..<50 { await Task.yield() }
         XCTAssertEqual(rig.polling.intervals, [], "No preset, no background read")
+    }
+
+    /// L11-17 review: an identity can stay kept off after its preset is gone
+    /// (lost in a preset recovery reset, or deleted by an older build). A
+    /// preset an import creates must not come back kept off and be stopped at
+    /// the next poll, whichever import brings it.
+    func testImportedPresetsNeverArriveKeptOff() async throws {
+        let rig = Batch02RuntimeRig()
+        defer { rig.tearDown() }
+        let viaPresets = WatchedAppPreset(
+            displayName: "Restored", mainProcessName: "Restored", helperProcessNames: [],
+            protectedProcessNames: [], appPath: "/Applications/Restored.app"
+        )
+        let viaBackup = WatchedAppPreset(
+            displayName: "Backed Up", mainProcessName: "BackedUp", helperProcessNames: [],
+            protectedProcessNames: [], appPath: "/Applications/BackedUp.app"
+        )
+        for preset in [viaPresets, viaBackup] {
+            rig.stores.settings.setKeptOff(true, for: preset.id)
+            XCTAssertFalse(rig.stores.watchedApps.presets.contains { $0.id == preset.id }, "precondition: the preset is gone")
+        }
+
+        // Settings > Watched Apps > Import…
+        let presetData = try JSONEncoder().encode([viaPresets])
+        let presetActions = PresetSettingsActions()
+        presetActions.fileSize = { _ in presetData.count }
+        presetActions.readFile = { _ in presetData }
+        presetActions.loadImport(from: URL(fileURLWithPath: "/nonexistent/presets.json"), into: rig.stores.watchedApps)
+        presetActions.commitImport(into: rig.stores.watchedApps)
+        XCTAssertTrue(rig.stores.watchedApps.presets.contains { $0.id == viaPresets.id })
+        XCTAssertFalse(rig.stores.settings.isKeptOff(viaPresets.id), "the restored preset arrives not kept off")
+
+        // Settings > General > Import Configuration…
+        let backup = try ConfigurationArchive.encode(
+            presets: try JSONSerialization.jsonObject(with: JSONEncoder().encode([viaBackup]))
+        )
+        let backupActions = ConfigurationBackupActions()
+        backupActions.fileSize = { _ in backup.count }
+        backupActions.readFile = { _ in backup }
+        let stores = ConfigurationBackupActions.Stores(
+            watchedApps: rig.stores.watchedApps, autoStopRules: rig.stores.autoStopRules,
+            savedSelections: nil, settings: rig.stores.settings, hotkey: HotkeyManager(
+                defaults: rig.defaults, defaultsKey: "batch02.hotkey", backend: Batch02InertHotkeyBackend()
+            )
+        )
+        backupActions.loadImport(from: URL(fileURLWithPath: "/nonexistent/backup.json"), into: stores)
+        backupActions.commitImport(into: stores)
+        XCTAssertTrue(rig.stores.watchedApps.presets.contains { $0.id == viaBackup.id })
+        XCTAssertFalse(rig.stores.settings.isKeptOff(viaBackup.id))
+        XCTAssertEqual(rig.manager.dependencies.keptOffPresets(), [], "background enforcement has nothing to stop")
+    }
+
+    /// The same holds for the built-in preset and its legacy Keep GlobalProtect
+    /// Off flag, should an import ever bring it back.
+    func testAnImportedBuiltInPresetArrivesWithKeepGlobalProtectOffOff() async throws {
+        let defaults = batch02Defaults()
+        defaults.set(try JSONEncoder().encode([WatchedAppPreset]()), forKey: WatchedAppsStore.defaultPersistenceKey)
+        let rig = Batch02RuntimeRig(defaults: defaults)
+        defer { rig.tearDown() }
+        rig.stores.settings.keepGlobalProtectOff = true
+        XCTAssertTrue(rig.stores.watchedApps.presets.isEmpty, "precondition: the built-in preset is gone")
+
+        let result = rig.stores.watchedApps.importPresets([.globalProtect])
+        XCTAssertEqual(result.importedCount, 1)
+        XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff)
+        XCTAssertFalse(rig.stores.settings.isKeptOff(WatchedAppPreset.globalProtectID))
+        rig.stores.settings.flushPendingWrites()
+        XCTAssertFalse(SettingsStore(userDefaults: rig.defaults).keepGlobalProtectOff, "the saved legacy flag is off too")
+
+        // A preset the import does not create keeps its Keep Off.
+        rig.stores.settings.keepGlobalProtectOff = true
+        XCTAssertEqual(rig.stores.watchedApps.importPresets([.globalProtect]).importedCount, 0)
+        XCTAssertTrue(rig.stores.settings.keepGlobalProtectOff, "an existing preset is left as it is")
     }
 
     /// T02-6: stopping the runtime (what quitting does) saves a pending search.
@@ -536,4 +648,19 @@ final class Batch02StopIntentTests: XCTestCase {
         ) { shown = $0 }
         XCTAssertEqual(shown, globalProtect)
     }
+}
+
+/// Registers nothing with the system.
+final class Batch02InertHotkeyBackend: HotkeyRegistrationBackend {
+    private var nextReference = 1
+
+    func installEventHandler(for manager: HotkeyManager) -> OSStatus { noErr }
+
+    func register(keyCode: UInt32, modifiers: UInt32, identifier: EventHotKeyID)
+        -> (status: OSStatus, reference: EventHotKeyRef?) {
+        defer { nextReference += 1 }
+        return (noErr, OpaquePointer(bitPattern: nextReference))
+    }
+
+    func unregister(_ reference: EventHotKeyRef) {}
 }

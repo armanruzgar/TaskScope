@@ -109,11 +109,15 @@ final class TaskScopeRuntime {
     }
 
     /// Notifications diff every background read and Keep Off enforcement runs
-    /// on them, so either keeps the interval. The menu-bar icon alone only
-    /// shows the watched status they keep current, and makes do with a read
-    /// every 30 seconds.
+    /// on them, so either keeps the interval. Enforcement acts only on presets
+    /// that exist, so Keep Off left for a preset that is gone counts for
+    /// nothing. The menu-bar icon alone only shows the watched status they keep
+    /// current, and makes do with a read every 30 seconds.
     var backgroundPolling: ProcessManager.BackgroundPolling {
-        if settings.enableNotifications || !settings.keptOffPresetIDs.isEmpty { return .interval }
+        if settings.enableNotifications
+            || watchedApps.presets.contains(where: { settings.isKeptOff($0.id) }) {
+            return .interval
+        }
         if settings.showsMenuBarStatus && !watchedApps.presets.isEmpty { return .menuBarIcon }
         return .off
     }
@@ -136,8 +140,9 @@ final class TaskScopeRuntime {
         react(to: settings.$showsMenuBarStatus) { runtime in
             runtime.configurePolling()
         }
-        // The icon needs background reads only while there is a preset to show.
-        react(to: watchedApps.$presets.map(\.isEmpty).removeDuplicates()) { runtime in
+        // Which presets exist decides both whether the icon has anything to
+        // show and which Keep Off intent enforcement acts on.
+        react(to: watchedApps.$presets.map { $0.map(\.id) }) { runtime in
             runtime.configurePolling()
         }
         react(to: settings.$sortKeyRaw) { runtime in

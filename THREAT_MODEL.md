@@ -228,6 +228,13 @@ Required invariants:
   path or name-only match, action and conditions, and add imported rules turned
   off; never write or read Keep Off, recovery backups or event history in a
   backup, so an import cannot start background enforcement;
+- give a preset that either import creates Keep Off off: Keep Off intent left
+  for its identity by a copy that is gone (lost in a recovery reset, or deleted
+  by an older build) is cleared as the preset is created, with Keep
+  GlobalProtect Off for the built-in preset, so a restored preset is not
+  stopped at the next read. Such intent is never pruned at launch, because a
+  preset store in recovery can look empty; while it has no preset it is not
+  counted and does not keep background reads at the interval;
 - keep a custom app path as entered and resolve links in it whenever the preset
   is matched or opened; require a `*.app` link to lead to an app bundle when a
   preset is added, edited, or imported, and check the bundle again before Open;

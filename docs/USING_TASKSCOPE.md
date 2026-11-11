@@ -357,7 +357,8 @@ Helpers is unavailable for a preset with no helpers and no user launch agents,
 and card actions are unavailable while another action runs. Confirmations name
 the preset. If stored presets are unreadable or partly rejected, the Presets
 section shows a recovery notice instead of an empty list and says when Keep
-Off is not enforced for a preset missing from the list until presets are reset.
+GlobalProtect Off is not enforced because the built-in preset is missing from
+the list. Keep Off is never enforced for a preset that is not in the list.
 
 The preset editor has these fields:
 
@@ -762,6 +763,12 @@ enforcement. A line then says what was imported and what was not.
 alone. Their export is the preset archive older builds read; their import also
 reads a configuration backup but takes only its presets and says that the rest
 was left out.
+
+A preset either import adds arrives with Keep Off off, even when Keep Off was
+on for it before it was lost, for example in a preset recovery reset or after
+an older build deleted it; the presets you have keep their Keep Off. If that
+earlier Keep Off disabled the preset's launch agents, they stay disabled until
+you turn its Keep Off on and then off again.
 
 ## Stored configuration
 

@@ -238,6 +238,36 @@ final class WatchedAppsStoreTests: XCTestCase {
         XCTAssertEqual(store.presets.map(\.displayName), ["Valid"])
     }
 
+    /// L11-17 review: the store reports exactly the presets an import creates,
+    /// before it publishes them, so the app can drop Keep Off intent left for
+    /// their identities. A rejected candidate is not reported, including one
+    /// whose identity is already stored.
+    func testImportReportsOnlyThePresetsItCreatesBeforePublishingThem() {
+        let store = WatchedAppsStore(userDefaults: defaults, key: key)
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
+        let existing = validPreset(name: "Existing")
+        XCTAssertTrue(store.add(existing))
+        let created = validPreset(name: "Created")
+        var invalid = validPreset(name: "Invalid")
+        invalid.appPath = "relative/Invalid.app"
+        var sameIdentity = validPreset(name: "Same Identity")
+        sameIdentity.id = existing.id
+
+        var reports: [(ids: Set<UUID>, publishedNames: [String])] = []
+        store.presetsCreatedByImport = { ids in
+            reports.append((ids, store.presets.map(\.displayName)))
+        }
+        let result = store.importPresets([created, invalid, sameIdentity])
+
+        XCTAssertEqual(result, .init(importedCount: 1, rejectedCount: 2))
+        XCTAssertEqual(reports.map { $0.ids }, [[created.id]])
+        XCTAssertEqual(reports.first?.publishedNames, ["Existing"], "reported before the new preset is published")
+        XCTAssertEqual(store.presets.map(\.displayName), ["Existing", "Created"])
+
+        XCTAssertEqual(store.importPresets([sameIdentity, invalid]).importedCount, 0)
+        XCTAssertEqual(reports.count, 1, "an import that creates nothing reports nothing")
+    }
+
     func testVersionedArchiveRoundTripsAndLegacyArrayStillImports() throws {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
         let archiveData = try store.encodedPresetArchive()

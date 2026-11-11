@@ -286,12 +286,20 @@ final class WatchedAppsStore: ObservableObject {
         validationError = nil
     }
 
+    /// Told which presets an import creates, before they are published. An
+    /// identity can stay kept off after its preset is gone (lost in a recovery
+    /// reset, or deleted by an older build), and the app clears that intent
+    /// here, so a restored preset is not stopped as soon as it arrives.
+    var presetsCreatedByImport: ((Set<UUID>) -> Void)?
+
     func importPresets(_ candidates: [WatchedAppPreset]) -> ImportResult {
         guard !rejectIfReadOnly() else {
             return ImportResult(importedCount: 0, rejectedCount: candidates.count)
         }
         let preview = previewImport(candidates)
         let accepted = preview.items.compactMap(\.normalizedPreset)
+        // Every accepted preset is new: an identity already stored is rejected.
+        if !accepted.isEmpty { presetsCreatedByImport?(Set(accepted.map(\.id))) }
         presets.append(contentsOf: accepted)
         validationError = preview.rejectedCount == 0
             ? nil

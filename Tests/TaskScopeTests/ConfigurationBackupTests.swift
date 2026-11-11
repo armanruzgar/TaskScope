@@ -301,7 +301,7 @@ final class ConfigurationBackupTests: XCTestCase {
         let sheet = try ConfigurationImportPreviewView(actions: actions, onCancel: {}, onImport: {}).inspect()
         XCTAssertNoThrow(try sheet.find(text: "Executable path: /usr/local/bin/worker"))
         XCTAssertNoThrow(try sheet.find(text: "Action: Auto Stop"))
-        XCTAssertNoThrow(try sheet.find(text: "Keep Off is not part of a backup and stays as it is."))
+        XCTAssertNoThrow(try sheet.find(text: "Keep Off is not part of a backup. Your presets keep theirs, and a preset the import adds arrives with Keep Off off."))
     }
 
     func testExportLeavesOutWhatIsInRecoveryAndSaysSo() throws {

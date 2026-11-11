@@ -385,7 +385,8 @@ struct TaskScopeLaunchStores {
 
     init(session: TaskScopeLaunchSession, inventory: any ProcessInventoryProviding) {
         let defaults = session.userDefaults
-        settings = SettingsStore(userDefaults: defaults)
+        let settings = SettingsStore(userDefaults: defaults)
+        self.settings = settings
         keepOffActivity = KeepOffActivity()
         watchedApps = WatchedAppsStore(
             userDefaults: defaults,
@@ -394,6 +395,15 @@ struct TaskScopeLaunchStores {
         autoStopRules = AutoStopRulesStore(userDefaults: defaults, inventory: inventory)
         savedSelections = SavedSelectionsStore(userDefaults: defaults)
         showOnboarding = !defaults.bool(forKey: "TaskScope.onboarded.v1")
+        // Keep Off is never imported. Its intent can outlive a preset (lost in
+        // a recovery reset, or deleted by an older build), so a preset an
+        // import creates sheds any intent left for its identity and arrives not
+        // kept off. Launch prunes nothing: a preset store in recovery can look
+        // empty.
+        watchedApps.presetsCreatedByImport = { createdIDs in
+            guard !settings.keptOffPresetIDs.isDisjoint(with: createdIDs) else { return }
+            settings.keptOffPresetIDs.subtract(createdIDs)
+        }
     }
 }
 
