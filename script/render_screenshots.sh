@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGES=(main-window-light.png main-window-dark.png menu-bar-presets-light.png menu-bar-presets-dark.png)
+IMAGES=(
+  main-window-light.png main-window-dark.png
+  menu-bar-presets-light.png menu-bar-presets-dark.png
+  process-detail-light.png process-detail-dark.png
+)
 
 usage() {
   cat <<EOF
@@ -77,4 +81,4 @@ done
 
 echo "Rendered into $OUTPUT_DIR:"
 printf '  %s\n' "${IMAGES[@]}"
-echo "Review all four in light and dark before committing them."
+echo "Review every image, light and dark, before committing them."

@@ -10,10 +10,12 @@ and menu bar.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/main-window-dark.png">
-  <img src="docs/images/main-window-light.png" alt="TaskScope window showing a process list sorted by CPU, with high-usage rows highlighted and two processes selected for a batch stop">
+  <img src="docs/images/main-window-light.png" alt="TaskScope window during a build: CPU and memory history charts with latest and peak values above a process list sorted by CPU, with user, per-second network and disk columns, high-usage rows highlighted, and two processes selected for a batch stop">
 </picture>
 
-Screenshots show synthetic process data and were rendered on macOS 27.
+Screenshots show synthetic process data. They are drawn from the app's own
+views on macOS 27 by `script/render_screenshots.sh`, never captured from a
+real Mac; see [README screenshots](CONTRIBUTING.md#readme-screenshots).
 
 ## What it does
 
@@ -170,6 +172,11 @@ Unavailable state, where macOS has no login item for this copy, offers
 
 ### Process list
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/process-detail-dark.png">
+  <img src="docs/images/process-detail-light.png" width="420" alt="Process Detail for a node web server: its parent shell, user, start and elapsed time, executable, command line with arguments, ad hoc code signature, threads, open files, and the listening port TCP 8080">
+</picture>
+
 On a new install the list stays empty until you choose **Load Processes**. With
 **Settings > General > Auto-refresh process list** on, it loads and refreshes
 by itself; otherwise it is a snapshot that shows when it was updated. See
@@ -197,7 +204,7 @@ and the [list's keyboard keys](docs/USING_TASKSCOPE.md#keyboard).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/menu-bar-presets-dark.png">
-  <img src="docs/images/menu-bar-presets-light.png" width="420" alt="Menu bar popover on the Presets tab, showing the running GlobalProtect preset with Open, Quit App, Quit Helpers, and Quit All actions above a quiet Simulator preset">
+  <img src="docs/images/menu-bar-presets-light.png" width="420" alt="Menu bar popover on the Presets tab: the running GlobalProtect preset with Open, Quit App, Quit Helpers, and Quit All actions and its Keep GlobalProtect Off switch, above a quiet Simulator preset">
 </picture>
 
 Add, edit, reorder, import, and export presets in **Settings > Watched Apps**.

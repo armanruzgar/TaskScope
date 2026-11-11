@@ -31,17 +31,21 @@ final class ReadmeScreenshotTests: XCTestCase {
             try ReadmeScreenshotRenderer.writePNG(
                 presets, to: directory.appendingPathComponent("menu-bar-presets-\(appearance.rawValue).png")
             )
+            let detail = try await ReadmeScreenshotRenderer.processDetail(appearance)
+            try ReadmeScreenshotRenderer.writePNG(
+                detail, to: directory.appendingPathComponent("process-detail-\(appearance.rawValue).png")
+            )
         }
     }
 
     /// The frames keep the README images' sizes: a 960 x 690 pt window and a
-    /// 480 x 600 pt menu-bar panel at 2x, with rounded corners and room for a
-    /// shadow that falls below the window.
+    /// 480 x 600 pt menu-bar panel at 2x (Process Detail uses the panel frame
+    /// too), with rounded corners and room for a shadow that falls below.
     func testFramesKeepTheReadmeImageSizes() throws {
         for appearance in ReadmeScreenshotAppearance.allCases {
             let window = ReadmeScreenshotCompositor.Frame.window(appearance)
             XCTAssertEqual(window.canvasSize(windowWidth: 1_920, windowHeight: 1_380, scale: 2), [2_144, 1_604], "\(appearance)")
-            let panel = ReadmeScreenshotCompositor.Frame.menuBarPanel(appearance)
+            let panel = ReadmeScreenshotCompositor.Frame.panel(appearance)
             XCTAssertEqual(panel.canvasSize(windowWidth: 960, windowHeight: 1_200, scale: 2), [1_052, 1_292], "\(appearance)")
         }
         let composed = try ReadmeScreenshotCompositor.compose(
@@ -65,7 +69,13 @@ final class ReadmeScreenshotTests: XCTestCase {
         let home = NSHomeDirectory()
         let user = NSUserName()
         let processes = ReadmeScreenshotData.mainWindowProcesses + ReadmeScreenshotData.presetProcesses
+        let detail = ReadmeScreenshotData.detail
+        let detailText = [detail.user, detail.command, detail.commandLine.commandLine ?? "", detail.executablePath.value ?? ""]
+        for text in detailText {
+            XCTAssertFalse(text.contains(home) || text.contains("/Users/") || text.contains(user), text)
+        }
         for process in processes {
+            XCTAssertNotEqual(process.ownerName, user, "rows carry made-up account names")
             for path in [process.command, process.executablePath ?? ""] {
                 XCTAssertFalse(path.hasPrefix(home) || path.hasPrefix("/Users/") || path.hasPrefix("/private/"), path)
                 XCTAssertFalse(path.split(separator: "/").contains { $0 == user }, path)
@@ -122,84 +132,159 @@ enum ReadmeScreenshotAppearance: String, CaseIterable {
     var name: NSAppearance.Name { self == .light ? .aqua : .darkAqua }
 }
 
-/// The fixed process list, history and clock the screenshots show.
+/// The fixed process list, history, detail and clock the screenshots show.
 @MainActor
 enum ReadmeScreenshotData {
     /// The renderer's own PID as the fixtures report it; no row uses it, so
     /// no row is drawn as TaskScope itself.
     static let rendererPID: Int32 = 90_210
 
-    /// 9:41 today: the list's "Updated" time.
+    /// 9:41 on a fixed day, so a later render draws the same images: the
+    /// list's "Updated" time, the end of the history, and the moment Process
+    /// Detail measures Elapsed to.
     static var updatedAt: Date {
-        Calendar.current.date(bySettingHour: 9, minute: 41, second: 0, of: Date()) ?? Date(timeIntervalSince1970: 0)
+        Calendar.current.date(from: DateComponents(year: 2026, month: 11, day: 11, hour: 9, minute: 41))
+            ?? Date(timeIntervalSince1970: 0)
     }
 
-    private static let me = getuid()
+    /// A start time as `ps lstart` prints it, in UTC.
+    static func lstart(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return formatter.string(from: date)
+    }
+
+    /// The list is read twice, this many seconds apart; the per-second
+    /// network and disk rates come from the difference.
+    static let rateInterval: TimeInterval = 10
+
+    /// Who runs a row: this Mac's user, under a made-up name, or a system
+    /// account. Names come with the list read, so no real name can appear.
+    enum Account {
+        case user, root, windowServer, coreAudio
+
+        var uid: uid_t {
+            switch self {
+            case .user: getuid()
+            case .root: 0
+            case .windowServer: 88
+            case .coreAudio: 202
+            }
+        }
+
+        var name: String {
+            switch self {
+            case .user: "alex"
+            case .root: "root"
+            case .windowServer: "_windowserver"
+            case .coreAudio: "_coreaudiod"
+            }
+        }
+    }
+
+    struct Row {
+        var pid: Int32
+        var parent: Int32 = 1
+        var path: String
+        var account: Account = .user
+        var cpu: Double
+        var memoryMB: Double
+        /// Totals since the process started, at `updatedAt`, in KB and MB.
+        /// macOS reports them only for the current user's processes.
+        var net: (in: Double, out: Double)?
+        var disk: (readMB: Double, writtenMB: Double)?
+        /// The per-second rates the list shows, in KB/s and MB/s.
+        var netRate: (in: Double, out: Double) = (0, 0)
+        var diskRate: (readMB: Double, writtenMB: Double) = (0, 0)
+        var startTime = "Wed Nov 11 13:28:20 2026"
+
+        /// The row as a list read `secondsEarlier` before `updatedAt` reports
+        /// it: the totals are lower by the rate times that time.
+        func process(secondsEarlier: TimeInterval = 0) -> AppProcess {
+            let net = net.map { ($0.in - netRate.in * secondsEarlier, $0.out - netRate.out * secondsEarlier) }
+            let disk = disk.map {
+                (($0.readMB - diskRate.readMB * secondsEarlier) * 1_048_576,
+                 ($0.writtenMB - diskRate.writtenMB * secondsEarlier) * 1_048_576)
+            }
+            return AppProcess(
+                pid: pid, parentPID: parent, uid: account.uid, ownerName: account.name, cpu: cpu, memoryMB: memoryMB,
+                command: path, executablePath: path, elapsedTime: "01:12:40", startTime: startTime,
+                netInKB: net?.0, netOutKB: net?.1, diskReadBytes: disk?.0, diskWriteBytes: disk?.1
+            )
+        }
+    }
+
     private static let xcode = "/Applications/Xcode.app/Contents"
     private static let toolchain = xcode + "/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+    private static let nodePath = "/opt/homebrew/Cellar/node/24.11.1/bin/node"
 
     /// A developer's Mac in the middle of a build, sorted here by CPU as the
     /// window shows it.
-    static let mainWindowProcesses: [AppProcess] = [
-        process(48_216, parent: 47_904, toolchain + "/swift-frontend", cpu: 97.2, memoryMB: 1_284, net: (0, 0), disk: (151.4, 62.8)),
-        process(48_219, parent: 47_904, toolchain + "/swift-frontend", cpu: 86.5, memoryMB: 1_052, net: (0, 0), disk: (133.0, 51.2)),
-        process(1_288, xcode + "/MacOS/Xcode", cpu: 34.6, memoryMB: 2_214, net: (1_284.6, 342.1), disk: (812.4, 96.3)),
-        process(
-            47_904, parent: 1_288,
-            xcode + "/SharedFrameworks/XCBuild.framework/Versions/A/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService",
-            cpu: 12.3, memoryMB: 412, net: (0, 0), disk: (96.2, 310.5)
-        ),
-        process(1_506, "/Applications/Safari.app/Contents/MacOS/Safari", cpu: 9.7, memoryMB: 684, net: (48_210.4, 3_906.8), disk: (402.7, 188.4)),
-        process(
-            1_534,
-            "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
-            cpu: 7.3, memoryMB: 512, net: (0, 0), disk: (96.1, 12.4)
-        ),
-        process(412, "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer", uid: 88, cpu: 6.2, memoryMB: 438),
-        process(1_612, "/System/Applications/Music.app/Contents/MacOS/Music", cpu: 3.4, memoryMB: 372, net: (12_448.0, 211.6), disk: (330.5, 22.8)),
-        process(
-            1_342, parent: 1_288,
-            xcode + "/SharedFrameworks/SourceKit.framework/Versions/A/XPCServices/SourceKitService.xpc/Contents/MacOS/SourceKitService",
-            cpu: 2.9, memoryMB: 948, net: (0, 0), disk: (214.0, 3.1)
-        ),
-        process(
-            1_730, xcode + "/Developer/Applications/Simulator.app/Contents/MacOS/Simulator",
-            cpu: 2.6, memoryMB: 304, net: (0.4, 0.2), disk: (220.3, 18.6)
-        ),
-        process(611, "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", cpu: 1.1, memoryMB: 196, net: (2.1, 0.8), disk: (88.6, 4.2)),
-        process(1_190, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", cpu: 0.9, memoryMB: 142, net: (0, 0), disk: (21.7, 1.3)),
-        process(
-            389,
-            "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores",
-            uid: 0, cpu: 0.8, memoryMB: 96
-        ),
-        process(598, "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock", cpu: 0.6, memoryMB: 118, net: (0, 0), disk: (12.5, 0.9)),
-        process(1_455, "/System/Applications/Notes.app/Contents/MacOS/Notes", cpu: 0.4, memoryMB: 164, net: (36.2, 12.9), disk: (45.3, 6.8)),
-        process(
-            640, "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter",
-            cpu: 0.3, memoryMB: 88, net: (0, 0), disk: (9.4, 0.3)
-        ),
-        process(
-            702, "/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd",
-            cpu: 0.2, memoryMB: 54, net: (512.7, 96.4), disk: (31.8, 14.2)
-        ),
-        process(297, "/usr/sbin/coreaudiod", uid: 202, cpu: 0.2, memoryMB: 24),
-        process(
-            401, "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow",
-            cpu: 0.1, memoryMB: 72, net: (0, 0), disk: (6.1, 0.4)
-        ),
-        process(1, parent: 0, "/sbin/launchd", uid: 0, cpu: 0.1, memoryMB: 18)
+    static let mainWindowRows: [Row] = [
+        Row(pid: 48_216, parent: 47_904, path: toolchain + "/swift-frontend", cpu: 97.2, memoryMB: 1_284,
+            net: (0, 0), disk: (151.4, 62.8), diskRate: (12.4, 5.1)),
+        Row(pid: 48_219, parent: 47_904, path: toolchain + "/swift-frontend", cpu: 86.5, memoryMB: 1_052,
+            net: (0, 0), disk: (133.0, 51.2), diskRate: (10.8, 4.6)),
+        Row(pid: 1_288, path: xcode + "/MacOS/Xcode", cpu: 34.6, memoryMB: 2_214,
+            net: (1_284.6, 342.1), disk: (812.4, 96.3), netRate: (2.4, 0.6), diskRate: (1.2, 0.6)),
+        Row(pid: 47_904, parent: 1_288,
+            path: xcode + "/SharedFrameworks/XCBuild.framework/Versions/A/PlugIns/XCBBuildService.bundle/Contents/MacOS/XCBBuildService",
+            cpu: 12.3, memoryMB: 412, net: (0, 0), disk: (96.2, 310.5), diskRate: (0.8, 18.2)),
+        Row(pid: 1_506, path: "/Applications/Safari.app/Contents/MacOS/Safari", cpu: 9.7, memoryMB: 684,
+            net: (48_210.4, 3_906.8), disk: (402.7, 188.4), netRate: (186.5, 9.8), diskRate: (0.3, 0.2)),
+        Row(pid: 1_534,
+            path: "/System/Library/Frameworks/WebKit.framework/Versions/A/XPCServices/com.apple.WebKit.WebContent.xpc/Contents/MacOS/com.apple.WebKit.WebContent",
+            cpu: 7.3, memoryMB: 512, net: (0, 0), disk: (96.1, 12.4), diskRate: (0.1, 0)),
+        Row(pid: 412, path: "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+            account: .windowServer, cpu: 6.2, memoryMB: 438),
+        Row(pid: 1_612, path: "/System/Applications/Music.app/Contents/MacOS/Music", cpu: 3.4, memoryMB: 372,
+            net: (12_448.0, 211.6), disk: (330.5, 22.8), netRate: (40.2, 0.6), diskRate: (0.6, 0)),
+        Row(pid: 1_342, parent: 1_288,
+            path: xcode + "/SharedFrameworks/SourceKit.framework/Versions/A/XPCServices/SourceKitService.xpc/Contents/MacOS/SourceKitService",
+            cpu: 2.9, memoryMB: 948, net: (0, 0), disk: (214.0, 3.1), diskRate: (2.6, 0)),
+        Row(pid: 1_730, path: xcode + "/Developer/Applications/Simulator.app/Contents/MacOS/Simulator", cpu: 2.6, memoryMB: 304,
+            net: (0.4, 0.2), disk: (220.3, 18.6), diskRate: (0.1, 0)),
+        Row(pid: 611, path: "/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder", cpu: 1.1, memoryMB: 196,
+            net: (2.1, 0.8), disk: (88.6, 4.2)),
+        Row(pid: 1_190, path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", cpu: 0.9, memoryMB: 142,
+            net: (0, 0), disk: (21.7, 1.3)),
+        Row(pid: 389,
+            path: "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores",
+            account: .root, cpu: 0.8, memoryMB: 96),
+        Row(pid: 598, path: "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock", cpu: 0.6, memoryMB: 118,
+            net: (0, 0), disk: (12.5, 0.9)),
+        Row(pid: 5_310, parent: 1_214, path: nodePath, cpu: 0.4, memoryMB: 58,
+            net: (3_412.9, 15_806.2), disk: (41.2, 0.4), netRate: (1.2, 24.6),
+            startTime: lstart(updatedAt.addingTimeInterval(-(1 * 3_600 + 48 * 60 + 52)))),
+        Row(pid: 1_455, path: "/System/Applications/Notes.app/Contents/MacOS/Notes", cpu: 0.4, memoryMB: 164,
+            net: (36.2, 12.9), disk: (45.3, 6.8)),
+        Row(pid: 640, path: "/System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter", cpu: 0.3, memoryMB: 88,
+            net: (0, 0), disk: (9.4, 0.3)),
+        Row(pid: 702, path: "/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd", cpu: 0.2, memoryMB: 54,
+            net: (512.7, 96.4), disk: (31.8, 14.2), netRate: (0.8, 0.3)),
+        Row(pid: 297, path: "/usr/sbin/coreaudiod", account: .coreAudio, cpu: 0.2, memoryMB: 24),
+        Row(pid: 401, path: "/System/Library/CoreServices/loginwindow.app/Contents/MacOS/loginwindow", cpu: 0.1, memoryMB: 72,
+            net: (0, 0), disk: (6.1, 0.4)),
+        Row(pid: 1, parent: 0, path: "/sbin/launchd", account: .root, cpu: 0.1, memoryMB: 18)
     ]
+
+    static var mainWindowProcesses: [AppProcess] { mainWindowRows.map { $0.process() } }
 
     /// Safari and Music, ready for a batch stop; both rows are in view.
     static let selectedPIDs: [Int32] = [1_506, 1_612]
 
     /// GlobalProtect is running, so its preset is active; Simulator is not.
-    static let presetProcesses: [AppProcess] = mainWindowProcesses.filter { $0.pid != 1_730 } + [
-        process(1_046, "/Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect", cpu: 0.6, memoryMB: 96, net: (88.4, 41.2), disk: (14.6, 2.2)),
-        process(1_052, "/Applications/GlobalProtect.app/Contents/Resources/PanGPA", cpu: 0.3, memoryMB: 38, net: (0, 0), disk: (3.4, 0.6)),
-        process(388, "/Applications/GlobalProtect.app/Contents/Resources/PanGPS", uid: 0, cpu: 0.4, memoryMB: 44)
+    static let presetRows: [Row] = mainWindowRows.filter { $0.pid != 1_730 } + [
+        Row(pid: 1_046, path: "/Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect", cpu: 0.6, memoryMB: 96,
+            net: (88.4, 41.2), disk: (14.6, 2.2), netRate: (0.4, 0.2)),
+        Row(pid: 1_052, path: "/Applications/GlobalProtect.app/Contents/Resources/PanGPA", cpu: 0.3, memoryMB: 38,
+            net: (0, 0), disk: (3.4, 0.6)),
+        Row(pid: 388, path: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS", account: .root, cpu: 0.4, memoryMB: 44)
     ]
+
+    static var presetProcesses: [AppProcess] { presetRows.map { $0.process() } }
 
     static let simulatorPreset = WatchedAppPreset(
         id: UUID(uuidString: "5C1A7E2D-41F0-4D8B-9E36-7B0C2A9F6D11")!,
@@ -210,13 +295,31 @@ enum ReadmeScreenshotData {
         appPath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app"
     )
 
+    /// The row Process Detail shows: a local web server started from a
+    /// Terminal shell, with arguments, a listening port and an ad hoc
+    /// signature, as Homebrew installs it.
+    static var detailRow: Row { mainWindowRows.first { $0.pid == 5_310 }! }
+
+    static var detail: ProcessDetail {
+        let row = detailRow
+        return ProcessDetail(
+            pid: row.pid, parentPID: row.parent, user: row.account.name, startTime: row.startTime, command: "node",
+            commandLine: .loaded("node /opt/homebrew/bin/http-server ./public -p 8080"),
+            executablePath: .available(row.path),
+            parent: .running(name: "zsh"),
+            threadCount: .available(11),
+            openFiles: .available(ProcessOpenFiles(descriptorCount: 27, listingPortsFor: [8080])),
+            codeSignature: .signed(identifier: "node", teamID: nil, isPlatformBinary: false, isAdHoc: true)
+        )
+    }
+
     /// Ten minutes of history at 10-second samples: light use, then the build
     /// that is running now. The last sample matches the list's totals.
     static var history: [(cpu: Double, memoryMB: Double)] {
         let count = 60
         let buildStart = 34
-        let lastCPU = mainWindowProcesses.reduce(0) { $0 + $1.cpu }
-        let lastMemory = mainWindowProcesses.reduce(0) { $0 + $1.memoryMB }
+        let lastCPU = mainWindowRows.reduce(0) { $0 + $1.cpu }
+        let lastMemory = mainWindowRows.reduce(0) { $0 + $1.memoryMB }
         return (0..<count).map { index in
             let wobble = sin(Double(index) * 1.7) * 0.5 + sin(Double(index) * 0.53) * 0.5
             guard index >= buildStart else {
@@ -228,25 +331,11 @@ enum ReadmeScreenshotData {
             return (cpu: cpu, memoryMB: memory)
         }
     }
+}
 
-    private static func process(
-        _ pid: Int32,
-        parent: Int32 = 1,
-        _ path: String,
-        uid: uid_t? = nil,
-        cpu: Double,
-        memoryMB: Double,
-        net: (in: Double, out: Double)? = nil,
-        disk: (readMB: Double, writtenMB: Double)? = nil
-    ) -> AppProcess {
-        AppProcess(
-            pid: pid, parentPID: parent, uid: uid ?? me, cpu: cpu, memoryMB: memoryMB,
-            command: path, executablePath: path, elapsedTime: "01:12:40", startTime: "Wed Nov 11 08:28:20 2026",
-            // The live inventory reads network and disk totals for the
-            // current user's processes only.
-            netInKB: net?.in, netOutKB: net?.out,
-            diskReadBytes: disk.map { $0.readMB * 1_048_576 }, diskWriteBytes: disk.map { $0.writtenMB * 1_048_576 }
-        )
+private extension ProcessOpenFiles {
+    init(descriptorCount: Int, listingPortsFor tcpPorts: [Int]) {
+        self.init(descriptorCount: descriptorCount, listeningPorts: tcpPorts.map { ListeningPort(transport: .tcp, port: $0) })
     }
 }
 
@@ -261,15 +350,21 @@ struct ReadmeScreenshotFixture {
     var autoStopRules: AutoStopRulesStore
     var history: ProcessHistory
 
-    init(processes: [AppProcess]) async {
-        let inventory = UIInventory(processes: processes)
+    /// Reads `rows` twice, `rateInterval` apart, so the list has per-second
+    /// rates; every later read repeats the second.
+    init(rows: [ReadmeScreenshotData.Row]) async {
+        let earlier = rows.map { $0.process(secondsEarlier: ReadmeScreenshotData.rateInterval) }
+        let current = rows.map { $0.process() }
+        let inventory = UIScriptedInventory(results: [.success(earlier), .success(current)])
         let defaults = InMemoryUserDefaults(suiteName: "TaskScope.ReadmeScreenshotTests.\(UUID().uuidString)")!
         settings = SettingsStore(userDefaults: defaults, key: "settings")
         watchedApps = WatchedAppsStore(userDefaults: defaults, key: "presets")
         savedSelections = SavedSelectionsStore(userDefaults: defaults, key: "selections")
-        autoStopRules = AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: inventory)
+        autoStopRules = AutoStopRulesStore(
+            userDefaults: defaults, key: "rules", eventsKey: "events", inventory: UIInventory(processes: current)
+        )
         let series = ReadmeScreenshotData.history
-        let clock = ReadmeScreenshotClock(
+        let historyClock = ReadmeScreenshotClock(
             start: ReadmeScreenshotData.updatedAt.addingTimeInterval(-10 * Double(series.count - 1)), step: 10
         )
         // The history's own read supplies the first sample; `recordHistory`
@@ -278,15 +373,17 @@ struct ReadmeScreenshotFixture {
         history = ProcessHistory(
             inventory: UIInventory(processes: [Self.historySample(series[0])]),
             maxSamples: series.count,
-            now: { clock.next() },
+            now: { historyClock.next() },
             sleep: { _ in false }
         )
-        let updatedAt = ReadmeScreenshotData.updatedAt
+        let listClock = ReadmeScreenshotClock(
+            start: ReadmeScreenshotData.updatedAt.addingTimeInterval(-ReadmeScreenshotData.rateInterval), step: 0
+        )
         manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(), settleAfterProcessChange: {},
             currentPID: ReadmeScreenshotData.rendererPID,
-            now: { updatedAt },
+            now: { listClock.next() },
             dependencies: .inert
         )
         manager.enableNotifications = false
@@ -294,6 +391,8 @@ struct ReadmeScreenshotFixture {
         manager.dependencies.watchedPresets = { watchedApps.presets }
         settings.sortKeyRaw = ProcessSortKey.cpu.rawValue
         manager.sortKey = .cpu
+        await manager.loadProcessList(showMessage: false)
+        listClock.move(to: ReadmeScreenshotData.updatedAt)
         await manager.loadProcessList(showMessage: false)
     }
 
@@ -332,7 +431,7 @@ struct ReadmeScreenshotFixture {
     }
 }
 
-/// Hands out evenly spaced times, so the history covers a fixed span.
+/// Hands out evenly spaced times (or one fixed time, with a zero step).
 @MainActor
 final class ReadmeScreenshotClock {
     private var current: Date
@@ -346,6 +445,10 @@ final class ReadmeScreenshotClock {
     func next() -> Date {
         defer { current = current.addingTimeInterval(step) }
         return current
+    }
+
+    func move(to date: Date) {
+        current = date
     }
 }
 
@@ -388,7 +491,7 @@ enum ReadmeScreenshotRenderer {
 
     /// The window sorted by CPU, mid-build, with two rows selected.
     static func mainWindow(_ appearance: ReadmeScreenshotAppearance) async throws -> CGImage {
-        let fixture = await ReadmeScreenshotFixture(processes: ReadmeScreenshotData.mainWindowProcesses)
+        let fixture = await ReadmeScreenshotFixture(rows: ReadmeScreenshotData.mainWindowRows)
         for pid in ReadmeScreenshotData.selectedPIDs {
             fixture.manager.toggleSelection(pid)
         }
@@ -411,7 +514,7 @@ enum ReadmeScreenshotRenderer {
 
     /// The menu-bar popover on the Presets tab, with GlobalProtect running.
     static func menuBarPresets(_ appearance: ReadmeScreenshotAppearance) async throws -> CGImage {
-        let fixture = await ReadmeScreenshotFixture(processes: ReadmeScreenshotData.presetProcesses)
+        let fixture = await ReadmeScreenshotFixture(rows: ReadmeScreenshotData.presetRows)
         XCTAssertTrue(fixture.watchedApps.add(ReadmeScreenshotData.simulatorPreset), "the Simulator preset is valid")
         await fixture.manager.loadProcessList(showMessage: false)
         fixture.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
@@ -421,7 +524,30 @@ enum ReadmeScreenshotRenderer {
         window.contentView = hosting
         defer { window.close() }
         let image = try await settledCapture(of: hosting, name: "The menu-bar popover")
-        return try ReadmeScreenshotCompositor.compose(image, scale: scale, frame: .menuBarPanel(appearance))
+        return try ReadmeScreenshotCompositor.compose(image, scale: scale, frame: .panel(appearance))
+    }
+
+    /// Process Detail for a local web server, drawn on the window background
+    /// a sheet has.
+    static func processDetail(_ appearance: ReadmeScreenshotAppearance) async throws -> CGImage {
+        let sheet = ProcessDetailSheet(
+            process: ReadmeScreenshotData.detailRow.process(),
+            detail: ReadmeScreenshotData.detail,
+            failed: false,
+            metricsAreLive: true,
+            now: ReadmeScreenshotData.updatedAt,
+            onClose: {}
+        )
+        .background(Color(nsColor: .windowBackgroundColor))
+        let hosting = NSHostingView(rootView: sheet)
+        let window = offscreenWindow(contentSize: hosting.fittingSize, styleMask: [.borderless], appearance: appearance)
+        window.contentView = hosting
+        defer { window.close() }
+        // The sheet's height follows its content in the window's appearance.
+        hosting.layoutSubtreeIfNeeded()
+        window.setContentSize(hosting.fittingSize)
+        let image = try await settledCapture(of: hosting, name: "The Process Detail sheet")
+        return try ReadmeScreenshotCompositor.compose(image, scale: scale, frame: .panel(appearance))
     }
 
     /// A window that is never ordered in: `cacheDisplay` draws its views
@@ -511,7 +637,7 @@ enum ReadmeScreenshotCompositor {
             )
         }
 
-        static func menuBarPanel(_ appearance: ReadmeScreenshotAppearance) -> Frame {
+        static func panel(_ appearance: ReadmeScreenshotAppearance) -> Frame {
             Frame(
                 top: 19, side: 23, bottom: 27, cornerRadius: 17,
                 shadowOpacity: appearance == .light ? 0.25 : 0.30, shadowSigma: 8, shadowOffset: 4,
