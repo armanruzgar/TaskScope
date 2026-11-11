@@ -380,11 +380,17 @@ struct TaskScopeLaunchStores {
     let autoStopRules: AutoStopRulesStore
     let savedSelections: SavedSelectionsStore
     let showOnboarding: Bool
+    /// Shared by the preset deletion policy and ProcessManager.
+    let keepOffActivity: KeepOffActivity
 
     init(session: TaskScopeLaunchSession, inventory: any ProcessInventoryProviding) {
         let defaults = session.userDefaults
         settings = SettingsStore(userDefaults: defaults)
-        watchedApps = WatchedAppsStore(userDefaults: defaults)
+        keepOffActivity = KeepOffActivity()
+        watchedApps = WatchedAppsStore(
+            userDefaults: defaults,
+            deletionPolicy: .keepOff(settings: settings, activity: keepOffActivity)
+        )
         autoStopRules = AutoStopRulesStore(userDefaults: defaults, inventory: inventory)
         savedSelections = SavedSelectionsStore(userDefaults: defaults)
         showOnboarding = !defaults.bool(forKey: "TaskScope.onboarded.v1")

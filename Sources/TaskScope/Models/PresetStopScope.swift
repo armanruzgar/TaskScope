@@ -180,7 +180,6 @@ extension PresetStopScope {
     /// processes. For GlobalProtect that is only the interface agent: these stops
     /// never disconnect the VPN.
     static func closeAgentLabels(for preset: WatchedAppPreset) -> [String] {
-        let agentPreset = preset.isBuiltInGlobalProtect ? preset.globalProtectInterfaceOnly : preset
-        return agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
+        preset.stopScopeAgentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
     }
 }

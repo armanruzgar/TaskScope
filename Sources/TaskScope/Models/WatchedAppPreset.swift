@@ -87,6 +87,16 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
         return value
     }
 
+    /// The preset whose user launch agents an ordinary stop unloads: Quit App,
+    /// Quit Helpers, Quit App and Helpers, and the Shortcuts Stop action. These
+    /// stops never disconnect the VPN, so for the built-in GlobalProtect preset
+    /// that is its interface agent only; the session VPN service stays loaded.
+    /// The stop and both descriptions of it (the confirmation and the dry run)
+    /// use this one rule.
+    var stopScopeAgentPreset: WatchedAppPreset {
+        isBuiltInGlobalProtect ? globalProtectInterfaceOnly : self
+    }
+
     var lifecycleSystemLaunchDaemonJobs: [SystemLaunchDaemonJob] {
         if isBuiltInGlobalProtect {
             return Self.globalProtectSystemLaunchDaemonJobs

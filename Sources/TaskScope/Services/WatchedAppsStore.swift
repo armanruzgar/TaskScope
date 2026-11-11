@@ -82,16 +82,21 @@ final class WatchedAppsStore: ObservableObject {
     private let persistence: RecoveringCodableStorage<[WatchedAppPreset]>
     private var allowsPersistence: Bool
     private var recoveredDecodedPayload: Bool
+    private let deletionPolicy: PresetDeletionPolicy
 
+    /// `deletionPolicy` decides every deletion; the app passes its Keep Off
+    /// rule (`TaskScopeLaunchStores`).
     init(
         userDefaults: UserDefaults = .standard,
-        key: String = WatchedAppsStore.defaultPersistenceKey
+        key: String = WatchedAppsStore.defaultPersistenceKey,
+        deletionPolicy: PresetDeletionPolicy = .unrestricted
     ) {
         let persistence = RecoveringCodableStorage<[WatchedAppPreset]>(
             userDefaults: userDefaults,
             key: key
         )
         self.persistence = persistence
+        self.deletionPolicy = deletionPolicy
         guard persistence.hasStoredValue else {
             presets = [.globalProtect]
             allowsPersistence = true
@@ -210,9 +215,19 @@ final class WatchedAppsStore: ObservableObject {
         return true
     }
 
+    /// Why the deletion policy refuses to delete `preset` now, or nil. Asked
+    /// before a deletion is offered for confirmation; `remove` asks again.
+    func deletionRefusal(for preset: WatchedAppPreset) -> String? {
+        deletionPolicy.refusal(presets.first { $0.id == preset.id } ?? preset)
+    }
+
     @discardableResult
     func remove(_ preset: WatchedAppPreset) -> Bool {
         guard !rejectIfReadOnly(), !rejectIfRequiresNewerBuild(preset) else { return false }
+        if let refusal = deletionRefusal(for: preset) {
+            validationError = refusal
+            return false
+        }
         presets.removeAll { $0.id == preset.id }
         return true
     }

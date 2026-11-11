@@ -72,9 +72,9 @@ final class GpKeepoffRegressionTests: XCTestCase {
         manager.watchedAppsProvider = { presets }
         await lifecycle.setOnDisconnect {
             XCTAssertTrue(manager.isGlobalProtectKeepOffPending)
-            XCTAssertNotNil(SettingsView.presetDeletionRefusal(
-                for: .globalProtect, keepGlobalProtectOff: false,
-                isGlobalProtectKeepOffPending: manager.isGlobalProtectKeepOffPending
+            XCTAssertNotNil(PresetDeletionPolicy.keepOffRefusal(
+                for: .globalProtect, isKeptOff: false, isSettingsReadOnly: false,
+                isKeepOffPending: manager.keepOffActivity.isPending(WatchedAppPreset.globalProtectID)
             ))
             presets = []
         }

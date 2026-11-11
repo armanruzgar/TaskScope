@@ -58,12 +58,17 @@ final class ProcessManager: ObservableObject {
     /// service stop. Never persisted or exposed to URLs. Polling reads it only
     /// to leave GlobalProtect's UI open for the user during the grace period.
     @Published private(set) var globalProtectDisconnectFailureID: UUID?
-    @Published private(set) var isGlobalProtectKeepOffPending = false
+    /// Explicit Keep Off actions in flight, shared with the preset deletion
+    /// policy so a preset is not deleted halfway through its Keep Off.
+    let keepOffActivity: KeepOffActivity
+    private var keepOffActivityCancellable: AnyCancellable?
+    var isGlobalProtectKeepOffPending: Bool {
+        keepOffActivity.isPending(WatchedAppPreset.globalProtectID)
+    }
     /// How long background enforcement leaves GlobalProtect's UI alone after an
     /// explicit disconnect failed and told the user to complete its request.
     static let disconnectFailureGraceSeconds: TimeInterval = 180
     private var globalProtectDisconnectGraceUntil: Date?
-    private var pendingGlobalProtectKeepOffCount = 0
     private struct BackgroundKeepOffFailure: Equatable {
         var message: String
         var jobs: [LifecycleJobResult]
@@ -136,6 +141,7 @@ final class ProcessManager: ObservableObject {
         pollingController: ProcessPollingController? = nil,
         processHistory: ProcessHistory? = nil,
         detailReader: any ProcessDetailReading = SystemProcessDetailReader(),
+        keepOffActivity: KeepOffActivity = KeepOffActivity(),
         now: @escaping () -> Date = Date.init
     ) {
         self.currentPID = currentPID
@@ -154,8 +160,12 @@ final class ProcessManager: ObservableObject {
         self.pollingController = pollingController ?? ProcessPollingController()
         self.processHistory = processHistory
         self.now = now
+        self.keepOffActivity = keepOffActivity
         snapshotBuilder = WatchedSnapshotBuilder(excludedPID: currentPID)
         operationGateCancellable = operationGate.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        keepOffActivityCancellable = keepOffActivity.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
     }
@@ -744,15 +754,9 @@ final class ProcessManager: ObservableObject {
     ) async -> TaskScopeCommandResult {
         if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         let tracksPendingAction = recordIntent && preset.isBuiltInGlobalProtect
-        if tracksPendingAction {
-            pendingGlobalProtectKeepOffCount += 1
-            isGlobalProtectKeepOffPending = true
-        }
+        if tracksPendingAction { keepOffActivity.begin(preset.id) }
         defer {
-            if tracksPendingAction {
-                pendingGlobalProtectKeepOffCount -= 1
-                isGlobalProtectKeepOffPending = pendingGlobalProtectKeepOffCount > 0
-            }
+            if tracksPendingAction { keepOffActivity.end(preset.id) }
         }
         var commandResult = TaskScopeCommandResult(
             status: .failed,
@@ -1093,9 +1097,7 @@ final class ProcessManager: ObservableObject {
                 // These scopes never disconnect the VPN, so for GlobalProtect they
                 // leave its session VPN service loaded; Keep Off/Quit All stops it
                 // only after a verified disconnect.
-                let agentPreset = preset.isBuiltInGlobalProtect
-                    ? preset.globalProtectInterfaceOnly
-                    : preset
+                let agentPreset = preset.stopScopeAgentPreset
                 let agents: LifecycleBatchResult
                 if scope == .helpers {
                     // Unloading an agent running the main binary would also quit the app.

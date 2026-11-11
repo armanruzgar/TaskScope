@@ -617,10 +617,13 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertEqual(fixture.stores.watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
         XCTAssertTrue(interactions.pendingPresetDeletions.isEmpty, "A refused deletion is not offered for confirmation")
         XCTAssertTrue(
-            SettingsView.presetDeletionRefusal(for: .globalProtect, keepGlobalProtectOff: true)?
+            fixture.stores.watchedApps.deletionRefusal(for: .globalProtect)?
                 .contains("Turn off Keep GlobalProtect Off") == true
         )
-        XCTAssertNil(SettingsView.presetDeletionRefusal(for: .globalProtect, keepGlobalProtectOff: false))
+        XCTAssertFalse(fixture.stores.watchedApps.remove(.globalProtect), "The store itself refuses, not only the view")
+        XCTAssertNil(PresetDeletionPolicy.keepOffRefusal(
+            for: .globalProtect, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: false
+        ))
 
         fixture.stores.settings.keepGlobalProtectOff = false
         try view.inspect().find(button: "Delete…").tap()
@@ -640,21 +643,28 @@ final class SwiftUIHarnessTests: XCTestCase {
         let settings = SettingsStore(userDefaults: fixture.stores.defaults, key: "settings")
         XCTAssertFalse(settings.keepGlobalProtectOff)
         XCTAssertTrue(settings.isReadOnlyAfterCorruption)
+        // The presets as the app wires them to these unreadable settings.
+        let watchedApps = WatchedAppsStore(
+            userDefaults: fixture.stores.defaults,
+            key: "presets",
+            deletionPolicy: .keepOff(settings: settings, activity: fixture.manager.keepOffActivity)
+        )
+        let interactions = SettingsInteractionState()
         let view = SettingsView(
             settings: settings,
-            watchedApps: fixture.stores.watchedApps,
+            watchedApps: watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
-            selectedTab: .watchedApps
+            selectedTab: .watchedApps,
+            interactions: interactions
         )
         try view.inspect().find(button: "Delete…").tap()
-        XCTAssertEqual(fixture.stores.watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
+        XCTAssertTrue(interactions.pendingPresetDeletions.isEmpty, "A refused deletion is not offered for confirmation")
+        XCTAssertEqual(watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
         XCTAssertEqual(fixture.stores.defaults.data(forKey: "settings"), corrupt)
-        XCTAssertTrue(SettingsView.presetDeletionRefusal(
-            for: .globalProtect,
-            keepGlobalProtectOff: false,
-            isSettingsReadOnlyAfterCorruption: true
-        )?.contains("Settings are unreadable") == true)
+        XCTAssertTrue(watchedApps.deletionRefusal(for: .globalProtect)?.contains("Settings are unreadable") == true)
+        XCTAssertFalse(watchedApps.remove(.globalProtect))
+        XCTAssertEqual(watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
     }
 
     func testProcessRowScopesAccessibilitySummaryAndPreservesActions() throws {
@@ -1733,7 +1743,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
         manager.enableNotifications = false
 
-        let stores = makeStores(inventory: inventory)
+        let stores = makeStores(inventory: inventory, keepOffActivity: manager.keepOffActivity)
         if loadList { await manager.loadProcessList(showMessage: false) }
 
         return UIFixture(
@@ -1767,15 +1777,25 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
     }
 
-    private func makeStores(inventory: any ProcessInventoryProviding) -> UIStores {
+    /// The app's preset deletion policy, on these settings and the manager's
+    /// Keep Off activity, as `TaskScopeLaunchStores` installs it.
+    private func makeStores(
+        inventory: any ProcessInventoryProviding,
+        keepOffActivity: KeepOffActivity = KeepOffActivity()
+    ) -> UIStores {
         let suiteName = "TaskScope.UI.\(UUID().uuidString)"
         let defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
+        let settings = SettingsStore(userDefaults: defaults, key: "settings")
         return UIStores(
             suiteName: suiteName,
             defaults: defaults,
-            settings: SettingsStore(userDefaults: defaults, key: "settings"),
-            watchedApps: WatchedAppsStore(userDefaults: defaults, key: "presets"),
+            settings: settings,
+            watchedApps: WatchedAppsStore(
+                userDefaults: defaults,
+                key: "presets",
+                deletionPolicy: .keepOff(settings: settings, activity: keepOffActivity)
+            ),
             savedSelections: SavedSelectionsStore(userDefaults: defaults, key: "selections"),
             autoStopRules: AutoStopRulesStore(
                 userDefaults: defaults,

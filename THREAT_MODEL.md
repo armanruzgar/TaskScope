@@ -471,7 +471,9 @@ Required invariants:
   GlobalProtect Quit All and confirmed Stop Services Anyway; show the saved
   intent as unknown and pause background Keep Off enforcement until reset;
 - refuse built-in preset deletion when settings recovery makes Keep Off unknown,
-  Keep Off is enabled, or an explicit action is queued/running; recheck preset
+  Keep Off is enabled, or an explicit action is queued/running. The preset
+  store applies this rule to every deletion, not only the Settings window's
+  Delete button, so no other path can orphan the launchd overrides; recheck preset
   existence and settings writability after disconnect before writing intent
   or disabling services. Restoring a deleted built-in preset adds only the
   fixed canonical definition and is refused while a custom preset holds its

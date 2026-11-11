@@ -21,7 +21,8 @@ struct SettingsView: View {
     @State private var editingRuleError: String?
     @State private var presetDeletionError: String?
     @State private var refusedPresetDeletion: WatchedAppPreset?
-    @State private var isGlobalProtectKeepOffPending = false
+    /// Redraws a shown deletion refusal when a Keep Off action starts or ends.
+    @State private var pendingKeepOffPresetIDs: Set<UUID> = []
     /// Import, export and preset-editor feedback. Injectable so tests can drive
     /// the handlers without a file panel.
     @StateObject var presetActions = PresetSettingsActions()
@@ -124,8 +125,8 @@ struct SettingsView: View {
         } message: {
             Text("The event log cannot be restored after it is cleared.")
         }
-        .onReceive(processManager.$isGlobalProtectKeepOffPending) { pending in
-            isGlobalProtectKeepOffPending = pending
+        .onReceive(processManager.keepOffActivity.$pendingPresetIDs) { pending in
+            pendingKeepOffPresetIDs = pending
         }
     }
 
@@ -496,8 +497,7 @@ struct SettingsView: View {
         operations.append(
             "Open: open \(preset.appPath) only when \(preset.mainProcessName) is not already running, then verify it."
         )
-        let agentPreset = preset.isBuiltInGlobalProtect ? preset.globalProtectInterfaceOnly : preset
-        let agentLabels = agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
+        let agentLabels = preset.stopScopeAgentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
         // A custom preset's card names its full stop Quit App and Helpers. The
         // built-in GlobalProtect card has the stronger Quit All instead, so its
         // user-scope full stop is reachable only as the Shortcuts Stop action.
@@ -728,37 +728,12 @@ struct SettingsView: View {
         HotkeySettingsView()
     }
 
-    /// Deleting the built-in GlobalProtect preset while Keep Off is on would
-    /// orphan its persistent launchd disable override: nothing left in the app
-    /// could clear it. The message names the way out.
-    static func presetDeletionRefusal(
-        for preset: WatchedAppPreset,
-        keepGlobalProtectOff: Bool,
-        isSettingsReadOnlyAfterCorruption: Bool = false,
-        isGlobalProtectKeepOffPending: Bool = false
-    ) -> String? {
-        guard preset.isBuiltInGlobalProtect else { return nil }
-        if isSettingsReadOnlyAfterCorruption {
-            return "Settings are unreadable, so Keep GlobalProtect Off may still be active. Recover settings and clear Keep Off before deleting the built-in preset."
-        }
-        if isGlobalProtectKeepOffPending {
-            return "Wait for the pending GlobalProtect Keep Off action to finish before deleting the built-in preset."
-        }
-        guard keepGlobalProtectOff else { return nil }
-        return "Turn off Keep GlobalProtect Off (or choose Open) before deleting the built-in preset. Its user launch agents are disabled by a persistent launchd override that deleting the preset would not clear."
-    }
-
     /// Re-derived on every draw so the refusal disappears once its cause
-    /// (Keep Off, a pending Keep Off action, unreadable settings) is gone.
+    /// (Keep Off, a pending Keep Off action, unreadable settings) is gone. The
+    /// store's deletion policy decides; this only shows its answer.
     private var presetDeletionRefusalMessage: String? {
-        refusedPresetDeletion.flatMap {
-            Self.presetDeletionRefusal(
-                for: $0,
-                keepGlobalProtectOff: settings.keepGlobalProtectOff,
-                isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
-                isGlobalProtectKeepOffPending: isGlobalProtectKeepOffPending
-            )
-        }
+        _ = pendingKeepOffPresetIDs
+        return refusedPresetDeletion.flatMap { watchedApps.deletionRefusal(for: $0) }
     }
 
     /// A plain string: interpolating the PID into a Text literal would format
@@ -772,14 +747,7 @@ struct SettingsView: View {
     /// Shows a refusal at once; otherwise asks for confirmation before deleting.
     private func requestPresetDeletion(_ presets: [WatchedAppPreset]) {
         guard !presets.isEmpty else { return }
-        if let refused = presets.first(where: {
-            Self.presetDeletionRefusal(
-                for: $0,
-                keepGlobalProtectOff: settings.keepGlobalProtectOff,
-                isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
-                isGlobalProtectKeepOffPending: processManager.isGlobalProtectKeepOffPending
-            ) != nil
-        }) {
+        if let refused = presets.first(where: { watchedApps.deletionRefusal(for: $0) != nil }) {
             refusedPresetDeletion = refused
             presetDeletionError = nil
             return
@@ -845,20 +813,14 @@ struct SettingsView: View {
     }
 
     private func deletePreset(_ preset: WatchedAppPreset) {
-        if Self.presetDeletionRefusal(
-            for: preset,
-            keepGlobalProtectOff: settings.keepGlobalProtectOff,
-            isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
-            isGlobalProtectKeepOffPending: processManager.isGlobalProtectKeepOffPending
-        ) != nil {
-            refusedPresetDeletion = preset
-            presetDeletionError = nil
-            return
-        }
         refusedPresetDeletion = nil
         if watchedApps.remove(preset) {
             presetDeletionError = nil
             presetActions.clearImportFeedback()
+        } else if watchedApps.deletionRefusal(for: preset) != nil {
+            // Shown re-derived, so it clears once its cause is gone.
+            refusedPresetDeletion = preset
+            presetDeletionError = nil
         } else {
             presetDeletionError = watchedApps.validationError
         }

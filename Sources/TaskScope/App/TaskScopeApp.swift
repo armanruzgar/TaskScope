@@ -582,7 +582,8 @@ struct TaskScopeApp: App {
         let processManager = ProcessManager(
             processInventory: sharedInventory,
             verificationInventory: systemInventory,
-            processHistory: processHistory
+            processHistory: processHistory,
+            keepOffActivity: stores.keepOffActivity
         )
         processManager.globalProtectServiceObservationProvider = {
             await GlobalProtectServiceObservation.read(runtime: .live)
