@@ -15,6 +15,10 @@ typealias AutoStopActionHandler = (AutoStopRule, AppProcess, AutoStopActionKind)
 
 @MainActor
 final class AutoStopRulesStore: ObservableObject {
+    /// The event history keeps the newest this many events. PRIVACY.md,
+    /// SUPPORT.md and docs/USING_TASKSCOPE.md state it.
+    nonisolated static let defaultEventLimit = 200
+
     static let maximumRuntimeMinutes = AutoStopRuleValidation.maximumRuntimeMinutes
     /// One debug line per engine pass, so its cadence can be checked:
     /// `log stream --level debug --predicate 'subsystem == "<bundle id>" AND category == "AutoStop"'`.
@@ -108,7 +112,7 @@ final class AutoStopRulesStore: ObservableObject {
         eventsKey: String = "TaskScope.autoStopEvents.v1",
         inventory: any ProcessInventoryProviding = SystemProcessInventory(),
         commandLineReader: any ProcessCommandLineReading = SystemProcessCommandLineReader(),
-        eventLimit: Int = 200,
+        eventLimit: Int = AutoStopRulesStore.defaultEventLimit,
         now: @escaping () -> Date = Date.init,
         pollingController: ProcessPollingController? = nil,
         currentUID: uid_t = getuid(),

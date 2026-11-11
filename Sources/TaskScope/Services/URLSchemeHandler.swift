@@ -3,6 +3,10 @@ import Foundation
 import os
 
 enum TaskScopeURLParser {
+    /// The one URL TaskScope accepts. README.md, THREAT_MODEL.md and
+    /// docs/AUTOMATION.md state it.
+    static let refreshURL = "taskscope://refresh"
+
     enum ParseError: Error, Equatable, LocalizedError {
         case invalidScheme
         case unsupportedAction(String)
@@ -15,7 +19,7 @@ enum TaskScopeURLParser {
             case .unsupportedAction(let action):
                 "Unsupported TaskScope URL action: \(action.isEmpty ? "(empty)" : action)."
             case .invalidRefreshURL:
-                "The refresh URL must be exactly taskscope://refresh."
+                "The refresh URL must be exactly \(TaskScopeURLParser.refreshURL)."
             }
         }
     }
@@ -34,7 +38,7 @@ enum TaskScopeURLParser {
                   url.query == nil,
                   url.fragment == nil,
                   url.path.isEmpty,
-                  url.absoluteString == "taskscope://refresh" else {
+                  url.absoluteString == refreshURL else {
                 return .failure(.invalidRefreshURL)
             }
             return .success(.refresh)
@@ -81,7 +85,7 @@ final class URLSchemeHandler {
         replyEvent: NSAppleEventDescriptor
     ) {
         guard let value = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
-              value == "taskscope://refresh",
+              value == TaskScopeURLParser.refreshURL,
               let url = URL(string: value) else {
             logger.error("Rejected malformed TaskScope URL.")
             return

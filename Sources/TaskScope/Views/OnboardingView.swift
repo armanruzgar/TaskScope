@@ -4,7 +4,7 @@ struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
 
     /// The global shortcut that shows the main window, or nil while it is off.
-    var hotkeyShortcut: String? = "⌃⌥⌘T"
+    var hotkeyShortcut: String? = HotkeyManager.defaultDisplayString
     var onComplete: () -> Void
 
     var body: some View {

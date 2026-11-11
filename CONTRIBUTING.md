@@ -271,6 +271,13 @@ Tests that need shell syntax for their own child processes use
 `ShellCommandRunner.runShellScript`, an explicit `/bin/sh -c` that exists only
 in the test target.
 
+Some documents restate values from the code: how long Stop waits before a
+force stop, the GlobalProtect disconnect window, how many Auto-Stop events and
+history samples are kept, the default shortcut, and the one accepted URL. Each
+is a named constant, and `DocumentationConstantsTests` fails when a document it
+lists no longer states the code's value, so a change to one of these values
+updates every copy the test names in the same commit.
+
 Changes to a trust boundary must update [THREAT_MODEL.md](THREAT_MODEL.md).
 Changes to stored or surfaced data must update [PRIVACY.md](PRIVACY.md). Release
 process changes must update [RELEASE.md](RELEASE.md). Add a

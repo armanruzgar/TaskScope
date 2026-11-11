@@ -116,6 +116,10 @@ private struct SystemGlobalProtectAXElement: GlobalProtectAXElement {
 /// AX elements never leave this worker's serial queue; slow vendor responses
 /// cannot block SwiftUI or reorder the lifecycle mutation gate.
 final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRuntime, @unchecked Sendable {
+    /// Seconds between connection-state observations. docs/GLOBALPROTECT.md
+    /// and THREAT_MODEL.md state it.
+    static let observationInterval: TimeInterval = 0.5
+
     private let queue = DispatchQueue(label: "TaskScope.GlobalProtectDisconnect", qos: .userInitiated)
     private let pid: Int32
     /// Set when an Accessibility request times out. Queue-confined. A hung
@@ -194,7 +198,7 @@ final class GlobalProtectAccessibilityRuntime: GlobalProtectDisconnectRuntime, @
     }
 
     func waitForNextObservation(deadline: GlobalProtectDisconnectDeadline) async {
-        try? await Task.sleep(nanoseconds: UInt64(min(0.5, deadline.remainingTime) * 1_000_000_000))
+        try? await Task.sleep(nanoseconds: UInt64(min(Self.observationInterval, deadline.remainingTime) * 1_000_000_000))
     }
 
     private func revealControls(app: any GlobalProtectAXElement, item: any GlobalProtectAXElement, role: String, title: String) {

@@ -60,7 +60,7 @@ struct HotkeySettingsView: View {
                             : Color.orange
                     )
 
-                Text("Default: ⌃⌥⌘T shows the TaskScope window. A hotkey needs Command or Control. Standard ⌘ app shortcuts (letters, digits, arrows, Delete, Return), ⌃-letter control keys, ⌘Tab, and ⌘Space are reserved.")
+                Text("Default: \(HotkeyManager.defaultDisplayString) shows the TaskScope window. A hotkey needs Command or Control. Standard ⌘ app shortcuts (letters, digits, arrows, Delete, Return), ⌃-letter control keys, ⌘Tab, and ⌘Space are reserved.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -71,7 +71,7 @@ struct HotkeySettingsView: View {
                     Text(recoveryMessage)
                         .font(.caption)
                         .foregroundStyle(.orange)
-                    Text("The hotkey is disabled until you reset its settings. Reset enables the default ⌃⌥⌘T shortcut.")
+                    Text("The hotkey is disabled until you reset its settings. Reset enables the default \(HotkeyManager.defaultDisplayString) shortcut.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     RecoveryResetButton(

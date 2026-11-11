@@ -32,11 +32,15 @@ struct GlobalProtectConnectionObservation {
 }
 
 struct GlobalProtectDisconnectDeadline: Sendable {
+    /// Seconds a whole disconnect may take, Accessibility requests included.
+    /// docs/GLOBALPROTECT.md and THREAT_MODEL.md state it.
+    static let defaultTimeLimit: TimeInterval = 90
+
     private let expiresAt: TimeInterval
     private let now: @Sendable () -> TimeInterval
 
     init(
-        timeLimit: TimeInterval = 90,
+        timeLimit: TimeInterval = GlobalProtectDisconnectDeadline.defaultTimeLimit,
         now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.now = now
@@ -59,12 +63,18 @@ protocol GlobalProtectDisconnectRuntime: Sendable {
 /// Never shuts down the service on a timeout, failed click, or an unknown state.
 /// Consecutive disconnected observations give the vendor time to restore DNS.
 enum GlobalProtectDisconnectController {
+    /// At most this many connection-state observations per disconnect.
+    /// docs/GLOBALPROTECT.md and THREAT_MODEL.md state it.
+    static let defaultObservationLimit = 60
+    /// Consecutive Disconnected observations that confirm the disconnect.
+    static let requiredDisconnectedObservations = 5
+
     /// `startupUnavailableObservations` extends the unreadable-state budget
     /// until the first readable observation, for an interface that was just
     /// launched and has not yet created its menu bar item.
     static func disconnect(
         using runtime: any GlobalProtectDisconnectRuntime,
-        observationLimit: Int = 60,
+        observationLimit: Int = GlobalProtectDisconnectController.defaultObservationLimit,
         startupUnavailableObservations: Int = 0,
         deadline: GlobalProtectDisconnectDeadline = GlobalProtectDisconnectDeadline()
     ) async -> GlobalProtectDisconnectResult {
@@ -87,7 +97,7 @@ enum GlobalProtectDisconnectController {
             switch state {
             case .disconnected:
                 disconnectedObservations += 1
-                if disconnectedObservations >= 5 { return .disconnected }
+                if disconnectedObservations >= requiredDisconnectedObservations { return .disconnected }
             case .connected:
                 disconnectedObservations = 0
                 if !requested {

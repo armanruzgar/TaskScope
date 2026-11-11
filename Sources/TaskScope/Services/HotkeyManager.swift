@@ -42,6 +42,15 @@ struct CarbonHotkeyRegistrationBackend: HotkeyRegistrationBackend {
 
 @MainActor
 final class HotkeyManager: ObservableObject {
+    /// The shortcut TaskScope starts with, and returns to after a reset or an
+    /// unsupported saved shortcut: ⌃⌥⌘T. README.md, SUPPORT.md and
+    /// docs/USING_TASKSCOPE.md state it.
+    nonisolated static let defaultKeyCode = UInt32(kVK_ANSI_T)
+    nonisolated static let defaultModifiers = UInt32(controlKey | optionKey | cmdKey)
+    nonisolated static var defaultDisplayString: String {
+        displayString(keyCode: defaultKeyCode, modifiers: defaultModifiers)
+    }
+
     enum RegistrationStatus: Equatable {
         case disabled
         case registered
@@ -111,8 +120,8 @@ final class HotkeyManager: ObservableObject {
         let stored = defaults.object(forKey: defaultsKey)
         let saved = stored as? [String: Any]
         hotkeyEnabled = saved?["enabled"] as? Bool ?? true
-        keyCode = (saved?["keyCode"] as? UInt32) ?? UInt32(kVK_ANSI_T)
-        modifiers = (saved?["modifiers"] as? UInt32) ?? UInt32(controlKey | optionKey | cmdKey)
+        keyCode = (saved?["keyCode"] as? UInt32) ?? Self.defaultKeyCode
+        modifiers = (saved?["modifiers"] as? UInt32) ?? Self.defaultModifiers
         migrationNotice = saved?["migrationNotice"] as? String
         // A field that is present with the wrong type is unreadable data, like
         // a value that is not a dictionary: it is backed up and the hotkey
@@ -132,9 +141,9 @@ final class HotkeyManager: ObservableObject {
             }
         } else if let reason = Self.validationFailure(keyCode: keyCode, modifiers: modifiers) {
             let previousShortcut = displayString
-            keyCode = UInt32(kVK_ANSI_T)
-            modifiers = UInt32(controlKey | optionKey | cmdKey)
-            migrationNotice = "Your saved shortcut \(previousShortcut) is no longer supported. \(reason) TaskScope changed it to ⌃⌥⌘T."
+            keyCode = Self.defaultKeyCode
+            modifiers = Self.defaultModifiers
+            migrationNotice = "Your saved shortcut \(previousShortcut) is no longer supported. \(reason) TaskScope changed it to \(Self.defaultDisplayString)."
             save()
         }
     }
@@ -258,8 +267,8 @@ final class HotkeyManager: ObservableObject {
         guard isReadOnlyAfterCorruption else { return }
         isReadOnlyAfterCorruption = false
         recoveryMessage = nil
-        keyCode = UInt32(kVK_ANSI_T)
-        modifiers = UInt32(controlKey | optionKey | cmdKey)
+        keyCode = Self.defaultKeyCode
+        modifiers = Self.defaultModifiers
         hotkeyEnabled = true
     }
 

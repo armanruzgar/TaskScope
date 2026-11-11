@@ -6,6 +6,10 @@ import Foundation
 /// visible.
 @MainActor
 final class ProcessHistory: ObservableObject {
+    /// The charts keep at most this many samples. PRIVACY.md and
+    /// docs/USING_TASKSCOPE.md state it.
+    nonisolated static let defaultMaxSamples = 60
+
     typealias Sleeper = @Sendable (TimeInterval) async -> Bool
 
     struct Sample: Equatable {
@@ -55,7 +59,7 @@ final class ProcessHistory: ObservableObject {
 
     init(
         inventory: any ProcessInventoryProviding = SystemProcessInventory(),
-        maxSamples: Int = 60,
+        maxSamples: Int = ProcessHistory.defaultMaxSamples,
         now: @escaping () -> Date = Date.init,
         sleep: @escaping Sleeper = { interval in
             do {
