@@ -127,6 +127,7 @@ final class TaskScopeLaunchSession {
         var processID: pid_t
         var userID: uid_t
         var bundleIdentifier: String
+        var startTime: TimeInterval = 0
     }
 
     @MainActor
@@ -137,6 +138,10 @@ final class TaskScopeLaunchSession {
         var runningInstances: @MainActor () -> [Instance]
         var reopen: @MainActor (pid_t) -> Void
         var terminate: @MainActor () -> Void
+        /// This process's start time. A launch yields only to an instance that
+        /// started earlier, so two copies started together cannot both hand off
+        /// to each other and quit.
+        var startTime: TimeInterval = .greatestFiniteMagnitude
 
         static var system: Runtime {
             Runtime(
@@ -147,22 +152,36 @@ final class TaskScopeLaunchSession {
                     guard let identifier = Bundle.main.bundleIdentifier else { return [] }
                     return NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
                         .compactMap { application in
-                            guard !application.isTerminated else { return nil }
-                            var info = proc_bsdinfo()
-                            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-                            guard proc_pidinfo(application.processIdentifier, PROC_PIDTBSDINFO, 0, &info, size) == size else {
+                            guard !application.isTerminated,
+                                  let info = processInfo(application.processIdentifier) else {
                                 return nil
                             }
                             return Instance(
                                 processID: application.processIdentifier,
                                 userID: info.pbi_uid,
-                                bundleIdentifier: identifier
+                                bundleIdentifier: identifier,
+                                startTime: startTime(of: info)
                             )
                         }
                 },
                 reopen: { TaskScopeInstanceHandoff.system.perform(processID: $0) },
-                terminate: { NSApp.terminate(nil) }
+                terminate: { NSApp.terminate(nil) },
+                // Unreadable (never expected for this process): yield to any
+                // other instance, as every launch did before start times.
+                startTime: processInfo(ProcessInfo.processInfo.processIdentifier).map(startTime(of:))
+                    ?? .greatestFiniteMagnitude
             )
+        }
+
+        private static func processInfo(_ pid: pid_t) -> proc_bsdinfo? {
+            var info = proc_bsdinfo()
+            let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+            return info
+        }
+
+        private static func startTime(of info: proc_bsdinfo) -> TimeInterval {
+            TimeInterval(info.pbi_start_tvsec) + TimeInterval(info.pbi_start_tvusec) / 1_000_000
         }
     }
 
@@ -184,6 +203,8 @@ final class TaskScopeLaunchSession {
             $0.processID != runtime.processID
                 && $0.userID == runtime.userID
                 && $0.bundleIdentifier == runtime.bundleIdentifier
+                && ($0.startTime < runtime.startTime
+                    || ($0.startTime == runtime.startTime && $0.processID < runtime.processID))
         }
         if context == .startupVerification || otherInstance != nil {
             // A disposable suite also prevents store initializers in a rejected
@@ -214,7 +235,16 @@ final class TaskScopeLaunchSession {
         on bus: AppCommandBus,
         handler: @escaping @MainActor @Sendable (TaskScopeCommand) async -> TaskScopeCommandResult
     ) {
-        guard allowsRuntime else { return }
+        // A duplicate hands off and quits during will-finish; it never answers
+        // commands, and its bus is left as it is.
+        guard otherInstance == nil else { return }
+        guard allowsRuntime else {
+            // Startup verification still receives URL opens, intents and popover
+            // commands. Answer them at once instead of leaving them queued
+            // forever behind a handler that is never installed.
+            bus.install { _ in AppCommandCoordinator.startupVerificationRejection }
+            return
+        }
         bus.install(handler: handler)
     }
 

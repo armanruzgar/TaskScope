@@ -45,6 +45,14 @@ final class SettingsStore: ObservableObject {
     @Published var sortKeyRaw: String {
         didSet { normalizeAndSave() }
     }
+    /// The process list's Filter and Tree View choices, shared by the window and
+    /// the menu-bar popover and kept across launches, like Sort.
+    @Published var filterModeRaw: String {
+        didSet { normalizeAndSave() }
+    }
+    @Published var treeMode: Bool {
+        didSet { save() }
+    }
     @Published private(set) var recoveryMessage: String?
 
     private let persistence: RecoveringCodableStorage<CodableSettings>
@@ -95,6 +103,12 @@ final class SettingsStore: ObservableObject {
         selectedSectionRaw = decoded.selectedSectionRaw
         searchText = decoded.searchText
         sortKeyRaw = decoded.sortKeyRaw
+        filterModeRaw = decoded.filterModeRaw
+        treeMode = decoded.treeMode
+    }
+
+    var filterMode: ProcessFilterMode {
+        ProcessFilterMode(rawValue: filterModeRaw) ?? .all
     }
 
     /// Lifts the process list limit, so every process can be browsed in any
@@ -174,6 +188,8 @@ final class SettingsStore: ObservableObject {
             selectedSectionRaw = normalized.selectedSectionRaw
             searchText = normalized.searchText
             sortKeyRaw = normalized.sortKeyRaw
+            filterModeRaw = normalized.filterModeRaw
+            treeMode = normalized.treeMode
             isNormalizing = false
         }
         save()
@@ -191,7 +207,9 @@ final class SettingsStore: ObservableObject {
             keepGlobalProtectOff: keepGlobalProtectOff,
             selectedSectionRaw: selectedSectionRaw,
             searchText: searchText,
-            sortKeyRaw: sortKeyRaw
+            sortKeyRaw: sortKeyRaw,
+            filterModeRaw: filterModeRaw,
+            treeMode: treeMode
         )
     }
 
@@ -264,6 +282,8 @@ final class SettingsStore: ObservableObject {
         var selectedSectionRaw: String
         var searchText: String
         var sortKeyRaw: String
+        var filterModeRaw: String
+        var treeMode: Bool
 
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
@@ -277,6 +297,8 @@ final class SettingsStore: ObservableObject {
             case selectedSectionRaw
             case searchText
             case sortKeyRaw
+            case filterModeRaw
+            case treeMode
         }
 
         init(
@@ -290,7 +312,9 @@ final class SettingsStore: ObservableObject {
             keepGlobalProtectOff: Bool,
             selectedSectionRaw: String,
             searchText: String,
-            sortKeyRaw: String
+            sortKeyRaw: String,
+            filterModeRaw: String = ProcessFilterMode.all.rawValue,
+            treeMode: Bool = false
         ) {
             self.schemaVersion = schemaVersion
             self.refreshIntervalSeconds = refreshIntervalSeconds
@@ -303,6 +327,8 @@ final class SettingsStore: ObservableObject {
             self.selectedSectionRaw = selectedSectionRaw
             self.searchText = searchText
             self.sortKeyRaw = sortKeyRaw
+            self.filterModeRaw = filterModeRaw
+            self.treeMode = treeMode
         }
 
         init(from decoder: Decoder) throws {
@@ -349,6 +375,16 @@ final class SettingsStore: ObservableObject {
                 String.self,
                 forKey: .sortKeyRaw
             ) ?? defaults.sortKeyRaw
+            // Added after schema version 1 shipped: payloads without them keep
+            // the defaults, and older builds ignore them.
+            filterModeRaw = try container.decodeIfPresent(
+                String.self,
+                forKey: .filterModeRaw
+            ) ?? defaults.filterModeRaw
+            treeMode = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .treeMode
+            ) ?? defaults.treeMode
         }
 
         func normalized() -> CodableSettings {
@@ -366,6 +402,9 @@ final class SettingsStore: ObservableObject {
             )
             if TaskScopeSection(rawValue: selectedSectionRaw) == nil {
                 value.selectedSectionRaw = TaskScopeSection.processes.rawValue
+            }
+            if ProcessFilterMode(rawValue: filterModeRaw) == nil {
+                value.filterModeRaw = ProcessFilterMode.all.rawValue
             }
             value.searchText = String(searchText.prefix(500))
             if ProcessSortKey(rawValue: sortKeyRaw) == nil {

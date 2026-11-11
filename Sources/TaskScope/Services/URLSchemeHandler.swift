@@ -33,7 +33,8 @@ enum TaskScopeURLParser {
                   url.port == nil,
                   url.query == nil,
                   url.fragment == nil,
-                  url.path.isEmpty else {
+                  url.path.isEmpty,
+                  url.absoluteString == "taskscope://refresh" else {
                 return .failure(.invalidRefreshURL)
             }
             return .success(.refresh)
@@ -80,6 +81,7 @@ final class URLSchemeHandler {
         replyEvent: NSAppleEventDescriptor
     ) {
         guard let value = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
+              value == "taskscope://refresh",
               let url = URL(string: value) else {
             logger.error("Rejected malformed TaskScope URL.")
             return

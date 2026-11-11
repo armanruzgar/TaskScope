@@ -52,27 +52,35 @@ struct PresetCard: View {
 
             if snapshot.preset.id == WatchedAppPreset.globalProtectID {
                 Divider()
-                Toggle(
-                    isOn: Binding(
-                        get: { isKeptOff },
-                        set: onKeepOffChanged
-                    )
-                ) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Keep GlobalProtect Off")
-                            .fontWeight(.medium)
-                        Text("Quit All disconnects and stops GlobalProtect. Open or turning this switch off restores it.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
+                if isKeepOffControlEnabled {
+                    Toggle(
+                        isOn: Binding(
+                            get: { isKeptOff },
+                            set: onKeepOffChanged
+                        )
+                    ) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Keep GlobalProtect Off")
+                                .fontWeight(.medium)
+                            Text("Quit All disconnects and stops GlobalProtect. Open or turning this switch off restores it.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
-                }
-                .toggleStyle(.switch)
-                .disabled(!isKeepOffControlEnabled || isMutationActive)
-                .accessibilityHint(
-                    "Automatically disconnects and stops GlobalProtect. Turning this off restores its VPN service and opens the app."
-                )
-                if !isKeepOffControlEnabled {
+                    .toggleStyle(.switch)
+                    .disabled(isMutationActive)
+                    .accessibilityHint(
+                        "Automatically disconnects and stops GlobalProtect. Turning this off restores its VPN service and opens the app."
+                    )
+                } else {
+                    // The saved intent is inside the unreadable payload, so it is
+                    // unknown here (not Off), and background enforcement is paused.
+                    Text("Keep GlobalProtect Off: Unknown")
+                        .fontWeight(.medium)
                     Text("Settings are unreadable. Reset settings in Settings → General before changing Keep Off.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("Keep Off is not enforced in the background until then. After the reset, Keep Off is off until you turn it on again.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

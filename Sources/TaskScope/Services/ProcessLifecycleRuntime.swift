@@ -35,9 +35,13 @@ struct ProcessLifecycleRuntime: Sendable {
         guard ProcessSignalGuard.isSignalablePID(pid) else { return false }
         errno = 0
         if Darwin.kill(pid, signal) == 0 {
+            TaskScopeActionLog.signalSent(signal, to: pid, delivered: true)
             return true
         }
-        return errno == ESRCH
+        let code = errno
+        guard code != ESRCH else { return true }
+        TaskScopeActionLog.signalSent(signal, to: pid, delivered: false, errorNumber: code)
+        return false
     }
 
     static let live = ProcessLifecycleRuntime(
@@ -46,7 +50,9 @@ struct ProcessLifecycleRuntime: Sendable {
             FileManager.default.fileExists(atPath: path)
         },
         runCommand: { command, timeout in
-            await ShellCommandRunner.run(command, timeout: timeout)
+            let result = await ShellCommandRunner.run(command, timeout: timeout)
+            TaskScopeActionLog.commandFinished(command, result: result)
+            return result
         },
         loadProcessInventory: {
             await ProcessListReader.currentProcessList(fetchExtendedStats: false)

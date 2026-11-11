@@ -2,6 +2,16 @@ import AppKit
 import ApplicationServices
 import SwiftUI
 
+/// The part of a running application that restoring activation reads, so the
+/// tracker can be tested without a real NSRunningApplication (whose identity
+/// depends on whether AppKit has started in the test process).
+protocol PreviousApplication: Sendable {
+    var processIdentifier: pid_t { get }
+    var isTerminated: Bool { get }
+}
+
+extension NSRunningApplication: PreviousApplication {}
+
 /// Remembers the application that was frontmost most recently, other than
 /// TaskScope, so suppressing an automatic window hands activation back to the
 /// app the user is in now rather than whichever app was frontmost at launch.
@@ -9,14 +19,14 @@ import SwiftUI
 final class PreviousApplicationTracker {
     private let ownProcessID: pid_t
     private var observer: NSObjectProtocol?
-    private(set) var application: NSRunningApplication?
+    private(set) var application: (any PreviousApplication)?
 
-    init(ownProcessID: pid_t, initial: NSRunningApplication?) {
+    init(ownProcessID: pid_t, initial: (any PreviousApplication)?) {
         self.ownProcessID = ownProcessID
         record(initial)
     }
 
-    func record(_ candidate: NSRunningApplication?) {
+    func record(_ candidate: (any PreviousApplication)?) {
         guard let candidate, candidate.processIdentifier != ownProcessID else { return }
         application = candidate
     }
@@ -25,14 +35,14 @@ final class PreviousApplicationTracker {
         observer = center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? any PreviousApplication
             MainActor.assumeIsolated { self?.record(app) }
         }
     }
 
     /// Does nothing unless TaskScope holds activation: handing it away from a
     /// background TaskScope would pull an unrelated app in front of the user.
-    func restore(isActive: Bool, deactivate: () -> Void, activate: (NSRunningApplication) -> Void) {
+    func restore(isActive: Bool, deactivate: () -> Void, activate: (any PreviousApplication) -> Void) {
         guard isActive else { return }
         deactivate()
         if let application, !application.isTerminated, application.processIdentifier != ownProcessID {
@@ -46,7 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published private(set) var launchContext: TaskScopeLaunchContext
     @Published private(set) var windowPresentationAllowed: Bool
     /// Work that must happen before the process exits (restoring Activity
-    /// Monitor state, flushing debounced settings writes).
+    /// Monitor state).
     var willTerminate: (() -> Void)?
     /// Shows the main window. Installed once the runtime is bootstrapped.
     var showMainWindow: (() -> Void)?
@@ -68,9 +78,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         var restorePreviousApplication: () -> Void
         var presentMainWindow: () -> Void
         var waitForInteractiveLaunch: () async -> Void
+        /// Starts polling, the Auto Stop engine and launch-time Keep Off
+        /// enforcement (TaskScopeRuntime) once the launch context is resolved.
+        /// The closure asks this delegate for the App Shortcuts parameter
+        /// refresh, which it defers until the launch context is settled.
+        var startAppRuntime: @MainActor (
+            TaskScopeLaunchContext, _ requestShortcutParameterRefresh: @escaping @MainActor () -> Void
+        ) async -> Void = { _, _ in }
+        /// Stops polling and the Auto Stop engine and saves pending settings.
+        var stopAppRuntime: () -> Void = {}
+        var isMutationActive: () -> Bool = { false }
         /// Stops the shell commands still running when TaskScope quits, so a
         /// launchctl or an administrator prompt does not outlive the app.
         var stopRunningCommands: () -> Void = {}
+        var replyToTermination: (Bool) -> Void = { _ in }
+        /// One step of the bounded wait for an in-flight action at quit.
+        var waitForTerminationTick: @MainActor () async -> Void = { await Task.yield() }
+        var terminationWaitTicks = 50
+        /// How long a startup-verification instance may run.
+        var waitForVerificationExpiry: @MainActor () async -> Void = {}
+        var terminateApplication: () -> Void = {}
+        /// Whether a TaskScope window other than the one closing is still open.
+        var hasOtherOpenWindow: (NSWindow) -> Bool = { _ in false }
 
         static var system: Runtime {
             let previous = PreviousApplicationTracker(
@@ -99,16 +128,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 },
                 restorePreviousApplication: {
                     previous.restore(isActive: NSApp.isActive, deactivate: { NSApp.deactivate() },
-                                     activate: { $0.activate() })
+                                     activate: { ($0 as? NSRunningApplication)?.activate() })
                 },
                 presentMainWindow: {
                     DispatchQueue.main.async {
-                        NSApp.windows.first { $0.title == "TaskScope" || $0.title == "TaskScope Processes" }?
+                        NSApp.windows.first { $0.title == TaskScopeScene.main.title }?
                             .makeKeyAndOrderFront(nil)
                     }
                 },
                 waitForInteractiveLaunch: { try? await Task.sleep(nanoseconds: 500_000_000) },
-                stopRunningCommands: { ShellCommandRunner.liveExecutions.shutDown() }
+                startAppRuntime: { context, requestRefresh in
+                    await TaskScopeRuntime.current?.start(
+                        context: context, requestShortcutParameterRefresh: requestRefresh
+                    )
+                },
+                stopAppRuntime: { TaskScopeRuntime.current?.stop() },
+                isMutationActive: { TaskScopeRuntime.current?.processManager.isMutationActive ?? false },
+                stopRunningCommands: { ShellCommandRunner.liveExecutions.shutDown() },
+                replyToTermination: { NSApp.reply(toApplicationShouldTerminate: $0) },
+                waitForTerminationTick: { try? await Task.sleep(nanoseconds: 100_000_000) },
+                terminationWaitTicks: 50,
+                waitForVerificationExpiry: { try? await Task.sleep(nanoseconds: 60_000_000_000) },
+                terminateApplication: { NSApp.terminate(nil) },
+                hasOtherOpenWindow: { closing in
+                    NSApp.windows.contains {
+                        $0 !== closing && ($0.isVisible || $0.isMiniaturized) && isTaskScopeWindow($0)
+                    }
+                }
             )
         }
     }
@@ -116,7 +162,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private(set) var launchPhase = TaskScopeLaunchPhase.starting
     private var interactiveLaunchTask: Task<Void, Never>?
     private var automaticWindowSuppressionTask: Task<Void, Never>?
+    private var runtimeStartTask: Task<Void, Never>?
+    private var terminationTask: Task<Void, Never>?
+    private var verificationExpiryTask: Task<Void, Never>?
     private var pendingShortcutParameterRefresh: (@MainActor () -> Void)?
+    /// Set by a quiet launch (login item, automation, URL or intent): closing its
+    /// last window returns TaskScope to the menu bar.
+    private var returnsToMenuBarWhenWindowsClose = false
 
     override convenience init() {
         self.init(launchSession: .shared, commandBus: .shared,
@@ -156,6 +208,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             name: NSWindow.didBecomeMainNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowWillClose(_:)),
+            name: NSWindow.willCloseNotification,
+            object: nil
+        )
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -168,6 +226,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         if launchSession.allowsRuntime {
             runtime.registerHotkey()
+            // The runtime starts here, not from a SwiftUI view modifier, so
+            // polling, Auto Stop rules and Keep Off enforcement do not depend on
+            // the menu-bar label or a window being created.
+            let context = launchContext
+            runtimeStartTask = Task { @MainActor [weak self] in
+                await self?.runtime.startAppRuntime(context) { [weak self] in
+                    self?.requestShortcutParameterRefresh()
+                }
+            }
+        }
+        if launchContext == .startupVerification {
+            scheduleVerificationExpiry()
         }
         if launchContext.suppressesAutomaticWindowPresentation {
             finalizeBackgroundLaunch()
@@ -178,7 +248,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    /// Quitting while a lifecycle action runs (Cmd-Q, Dock Quit, the footer
+    /// button, SIGTERM, logout) stops polling and Auto Stop rules, gives the
+    /// action a bounded time to finish, then stops any command still running
+    /// (an unanswered administrator prompt, a stuck launchctl) with its process
+    /// group, so nothing outlives TaskScope without its timeout. With no action
+    /// in flight TaskScope quits at once (will-terminate stops any read still
+    /// running), and a stuck action delays quit or logout by a few seconds.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if terminationTask != nil { return .terminateLater }
+        guard runtime.isMutationActive() else { return .terminateNow }
+        runtime.stopAppRuntime()
+        terminationTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            var ticks = 0
+            while self.runtime.isMutationActive(), ticks < self.runtime.terminationWaitTicks {
+                await self.runtime.waitForTerminationTick()
+                ticks += 1
+            }
+            self.runtime.stopRunningCommands()
+            self.runtime.replyToTermination(true)
+        }
+        return .terminateLater
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        runtime.stopAppRuntime()
         willTerminate?()
         // Bounded to about a second: TERM, then KILL, to each command's group.
         runtime.stopRunningCommands()
@@ -186,6 +281,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         terminationHandler.stop()
         interactiveLaunchTask?.cancel()
         automaticWindowSuppressionTask?.cancel()
+        runtimeStartTask?.cancel()
+        verificationExpiryTask?.cancel()
         pendingShortcutParameterRefresh = nil
         NotificationCenter.default.removeObserver(self)
     }
@@ -281,6 +378,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         }
     }
 
+    /// A startup-verification instance quits by itself after a bounded time
+    /// (well above the packaging script's readiness check), so one left running
+    /// cannot keep every later launch handing off to it.
+    private func scheduleVerificationExpiry() {
+        verificationExpiryTask?.cancel()
+        verificationExpiryTask = Task { @MainActor [weak self] in
+            await self?.runtime.waitForVerificationExpiry()
+            guard let self, !Task.isCancelled else { return }
+            self.runtime.terminateApplication()
+        }
+    }
+
     private func resolveLaunchContext(finalizeInteractiveLaunch: Bool) {
         launchContext = TaskScopeLaunchContext.resolve(
             current: launchContext,
@@ -299,15 +408,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         window.orderOut(nil)
     }
 
+    /// After a quiet launch, closing the last TaskScope window returns the app
+    /// to the menu bar (no Dock icon or Cmd-Tab entry), as it started. Opening a
+    /// window again makes it a regular app until that window closes.
+    @objc
+    private func windowWillClose(_ notification: Notification) {
+        guard returnsToMenuBarWhenWindowsClose,
+              windowPresentationAllowed,
+              let window = notification.object as? NSWindow,
+              Self.isTaskScopeWindow(window),
+              !runtime.hasOtherOpenWindow(window) else {
+            return
+        }
+        windowPresentationAllowed = false
+        runtime.setActivationPolicy(.accessory)
+        runtime.restorePreviousApplication()
+    }
+
     private func hideAutomaticWindows() {
         runtime.hideAutomaticWindows()
     }
 
-    private static let automaticWindowTitles: Set<String> = [
-        "TaskScope", "TaskScope Processes", "Onboarding", "About TaskScope"
-    ]
+    static let automaticWindowTitles = Set(TaskScopeScene.allCases.map(\.title))
+
+    /// The main, About and Onboarding windows. The menu-bar panel and the
+    /// Settings window are not among them.
+    static func isTaskScopeWindow(_ window: NSWindow) -> Bool {
+        !(window is NSPanel)
+            && window.styleMask.contains(.titled)
+            && automaticWindowTitles.contains(window.title)
+    }
 
     private func finalizeBackgroundLaunch() {
+        if launchSession.allowsRuntime {
+            returnsToMenuBarWhenWindowsClose = true
+        }
         runtime.setActivationPolicy(.accessory)
         suppressAutomaticWindowPresentation()
         startAutomaticWindowSuppression()
@@ -380,9 +515,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 }
 
+/// The status item's label. MenuBarExtra hosts it in an NSStatusBarButton that
+/// does not take the Label's title for accessibility, so without an explicit
+/// label VoiceOver announces the symbol's name ("Ecg Waveform Path").
+struct TaskScopeStatusItemLabel: View {
+    var body: some View {
+        // MenuBarExtra may size its native status item from rendered image
+        // content, including a hidden badge. Keep this image and identity
+        // constant; the popover already displays the live preset status.
+        Label("TaskScope", systemImage: "waveform.path.ecg")
+            .labelStyle(.iconOnly)
+            .accessibilityLabel("TaskScope")
+    }
+}
+
 @main
 struct TaskScopeApp: App {
     @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.taskScopeCommands) private var focusedCommands
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var processManager: ProcessManager
     @StateObject private var loginItemManager = LoginItemManager()
@@ -393,12 +543,12 @@ struct TaskScopeApp: App {
     @StateObject private var processHistory: ProcessHistory
 
     private let launchSession: TaskScopeLaunchSession
+    private let appRuntime: TaskScopeRuntime
     @State private var showOnboarding: Bool
     @State private var didBootstrapRuntime = false
     @State private var didRequestOnboarding = false
     @State private var promptCoordinator: AutoStopPromptCoordinator?
     @State private var actionFeedback: ProcessActionFeedback?
-    @State private var notificationEnablement = NotificationEnablementCoordinator()
     /// One coordinator for the app's lifetime. Constructing it per view init
     /// created a new Accessibility runtime on every body evaluation, whose
     /// pending restoration then ran against a deallocated runtime.
@@ -410,56 +560,45 @@ struct TaskScopeApp: App {
         let systemInventory = SystemProcessInventory()
         let sharedInventory = CoalescingProcessInventory(upstream: systemInventory)
         let stores = TaskScopeLaunchStores(session: launchSession, inventory: sharedInventory)
-        let settings = stores.settings
         let processHistory = ProcessHistory(inventory: sharedInventory)
         let processManager = ProcessManager(
             processInventory: sharedInventory,
             verificationInventory: systemInventory,
             processHistory: processHistory
         )
-        let watchedApps = stores.watchedApps
-        let autoStopRules = stores.autoStopRules
-        let coordinator = AppCommandCoordinator(
-            processManager: processManager,
-            presets: { watchedApps.presets },
-            allowsCommands: {
-                launchSession.allowsRuntime
-            }
-        )
-
-        processManager.watchedAppsProvider = { watchedApps.presets }
-        processManager.isKeepOffIntentWritableProvider = { !settings.isReadOnlyAfterCorruption }
         processManager.globalProtectServiceObservationProvider = {
             await GlobalProtectServiceObservation.read()
         }
-        processManager.keptOffPresetsProvider = {
-            settings.keepGlobalProtectOff
-                ? watchedApps.presets.filter { $0.id == WatchedAppPreset.globalProtectID }
-                : []
-        }
-        processManager.isPresetKeptOffProvider = { preset in
-            preset.id == WatchedAppPreset.globalProtectID && settings.keepGlobalProtectOff
-        }
-        processManager.setPresetKeptOffHandler = { preset, keptOff in
-            guard preset.id == WatchedAppPreset.globalProtectID else { return }
-            settings.keepGlobalProtectOff = keptOff
-        }
-        launchSession.installCommandHandler(on: .shared) { command in
-            await coordinator.perform(command)
-        }
+        let appRuntime = TaskScopeRuntime(
+            session: launchSession,
+            stores: stores,
+            processManager: processManager,
+            history: processHistory,
+            bus: .shared,
+            effects: .init(
+                requestNotificationAuthorization: {
+                    await NotificationService.shared.requestAuthorization()
+                },
+                primeNotificationBaseline: {
+                    NotificationService.shared.prime(initialRunningNames: $0)
+                }
+            )
+        )
+        TaskScopeRuntime.current = appRuntime
+        self.appRuntime = appRuntime
 
         _processManager = StateObject(wrappedValue: processManager)
-        _settings = StateObject(wrappedValue: settings)
+        _settings = StateObject(wrappedValue: stores.settings)
         _savedSelections = StateObject(wrappedValue: stores.savedSelections)
         _showOnboarding = State(initialValue: stores.showOnboarding)
-        _watchedApps = StateObject(wrappedValue: watchedApps)
-        _autoStopRules = StateObject(wrappedValue: autoStopRules)
+        _watchedApps = StateObject(wrappedValue: stores.watchedApps)
+        _autoStopRules = StateObject(wrappedValue: stores.autoStopRules)
         _processHistory = StateObject(wrappedValue: processHistory)
         _activityMonitor = State(initialValue: ActivityMonitorCoordinator())
     }
 
     var body: some Scene {
-        WindowGroup("TaskScope", id: "processes") {
+        WindowGroup(TaskScopeScene.main.title, id: TaskScopeScene.main.id) {
             Group {
                 if appDelegate.windowPresentationAllowed {
                     TaskScopePopoverView(
@@ -499,10 +638,46 @@ struct TaskScopeApp: App {
                     showAboutWindow()
                 }
             }
-            CommandGroup(after: .help) {
+            // Replaces File > New, which opened duplicate main windows.
+            CommandGroup(replacing: .newItem) {
+                Button("Refresh") { focusedCommands?.refresh() }
+                    .keyboardShortcut("r")
+                    .disabled(focusedCommands == nil)
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find…") { focusedCommands?.find() }
+                    .keyboardShortcut("f")
+                    .disabled(focusedCommands == nil)
+            }
+            CommandGroup(after: .toolbar) {
+                Toggle("Tree View", isOn: Binding(
+                    get: { focusedCommands?.isTreeMode ?? false },
+                    set: { focusedCommands?.setTreeMode($0) }
+                ))
+                .disabled(focusedCommands == nil)
+                Divider()
+                Button("Processes") { focusedCommands?.showSection(.processes) }
+                    .disabled(focusedCommands == nil)
+                Button("Presets") { focusedCommands?.showSection(.presets) }
+                    .disabled(focusedCommands == nil)
+            }
+            CommandMenu("Process") {
+                Button("Show Detail") { focusedCommands?.showDetail() }
+                    .keyboardShortcut("i")
+                    .disabled(focusedCommands?.hasKeyboardProcess != true)
+                Divider()
+                Button("Stop…") { focusedCommands?.stop(.normal) }
+                    .disabled(focusedCommands?.canStop != true)
+                Button("Force Stop…") { focusedCommands?.stop(.force) }
+                    .disabled(focusedCommands?.canStop != true)
+            }
+            // The default "TaskScope Help" item opened a help book this bundle
+            // does not have; the welcome window is the app's help.
+            CommandGroup(replacing: .help) {
                 Button("Welcome to TaskScope") {
                     showOnboardingWindow()
                 }
+                .keyboardShortcut("?", modifiers: .command)
             }
         }
 
@@ -539,13 +714,16 @@ struct TaskScopeApp: App {
             )
         }
 
-        WindowGroup("About TaskScope", id: "about") {
+        // Single-instance scenes: a second About command or a second request
+        // for onboarding fronts the open window instead of stacking another.
+        Window(TaskScopeScene.about.title, id: TaskScopeScene.about.id) {
             AboutView()
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commandsRemoved()
 
-        WindowGroup("Onboarding", id: "onboarding") {
+        Window(TaskScopeScene.onboarding.title, id: TaskScopeScene.onboarding.id) {
             OnboardingView(
                 hotkeyShortcut: HotkeyManager.shared.hotkeyEnabled ? HotkeyManager.shared.displayString : nil,
                 onComplete: {
@@ -555,91 +733,43 @@ struct TaskScopeApp: App {
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
+        .commandsRemoved()
     }
 
     @ViewBuilder
     private var menuBarLabel: some View {
-        Group {
-            // MenuBarExtra may size its native status item from rendered image
-            // content, including a hidden badge. Keep this image and identity
-            // constant; the popover already displays the live preset status.
-            Label("TaskScope", systemImage: "waveform.path.ecg")
-                .labelStyle(.iconOnly)
-        }
-        .task {
-            await bootstrapRuntimeIfNeeded()
-            if appDelegate.windowPresentationAllowed {
-                openOnboardingIfNeeded()
+        TaskScopeStatusItemLabel()
+            .task {
+                await bootstrapRuntimeIfNeeded()
+                if appDelegate.windowPresentationAllowed {
+                    openOnboardingIfNeeded()
+                }
             }
-        }
-        // Onboarding is gated on window presentation being allowed, not on the
-        // launch context, so a background launch that is later activated by the
-        // user is still offered onboarding on that first interactive activation.
-        .onChange(of: appDelegate.windowPresentationAllowed) { _, allowed in
-            if allowed {
-                openOnboardingIfNeeded()
+            // Onboarding is gated on window presentation being allowed, not on the
+            // launch context, so a background launch that is later activated by the
+            // user is still offered onboarding on that first interactive activation.
+            .onChange(of: appDelegate.windowPresentationAllowed) { _, allowed in
+                if allowed {
+                    openOnboardingIfNeeded()
+                }
             }
-        }
-        .onChange(of: settings.refreshIntervalSeconds) { _, _ in
-            configurePolling()
-            processHistory.updateConsumerCadence(settings.refreshIntervalSeconds)
-        }
-        .onChange(of: settings.keepGlobalProtectOff) { _, _ in
-            configurePolling()
-        }
-        .onChange(of: settings.autoRefreshProcessList) { _, _ in
-            configurePolling()
-        }
-        .onChange(of: settings.sortKeyRaw) { _, _ in
-            processManager.sortKey = settings.sortKey
-        }
-        .onChange(of: settings.processListLimit) { _, _ in
-            processManager.applyCurrentDisplayLimit()
-        }
-        .onChange(of: settings.enableNotifications) { _, newValue in
-            guard launchSession.allowsRuntime else { return }
-            let token = notificationEnablement.beginConfiguration(
-                enabled: newValue,
-                setDeliveryEnabled: { processManager.enableNotifications = $0 }
-            )
-            configurePolling()
-            guard newValue else { return }
-
-            Task {
-                await NotificationService.shared.requestAuthorization()
-                notificationEnablement.completeEnabledConfiguration(
-                    token: token,
-                    currentRunningNames: { eligibleNotificationNames() },
-                    primeBaseline: {
-                        NotificationService.shared.prime(initialRunningNames: $0)
-                    },
-                    setDeliveryEnabled: { processManager.enableNotifications = $0 }
-                )
+            .onReceive(
+                NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            ) { _ in
+                guard launchSession.allowsRuntime else { return }
+                Task {
+                    await TaskScopeExternalStateRefresh.perform(
+                        refreshLoginItem: { loginItemManager.refresh() },
+                        refreshNotificationAuthorization: {
+                            await NotificationService.shared.refreshAuthorizationStatus()
+                        }
+                    )
+                }
             }
-        }
-        .onChange(of: watchedApps.presets) { _, _ in
-            guard launchSession.allowsRuntime else { return }
-            appDelegate.requestShortcutParameterRefresh()
-            // The refresh re-baselines on its own when the watched-name set changed,
-            // so a newly watched app that was already running is not announced as
-            // having just started.
-            Task { await processManager.refreshWatchedStatus(showMessage: false) }
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-        ) { _ in
-            guard launchSession.allowsRuntime else { return }
-            Task {
-                await TaskScopeExternalStateRefresh.perform(
-                    refreshLoginItem: { loginItemManager.refresh() },
-                    refreshNotificationAuthorization: {
-                        await NotificationService.shared.refreshAuthorizationStatus()
-                    }
-                )
-            }
-        }
     }
 
+    /// Installs the window, hotkey and quit hooks that need this scene's
+    /// `openWindow`, and starts the runtime if AppDelegate has not yet.
     private func bootstrapRuntimeIfNeeded() async {
         guard !didBootstrapRuntime,
               launchSession.allowsRuntime,
@@ -647,10 +777,6 @@ struct TaskScopeApp: App {
         didBootstrapRuntime = true
 
         loginItemManager.refresh()
-        processManager.watchedAppsProvider = { watchedApps.presets }
-        processManager.processListLimitProvider = { settings.processListLimit }
-        processManager.sortKey = settings.sortKey
-        processManager.enableNotifications = settings.enableNotifications
         HotkeyManager.shared.onShow = {
             showTaskScopeWindow()
         }
@@ -659,57 +785,19 @@ struct TaskScopeApp: App {
         }
         appDelegate.willTerminate = {
             activityMonitor.restoreActivityMonitorState()
-            settings.flushPendingWrites()
         }
         promptCoordinator = AutoStopPromptCoordinator(rules: autoStopRules, confirmation: AppModalMenuBarConfirmation())
         actionFeedback = ProcessActionFeedback(manager: processManager)
-        configurePolling()
-        autoStopRules.start(
-            cadence: 10,
-            perform: AutoStopActionHandlerFactory.make(
-                processManager: processManager,
-                rules: autoStopRules
-            )
+        await appRuntime.start(
+            context: appDelegate.launchContext,
+            requestShortcutParameterRefresh: { appDelegate.requestShortcutParameterRefresh() }
         )
-        await processManager.refreshWatchedStatus(showMessage: false)
-        await processManager.enforceKeptOffPresets(force: true)
-
-        if settings.enableNotifications {
-            await NotificationService.shared.requestAuthorization()
-            let running = eligibleNotificationNames()
-            NotificationService.shared.prime(initialRunningNames: running)
-        }
-
-        appDelegate.requestShortcutParameterRefresh()
-    }
-
-    private func configurePolling() {
-        guard launchSession.allowsRuntime else { return }
-        processManager.setPolling(
-            interval: settings.refreshIntervalSeconds,
-            includeProcessList: settings.autoRefreshProcessList,
-            backgroundActivity: settings.enableNotifications || settings.keepGlobalProtectOff
-        )
-    }
-
-    private func eligibleNotificationNames() -> Set<String> {
-        let enabledPresetIDs = Set(watchedApps.presets.filter(\.notificationsEnabled).map(\.id))
-        return ProcessManager.notificationNames(for: processManager.snapshots.filter {
-            enabledPresetIDs.contains($0.preset.id)
-        })
     }
 
     private func openOnboardingIfNeeded() {
         guard showOnboarding, !didRequestOnboarding else { return }
         didRequestOnboarding = true
-        openWindow(id: "onboarding")
-        NSApp.activate(ignoringOtherApps: true)
-    }
-
-    /// The intended way back to the introduction after Get Started.
-    private func showOnboardingWindow() {
-        appDelegate.permitWindowPresentation()
-        openWindow(id: "onboarding")
+        openWindow(id: TaskScopeScene.onboarding.id)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -727,19 +815,27 @@ struct TaskScopeApp: App {
             window.deminiaturize(nil)
             window.makeKeyAndOrderFront(nil)
         } else {
-            openWindow(id: "processes")
+            openWindow(id: TaskScopeScene.main.id)
         }
 
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func showAboutWindow() {
+        appDelegate.permitWindowPresentation()
         NSApp.setActivationPolicy(.regular)
-        openWindow(id: "about")
+        openWindow(id: TaskScopeScene.about.id)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The intended way back to the introduction after Get Started.
+    private func showOnboardingWindow() {
+        appDelegate.permitWindowPresentation()
+        openWindow(id: TaskScopeScene.onboarding.id)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func isTaskScopeMainWindow(_ window: NSWindow) -> Bool {
-        window.title == "TaskScope" || window.title == "TaskScope Processes"
+        window.title == TaskScopeScene.main.title
     }
 }

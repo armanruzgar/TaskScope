@@ -50,20 +50,25 @@ struct WatchedPresetCatalog: Sendable {
     }
 
     func entities() -> [WatchedPresetEntity] {
+        presets().filter { !$0.hasUnknownFields }.map(WatchedPresetEntity.init(preset:))
+    }
+
+    func preset(id: UUID) -> WatchedAppPreset? {
+        presets().first { $0.id == id }
+    }
+
+    private func presets() -> [WatchedAppPreset] {
         let object = objectForKey(key)
-        let presets: [WatchedAppPreset]
         if let data = object as? Data,
            let decoded = try? JSONDecoder().decode(PartiallyDecodedArray<WatchedAppPreset>.self, from: data) {
-            presets = WatchedAppsStore.validatedPresets(decoded.elements).presets
+            return WatchedAppsStore.validatedPresets(decoded.elements).presets
         } else if object == nil {
-            presets = [.globalProtect]
+            return [.globalProtect]
         } else {
             // Match WatchedAppsStore's corruption policy: do not silently replace
             // unreadable user data with a default automation target.
-            presets = []
+            return []
         }
-
-        return presets.filter { !$0.hasUnknownFields }.map(WatchedPresetEntity.init(preset:))
     }
 }
 
@@ -173,14 +178,33 @@ struct StopWatchedAppIntent: AppIntent {
 
     static var openAppWhenRun: Bool { false }
 
+    /// The bus `perform()` submits to; tests replace it and restore it.
+    @MainActor static var commandBus = AppCommandBus.shared
+    /// The system confirmation `perform()` requests before stopping anything. It
+    /// throws when the user declines. Tests replace it and restore it.
+    @MainActor static var requestStopConfirmation: @MainActor (StopWatchedAppIntent, String) async throws -> Void = {
+        intent, message in
+        let dialog = IntentDialog(stringLiteral: message)
+        if #available(macOS 15.0, *) {
+            try await intent.requestConfirmation(dialog: dialog)
+        } else {
+            try requireConfirmed(await intent.$app.requestConfirmation(for: intent.app, dialog: dialog))
+        }
+    }
+
+    /// A declined macOS 14 confirmation returns false; treat it as cancellation.
+    static func requireConfirmed(_ confirmed: Bool) throws {
+        guard confirmed else { throw CancellationError() }
+    }
+
+    @MainActor
+    private static func confirmStop(_ intent: StopWatchedAppIntent, _ message: String) async throws {
+        try await requestStopConfirmation(intent, message)
+    }
+
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let result = try await executeStop(bus: .shared) { message in
-            let dialog = IntentDialog(stringLiteral: message)
-            if #available(macOS 15.0, *) {
-                try await requestConfirmation(dialog: dialog)
-            } else if try await !$app.requestConfirmation(for: app, dialog: dialog) {
-                throw CancellationError()
-            }
+        let result = try await executeStop(bus: Self.commandBus) { message in
+            try await Self.confirmStop(self, message)
         }
         let message = try TaskScopeIntentDialog.successMessage(
             for: result,
@@ -192,11 +216,25 @@ struct StopWatchedAppIntent: AppIntent {
     @MainActor
     func executeStop(
         bus: AppCommandBus,
+        catalog: WatchedPresetCatalog = WatchedPresetCatalog(),
         confirmation: (String) async throws -> Void
     ) async throws -> TaskScopeCommandResult {
         try await TaskScopeIntentExecution.perform(.stopPresetEntity(app.commandTarget), bus: bus) {
-            try await confirmation("Stop \(app.displayName) and its eligible watched processes? This may interrupt active work or connections.")
+            try await confirmation(Self.stopConfirmationMessage(for: app, preset: catalog.preset(id: app.id)))
         }
+    }
+
+    /// Discloses what the stop does, as the in-app Close confirmation does: the
+    /// launch agents unloaded first and the force stop after the graceful window.
+    static func stopConfirmationMessage(for app: WatchedPresetEntity, preset: WatchedAppPreset?) -> String {
+        var sentences = ["Stop \(app.displayName) and its eligible watched processes?"]
+        let agents = preset.map(PresetStopScope.closeAgentLabels(for:)) ?? []
+        if !agents.isEmpty {
+            sentences.append("TaskScope will first unload its user launch agents (\(agents.joined(separator: ", "))).")
+        }
+        sentences.append(PresetStopScope.forceStopDisclosure)
+        sentences.append("This may interrupt active work or connections.")
+        return sentences.joined(separator: " ")
     }
 }
 

@@ -8,7 +8,10 @@ import XCTest
 final class GpKeepoffRegressionTests: XCTestCase {
     func testRecoveryCardDisablesEveryIntentWriterAndExplainsWhy() throws {
         let card = makeCard(enabled: false, recovery: {})
-        XCTAssertTrue(try card.inspect().find(ViewType.Toggle.self).isDisabled())
+        // The saved intent is unreadable, so recovery shows Keep Off as unknown
+        // and offers no switch to change it (audit A11-2).
+        XCTAssertThrowsError(try card.inspect().find(ViewType.Toggle.self))
+        XCTAssertNoThrow(try card.inspect().find(text: "Keep GlobalProtect Off: Unknown"))
         XCTAssertFalse(try makeCard(enabled: true).inspect().find(ViewType.Toggle.self).isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Quit All…").isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Apply Keep Off…").isDisabled())

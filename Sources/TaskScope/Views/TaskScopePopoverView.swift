@@ -34,6 +34,8 @@ struct TaskScopePopoverView: View {
     /// The list must own focus for `.onKeyPress` to receive arrow, Return, and
     /// Escape without Full Keyboard Access; tapping a row moves focus here.
     @FocusState private var processListFocused: Bool
+    /// Edit > Find focuses the search field.
+    @FocusState private var searchFocused: Bool
 
     @MainActor
     init(
@@ -51,7 +53,7 @@ struct TaskScopePopoverView: View {
         reportState: ProcessReportPresentationState? = nil,
         reportWindowState: ControlActiveState? = nil,
         mainWindowVisible: @escaping @MainActor () -> Bool = {
-            NSApplication.shared.windows.contains { $0.isVisible && ($0.title == "TaskScope" || $0.title == "TaskScope Processes") }
+            NSApplication.shared.windows.contains { $0.isVisible && $0.title == TaskScopeScene.main.title }
         },
         activityMonitor: (any ActivityMonitorCoordinating)? = nil,
         menuBarConfirmation: (any MenuBarConfirming)? = nil
@@ -105,12 +107,42 @@ struct TaskScopePopoverView: View {
             footer
         }
         .background(.regularMaterial)
+        .focusedSceneValue(\.taskScopeCommands, viewCommands)
+    }
+
+    /// The menu-bar commands for this view; each goes through the same path as
+    /// the matching control, so a stop from the menu still asks for confirmation.
+    private var viewCommands: TaskScopeViewCommands {
+        let keyboardProcess = keyboardFocusedProcess
+        return TaskScopeViewCommands(
+            refresh: { refreshVisibleSection() },
+            find: {
+                settings.selectedSectionRaw = TaskScopeSection.processes.rawValue
+                searchFocused = true
+            },
+            isTreeMode: listState.treeMode,
+            setTreeMode: { listState.treeMode = $0 },
+            showSection: { settings.selectedSectionRaw = $0.rawValue },
+            hasKeyboardProcess: keyboardProcess != nil,
+            showDetail: { showKeyboardDetail() },
+            canStop: !processManager.selectedPids.isEmpty
+                || keyboardProcess.map { !processManager.isCurrentProcess($0) } == true,
+            stop: { mode in
+                if !processManager.selectedPids.isEmpty {
+                    confirmationState.requestBatch(batchTargets, mode: mode, hiddenCount: hiddenSelectedCount)
+                } else if let keyboardProcess, !processManager.isCurrentProcess(keyboardProcess) {
+                    confirmationState.requestTermination(keyboardProcess, mode: mode)
+                }
+            }
+        )
     }
 
     private var observedContent: some View {
         baseContent
         .task { await processManager.beginObservingStatus() }
         .onAppear {
+            listState.filterMode = settings.filterMode
+            listState.treeMode = settings.treeMode
             guard isExpandedWindow, !registeredExtendedMetrics else { return }
             registeredExtendedMetrics = true
             history.beginSampling(cadence: settings.refreshIntervalSeconds)
@@ -138,13 +170,23 @@ struct TaskScopePopoverView: View {
         .onChange(of: settings.searchText) { _, _ in
             expandAncestorsOfNewMatches()
         }
-        .onChange(of: listState.filterMode) { _, _ in
+        .onChange(of: listState.filterMode) { _, mode in
+            settings.filterModeRaw = mode.rawValue
             expandAncestorsOfNewMatches()
         }
         .onChange(of: listState.treeMode) { _, enabled in
+            settings.treeMode = enabled
             if enabled {
                 expandAncestorsOfNewMatches()
             }
+        }
+        // Filter and Tree View are saved, and shared with the window or the
+        // menu-bar popover, like Sort.
+        .onChange(of: settings.filterModeRaw) { _, _ in
+            if listState.filterMode != settings.filterMode { listState.filterMode = settings.filterMode }
+        }
+        .onChange(of: settings.treeMode) { _, enabled in
+            if listState.treeMode != enabled { listState.treeMode = enabled }
         }
         // A persisted search can be active before the first list loads; expand
         // its matches' ancestors once there is a tree to expand.
@@ -619,6 +661,7 @@ struct TaskScopePopoverView: View {
                     .foregroundStyle(.secondary)
 
                 TextField("Search processes", text: $settings.searchText)
+                    .focused($searchFocused)
                     .textFieldStyle(.plain)
                     .accessibilityLabel("Search processes")
 
@@ -770,6 +813,11 @@ struct TaskScopePopoverView: View {
                                 }
                             }
                         }
+                    }
+                    // Edit > Select All (and its Command-A key equivalent) acts like
+                    // the Command-A key handler below.
+                    .onCommand(#selector(NSResponder.selectAll(_:))) {
+                        selectAllVisibleMatches()
                     }
                     .focusable()
                     .focused($processListFocused)
@@ -1475,11 +1523,9 @@ struct TaskScopePopoverView: View {
             names = preset.killableNames
         }
         let targets = names.isEmpty ? "no configured processes" : names.joined(separator: ", ")
-        let agentPreset = preset.hasSupportedGlobalProtectIdentity ? preset.globalProtectInterfaceOnly : preset
-        let agentLabels = agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
+        let agentLabels = PresetStopScope.closeAgentLabels(for: preset)
         let agentList = agentLabels.joined(separator: ", ")
-        let window = Int(ProcessTerminationController.gracefulExitWindowSeconds)
-        let forceStopDisclosure = "Sends SIGTERM. Apps may close without asking to save changes. A process still running \(window) seconds after the stop request is force stopped."
+        let forceStopDisclosure = PresetStopScope.forceStopDisclosure
 
         if pending.action == .stopServices {
             return "GlobalProtect did not complete a normal disconnect. TaskScope will stop and disable its services anyway and keep them off until you choose Open. This can interrupt network access or leave VPN DNS settings behind. If internet access stops working, choose Open to restore the service. Administrator approval may be required. \(forceStopDisclosure)"

@@ -308,7 +308,7 @@ final class AppShellRegressionTests: XCTestCase {
 
     @MainActor
     func testRestoringThePreviousApplicationRequiresActivationAndUsesTheMostRecentApp() {
-        let other = NSRunningApplication.current
+        let other = AppShellPreviousApplication(processIdentifier: 123, isTerminated: false)
         let tracker = PreviousApplicationTracker(ownProcessID: other.processIdentifier + 1, initial: nil)
         var events: [String] = []
         let restore = { (active: Bool) in
@@ -393,4 +393,9 @@ private actor AppShellInventory: ProcessInventoryProviding {
         loadCount += 1
         return .success([])
     }
+}
+
+private struct AppShellPreviousApplication: PreviousApplication {
+    var processIdentifier: pid_t
+    var isTerminated: Bool
 }

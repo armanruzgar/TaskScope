@@ -195,6 +195,14 @@ final class ProcessManager: ObservableObject {
         if wasNeeded, !pollingIsNeeded { restartPolling() }
     }
 
+    /// Stops the poll until `setPolling` configures it again. Quitting stops it
+    /// first, so a background Keep Off tick cannot start a new action while an
+    /// in-flight one is given time to finish.
+    func stopPolling() {
+        isPollingConfigured = false
+        restartPolling()
+    }
+
     func restartPolling() {
         guard pollingIsNeeded else {
             pollingController.stop()

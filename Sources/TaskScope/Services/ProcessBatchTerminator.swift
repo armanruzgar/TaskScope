@@ -44,9 +44,12 @@ struct DarwinProcessSignaler: ProcessSignaling {
         }
         let call = kill(pid, signal)
         if call.result == 0 {
+            TaskScopeActionLog.signalSent(signal, to: pid, delivered: true)
             return .delivered
         }
-        return call.errno == ESRCH ? .noSuchProcess : .rejected(errno: call.errno)
+        guard call.errno != ESRCH else { return .noSuchProcess }
+        TaskScopeActionLog.signalSent(signal, to: pid, delivered: false, errorNumber: call.errno)
+        return .rejected(errno: call.errno)
     }
 
     func isAlive(_ pid: Int32) -> Bool {

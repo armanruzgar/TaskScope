@@ -156,3 +156,21 @@ struct PresetStopResult {
         Self(message: message, failureReason: reason)
     }
 }
+
+extension PresetStopScope {
+    /// Every confirmation of a preset stop discloses what the stop request is
+    /// and its escalation to SIGKILL.
+    static var forceStopDisclosure: String {
+        let window = Int(ProcessTerminationController.gracefulExitWindowSeconds)
+        return "Sends SIGTERM. Apps may close without asking to save changes. "
+            + "A process still running \(window) seconds after the stop request is force stopped."
+    }
+
+    /// The launch agents a Close (`.all`) of `preset` unloads before stopping its
+    /// processes. For GlobalProtect that is only the interface agent: these stops
+    /// never disconnect the VPN.
+    static func closeAgentLabels(for preset: WatchedAppPreset) -> [String] {
+        let agentPreset = preset.hasSupportedGlobalProtectIdentity ? preset.globalProtectInterfaceOnly : preset
+        return agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
+    }
+}

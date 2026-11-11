@@ -43,12 +43,14 @@ final class AppCommandCoordinator {
         self.allowsCommands = allowsCommands
     }
 
+    static let startupVerificationRejection = TaskScopeCommandResult(
+        status: .rejected,
+        message: "Commands are disabled during startup verification."
+    )
+
     func perform(_ command: TaskScopeCommand) async -> TaskScopeCommandResult {
         guard allowsCommands() else {
-            return TaskScopeCommandResult(
-                status: .rejected,
-                message: "Commands are disabled during startup verification."
-            )
+            return Self.startupVerificationRejection
         }
 
         switch command {
