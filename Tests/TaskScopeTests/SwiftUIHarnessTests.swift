@@ -622,7 +622,7 @@ final class SwiftUIHarnessTests: XCTestCase {
                 .contains("Turn off Keep GlobalProtect Off") == true
         )
         XCTAssertFalse(fixture.stores.watchedApps.remove(.globalProtect), "The store itself refuses, not only the view")
-        XCTAssertNil(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertNil(PresetChangePolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: false
         ))
 
@@ -648,7 +648,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         let watchedApps = WatchedAppsStore(
             userDefaults: fixture.stores.defaults,
             key: "presets",
-            deletionPolicy: .keepOff(settings: settings, activity: fixture.manager.keepOffActivity)
+            changePolicy: .keepOff(settings: settings, activity: fixture.manager.keepOffActivity)
         )
         let interactions = SettingsInteractionState()
         let view = SettingsView(
@@ -1804,7 +1804,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             watchedApps: WatchedAppsStore(
                 userDefaults: defaults,
                 key: "presets",
-                deletionPolicy: .keepOff(settings: settings, activity: keepOffActivity)
+                changePolicy: .keepOff(settings: settings, activity: keepOffActivity)
             ),
             savedSelections: SavedSelectionsStore(userDefaults: defaults, key: "selections"),
             autoStopRules: AutoStopRulesStore(

@@ -389,7 +389,7 @@ struct TaskScopeLaunchStores {
         keepOffActivity = KeepOffActivity()
         watchedApps = WatchedAppsStore(
             userDefaults: defaults,
-            deletionPolicy: .keepOff(settings: settings, activity: keepOffActivity)
+            changePolicy: .keepOff(settings: settings, activity: keepOffActivity)
         )
         autoStopRules = AutoStopRulesStore(userDefaults: defaults, inventory: inventory)
         savedSelections = SavedSelectionsStore(userDefaults: defaults)

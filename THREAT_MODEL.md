@@ -533,10 +533,13 @@ Required invariants:
 - refuse all Keep Off intent writers while settings are unreadable, including
   GlobalProtect Quit All and confirmed Stop Services Anyway; show the saved
   intent as unknown and pause background Keep Off enforcement until reset;
-- refuse deleting a preset when settings recovery makes Keep Off unknown, its
-  Keep Off is enabled, or its explicit Keep Off is queued/running. The preset
-  store applies this rule to every deletion, not only the Settings window's
-  Delete button, so no other path can orphan the launchd overrides; recheck preset
+- refuse deleting a preset, or editing anything but its notifications setting,
+  when settings recovery makes Keep Off unknown, its Keep Off is enabled, or
+  its explicit Keep Off is queued/running. The preset store applies this rule
+  to every deletion and edit, not only the Settings window's buttons, so no
+  other path can orphan the launchd overrides (turning Keep Off off re-enables
+  only the agents the preset lists then) or let background enforcement act on
+  an unconfirmed definition; recheck preset
   existence and settings writability after disconnect before writing intent
   or disabling services, and refuse a custom preset's Keep Off if the stored
   preset changed or was removed while the action waited. Restoring a deleted built-in preset adds only the

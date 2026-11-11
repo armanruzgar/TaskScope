@@ -287,12 +287,16 @@ struct SettingsView: View {
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Dry run \(preset.displayName)")
                             if !preset.isBuiltInGlobalProtect {
+                                // Keep Off acts on the preset as it is, so it is
+                                // not editable while kept off; the reason shows.
+                                let editRefusal = presetEditRefusal(for: preset)
                                 Button("Edit…") {
                                     prepareToEdit(preset)
                                 }
                                 .buttonStyle(.borderless)
                                 .accessibilityLabel("Edit preset \(preset.displayName)")
-                                .disabled(watchedApps.isReadOnlyAfterCorruption)
+                                .disabled(watchedApps.isReadOnlyAfterCorruption || editRefusal != nil)
+                                .help(editRefusal ?? "Edit this preset")
                             }
                             Button("Delete…", role: .destructive) {
                                 requestPresetDeletion([preset])
@@ -782,6 +786,12 @@ struct SettingsView: View {
     private var presetDeletionRefusalMessage: String? {
         _ = pendingKeepOffPresetIDs
         return refusedPresetDeletion.flatMap { watchedApps.deletionRefusal(for: $0) }
+    }
+
+    /// Re-derived on every draw, like the deletion refusal.
+    private func presetEditRefusal(for preset: WatchedAppPreset) -> String? {
+        _ = pendingKeepOffPresetIDs
+        return watchedApps.editRefusal(for: preset)
     }
 
     /// A plain string: interpolating the PID into a Text literal would format

@@ -28,7 +28,7 @@ final class PresetPolicyTests: XCTestCase {
         let store = WatchedAppsStore(
             userDefaults: makeDefaults(),
             key: "presets",
-            deletionPolicy: PresetDeletionPolicy { $0.id == kept.id ? "Kept is protected." : nil }
+            changePolicy: PresetChangePolicy(deletionRefusal: { $0.id == kept.id ? "Kept is protected." : nil }, editRefusal: { _ in nil })
         )
         XCTAssertTrue(store.add(kept))
         XCTAssertTrue(store.add(free))
@@ -76,40 +76,40 @@ final class PresetPolicyTests: XCTestCase {
     }
 
     func testKeepOffRefusalNamesTheWayOut() {
-        XCTAssertNil(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertNil(PresetChangePolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: false
         ))
-        XCTAssertTrue(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertTrue(PresetChangePolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false
         )?.hasPrefix("Turn off Keep GlobalProtect Off") == true)
-        XCTAssertTrue(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertTrue(PresetChangePolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: true
         )?.hasPrefix("Wait for the pending GlobalProtect Keep Off action") == true)
         // Unreadable settings hide the intent, which may still be on.
-        XCTAssertTrue(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertTrue(PresetChangePolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: false, isSettingsReadOnly: true, isKeepOffPending: false
         )?.hasPrefix("Settings are unreadable") == true)
         // Any preset can be kept off: its own name and agents are in the text.
         let custom = customPreset()
-        XCTAssertNil(PresetDeletionPolicy.keepOffRefusal(
+        XCTAssertNil(PresetChangePolicy.keepOffRefusal(
             for: custom, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: false
         ))
         XCTAssertEqual(
-            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
+            PresetChangePolicy.keepOffRefusal(for: custom, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
             "Turn off Keep Example Off before deleting it. Its user launch agents are disabled by a persistent launchd override that deleting the preset would not clear."
         )
         var bare = custom
         bare.userLaunchAgentJobs = []
         XCTAssertEqual(
-            PresetDeletionPolicy.keepOffRefusal(for: bare, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
+            PresetChangePolicy.keepOffRefusal(for: bare, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
             "Turn off Keep Example Off before deleting it."
         )
         XCTAssertEqual(
-            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: true),
+            PresetChangePolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: true),
             "Wait for the pending Keep Off action for Example to finish before deleting it."
         )
         XCTAssertEqual(
-            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: true, isKeepOffPending: false),
+            PresetChangePolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: true, isKeepOffPending: false),
             "Settings are unreadable, so Keep Off may still be on for Example. Recover settings and turn its Keep Off off before deleting it."
         )
     }
@@ -138,7 +138,7 @@ final class PresetPolicyTests: XCTestCase {
         let store = WatchedAppsStore(
             userDefaults: makeDefaults(),
             key: "presets",
-            deletionPolicy: PresetDeletionPolicy { $0.displayName == "Example" ? "Stored copy refused." : nil }
+            changePolicy: PresetChangePolicy(deletionRefusal: { $0.displayName == "Example" ? "Stored copy refused." : nil }, editRefusal: { _ in nil })
         )
         XCTAssertTrue(store.add(stored))
         XCTAssertEqual(store.deletionRefusal(for: stale), "Stored copy refused.")

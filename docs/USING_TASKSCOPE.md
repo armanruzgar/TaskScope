@@ -341,7 +341,8 @@ processes that run from an app bundle's `Contents/MacOS`; Save Selection as
 Preset makes the selected process that is the app bundle's own executable the
 main process, even when a helper is listed first. Each preset in Settings >
 Watched Apps has a **Notify** switch and **Dry Run** and **Delete…** buttons,
-and custom presets also have **Edit…**; deleting asks for confirmation.
+and custom presets also have **Edit…** (unavailable, with the reason, while the
+preset is kept off); deleting asks for confirmation.
 **Export…** and **Import…** handle the whole list. Each preset card in the
 **Presets** section has **Open**, **Quit App**, **Quit Helpers**, **Quit
 App and Helpers**, and **Restart**, and a **Keep <name> Off** switch (see
@@ -467,7 +468,11 @@ Turning the switch off clears the persistent disable overrides and the Keep Off
 intent without opening anything ("Example is allowed to run. Nothing was
 started."); **Open** turns Keep Off off too. A mistaken preset would be stopped
 on every read, so the confirmation, the **Dry Run** and the import preview say
-what Keep Off does for it. The built-in GlobalProtect preset's switch is the
+what Keep Off does for it. While a preset's Keep Off is on, or its Keep Off
+action is still running, the preset cannot be edited or deleted (its **Notify**
+switch still works): Keep Off acts on the preset as it is, turning it off
+re-enables only the launch agents the preset lists then, and an edit would
+change what is kept off without a new confirmation. Turn Keep Off off first. The built-in GlobalProtect preset's switch is the
 stronger **Keep GlobalProtect Off**, which disconnects the VPN first and can
 stop its system service with administrator approval; turning it off opens
 GlobalProtect and restores its services. Read [GlobalProtect](GLOBALPROTECT.md).
@@ -476,9 +481,9 @@ Deleting the built-in GlobalProtect preset asks for confirmation and says that
 its Keep GlobalProtect Off and Disconnect controls go with it. Deletion is
 refused while Keep GlobalProtect Off is on, while an explicit Keep Off action
 is queued or running, and while settings are unreadable. Any other preset
-cannot be deleted while its Keep Off is on, while its explicit Keep Off action
-is queued or running, or while settings are unreadable; turn its Keep Off off
-first. A relaunch does not recreate a deleted built-in preset. While it is missing and preset storage is
+cannot be edited or deleted while its Keep Off is on, while its explicit Keep
+Off action is queued or running, or while settings are unreadable; turn its
+Keep Off off first. A relaunch does not recreate a deleted built-in preset. While it is missing and preset storage is
 writable, **Settings > Watched Apps > Restore Built-in GlobalProtect Preset**
 adds it back; restoring is refused, naming the preset, while a custom preset
 uses the same display name or app path, so delete or change that preset first.

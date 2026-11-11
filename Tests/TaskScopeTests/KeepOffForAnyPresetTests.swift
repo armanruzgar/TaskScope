@@ -261,6 +261,91 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         XCTAssertTrue(stores.watchedApps.remove(preset))
     }
 
+    /// Review follow-up: Allow to Run re-enables only the agents a preset lists
+    /// then, and enforcement acts on the stored definition, so an edit while
+    /// Keep Off is on could orphan an override or extend Keep Off unconfirmed.
+    func testAKeptOffOrPendingCustomPresetCannotBeEdited() {
+        let defaults = makeDefaults()
+        let session = makeBatch02Session(.interactive, standardDefaults: { defaults })
+        defer { session.cleanUp() }
+        let stores = TaskScopeLaunchStores(session: session, inventory: Batch02FixedInventory(result: .success([])))
+        let preset = custom()
+        XCTAssertTrue(stores.watchedApps.add(preset))
+        var edited = preset
+        edited.userLaunchAgentJobs = []
+        let keptOffRefusal = "Turn off Keep Example Off before editing it: an edit could leave one of its launch agents disabled for good, and Keep Off would act on the edited preset without a new confirmation."
+
+        stores.settings.setKeptOff(true, for: preset.id)
+        XCTAssertEqual(stores.watchedApps.editRefusal(for: preset), keptOffRefusal)
+        XCTAssertFalse(stores.watchedApps.update(edited))
+        XCTAssertEqual(stores.watchedApps.validationError, keptOffRefusal)
+        XCTAssertEqual(stores.watchedApps.presets.first { $0.id == preset.id }?.userLaunchAgentJobs, preset.userLaunchAgentJobs)
+
+        // Notifications do not change what Keep Off acts on.
+        var quiet = preset
+        quiet.notificationsEnabled = false
+        XCTAssertTrue(stores.watchedApps.update(quiet))
+        XCTAssertEqual(stores.watchedApps.presets.first { $0.id == preset.id }?.notificationsEnabled, false)
+
+        stores.settings.setKeptOff(false, for: preset.id)
+        stores.keepOffActivity.begin(preset.id)
+        XCTAssertFalse(stores.watchedApps.update(edited))
+        XCTAssertEqual(stores.watchedApps.validationError, "Wait for the pending Keep Off action for Example to finish before editing it.")
+        stores.keepOffActivity.end(preset.id)
+
+        XCTAssertNil(stores.watchedApps.editRefusal(for: preset))
+        XCTAssertTrue(stores.watchedApps.update(edited))
+        XCTAssertEqual(stores.watchedApps.presets.first { $0.id == preset.id }?.userLaunchAgentJobs, [])
+    }
+
+    func testEditRefusalNamesTheWayOut() {
+        func refusal(_ preset: WatchedAppPreset, keptOff: Bool = false, readOnly: Bool = false, pending: Bool = false) -> String? {
+            PresetChangePolicy.keepOffRefusal(
+                for: preset, isKeptOff: keptOff, isSettingsReadOnly: readOnly, isKeepOffPending: pending, change: .edit
+            )
+        }
+        XCTAssertNil(refusal(custom()))
+        XCTAssertEqual(
+            refusal(custom(agents: false), keptOff: true),
+            "Turn off Keep Example Off before editing it: Keep Off would otherwise act on the edited preset without a new confirmation."
+        )
+        XCTAssertEqual(
+            refusal(custom(), readOnly: true),
+            "Settings are unreadable, so Keep Off may still be on for Example. Recover settings and turn its Keep Off off before editing it."
+        )
+        XCTAssertNil(refusal(.globalProtect, keptOff: true, readOnly: true, pending: true),
+                     "The built-in preset's definition cannot be edited; its notifications setting always can")
+    }
+
+    func testTheEditButtonOfAKeptOffPresetIsDisabledWithTheReason() async throws {
+        let fixture = await Batch10.fixture(processes: [])
+        defer { fixture.stores.cleanup() }
+        // The presets as the app wires them.
+        let watchedApps = WatchedAppsStore(
+            userDefaults: fixture.stores.defaults, key: "keep-off-edit-presets",
+            changePolicy: .keepOff(settings: fixture.stores.settings, activity: fixture.manager.keepOffActivity)
+        )
+        let preset = custom()
+        XCTAssertTrue(watchedApps.add(preset))
+        fixture.stores.settings.setKeptOff(true, for: preset.id)
+        let view = SettingsView(
+            settings: fixture.stores.settings,
+            watchedApps: watchedApps,
+            autoStopRules: fixture.stores.autoStopRules,
+            processManager: fixture.manager,
+            hotkey: .forTests(), notificationService: .forTests(),
+            selectedTab: .watchedApps
+        )
+
+        let edit = try view.inspect().find(button: "Edit…")
+        XCTAssertTrue(edit.isDisabled())
+        XCTAssertEqual(try edit.help().string(), watchedApps.editRefusal(for: preset))
+        XCTAssertNotNil(watchedApps.editRefusal(for: preset))
+
+        fixture.stores.settings.setKeptOff(false, for: preset.id)
+        XCTAssertFalse(try view.inspect().find(button: "Edit…").isDisabled())
+    }
+
     func testAnExplicitCustomKeepOffIsPendingWhileItRuns() async {
         let lifecycle = PendingKeepOffLifecycle()
         let manager = ProcessManager(

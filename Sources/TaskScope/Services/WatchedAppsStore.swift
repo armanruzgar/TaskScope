@@ -82,21 +82,21 @@ final class WatchedAppsStore: ObservableObject {
     private let persistence: RecoveringCodableStorage<[WatchedAppPreset]>
     private var allowsPersistence: Bool
     private var recoveredDecodedPayload: Bool
-    private let deletionPolicy: PresetDeletionPolicy
+    private let changePolicy: PresetChangePolicy
 
-    /// `deletionPolicy` decides every deletion; the app passes its Keep Off
-    /// rule (`TaskScopeLaunchStores`).
+    /// `changePolicy` decides every deletion and edit; the app passes its Keep
+    /// Off rule (`TaskScopeLaunchStores`).
     init(
         userDefaults: UserDefaults = .standard,
         key: String = WatchedAppsStore.defaultPersistenceKey,
-        deletionPolicy: PresetDeletionPolicy = .unrestricted
+        changePolicy: PresetChangePolicy = .unrestricted
     ) {
         let persistence = RecoveringCodableStorage<[WatchedAppPreset]>(
             userDefaults: userDefaults,
             key: key
         )
         self.persistence = persistence
-        self.deletionPolicy = deletionPolicy
+        self.changePolicy = changePolicy
         guard persistence.hasStoredValue else {
             presets = [.globalProtect]
             allowsPersistence = true
@@ -218,7 +218,13 @@ final class WatchedAppsStore: ObservableObject {
     /// Why the deletion policy refuses to delete `preset` now, or nil. Asked
     /// before a deletion is offered for confirmation; `remove` asks again.
     func deletionRefusal(for preset: WatchedAppPreset) -> String? {
-        deletionPolicy.refusal(presets.first { $0.id == preset.id } ?? preset)
+        changePolicy.deletionRefusal(presets.first { $0.id == preset.id } ?? preset)
+    }
+
+    /// Why the change policy refuses editing `preset` now, or nil. Asked to
+    /// disable the editor; `update` asks again.
+    func editRefusal(for preset: WatchedAppPreset) -> String? {
+        changePolicy.editRefusal(presets.first { $0.id == preset.id } ?? preset)
     }
 
     @discardableResult
@@ -248,6 +254,14 @@ final class WatchedAppsStore: ObservableObject {
         }
         guard let normalized = validateAndNormalize(preset),
               !isSemanticDuplicate(normalized, excluding: preset.id) else {
+            return false
+        }
+        // Only a change to what Keep Off acts on is refused: the
+        // notifications setting alone may change at any time.
+        var sameNotifications = normalized
+        sameNotifications.notificationsEnabled = presets[index].notificationsEnabled
+        if sameNotifications != presets[index], let refusal = changePolicy.editRefusal(presets[index]) {
+            validationError = refusal
             return false
         }
         validationError = nil
