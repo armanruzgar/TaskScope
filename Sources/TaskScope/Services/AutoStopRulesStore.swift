@@ -36,6 +36,24 @@ final class AutoStopRulesStore: ObservableObject {
         [rulesRecoveryMessage, eventsRecoveryMessage].compactMap { $0 }
     }
 
+    var hasAppPromptPresenter = false
+    private var promptActions: [UUID: Task<Void, Never>] = [:]
+
+    func stopPrompt(_ prompt: AutoStopPrompt) {
+        guard let claimed = claimPrompt(prompt) else { return }
+        let id = UUID()
+        promptActions[id] = Task { [weak self] in
+            await self?.finishStop(claimed)
+            self?.promptActions[id] = nil
+        }
+    }
+
+    func waitForPromptActions() async {
+        while !promptActions.isEmpty {
+            for task in Array(promptActions.values) { await task.value }
+        }
+    }
+
     var currentPrompt: AutoStopPrompt? {
         pendingPrompts.first
     }
@@ -526,6 +544,13 @@ final class AutoStopRulesStore: ObservableObject {
                 let prompt = AutoStopPrompt(id: occurrence, rule: rule, process: process)
 
                 if rule.action == .kill { automaticProcesses[occurrence] = process }
+                // A queued prompt shows the process as it is now, not as it was
+                // when the threshold was first crossed (same occurrence, so an
+                // answer still acts on the same process).
+                if let index = pendingPrompts.firstIndex(where: { $0.id == occurrence }),
+                   pendingPrompts[index].process != process {
+                    pendingPrompts[index].process = process
+                }
                 if handledOccurrences.contains(occurrence) {
                     // Already acted on. The only follow-up is a single re-signal of
                     // an automatic stop whose target has not exited yet.

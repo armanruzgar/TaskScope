@@ -9,6 +9,11 @@ struct ProcessRow: View {
     var isHighlightedMEM: Bool
     var showsExpandedMetrics: Bool = false
     var leadingInset: CGFloat = 0
+    /// One-based depth in tree view; nil in the flat list.
+    var treeLevel: Int? = nil
+    /// A tree ancestor shown only for hierarchy context: it does not match the
+    /// search or filter.
+    var isContextOnly: Bool = false
     var stopAction: () -> Void
     var toggleSelection: () -> Void
 
@@ -21,10 +26,11 @@ struct ProcessRow: View {
             .buttonStyle(.borderless)
             .disabled(isCurrentProcess)
             .help(isCurrentProcess ? "TaskScope cannot select its own process" : "Toggle Selection")
+            // Same-named helpers are common, so every control names its PID.
             .accessibilityLabel(
                 isCurrentProcess
                     ? "TaskScope cannot be selected"
-                    : (isSelected ? "Remove \(process.name) from selection" : "Add \(process.name) to selection")
+                    : (isSelected ? "Remove \(processDescription) from selection" : "Add \(processDescription) to selection")
             )
             .accessibilityHint(
                 isCurrentProcess
@@ -38,7 +44,9 @@ struct ProcessRow: View {
                         .font(.system(size: 13, weight: .medium))
                         .lineLimit(1)
 
-                    Text("\(process.pid)")
+                    // Identifiers are printed as ps prints them, never with
+                    // locale digit grouping.
+                    Text(verbatim: String(process.pid))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -49,31 +57,36 @@ struct ProcessRow: View {
                     .lineLimit(1)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(process.name), PID \(process.pid)")
+            .accessibilityLabel(processDescription)
             .accessibilityValue(accessibilitySummary)
             .accessibilityHint("Command: \(process.displayCommand)")
+            .accessibilityAddTraits(isKeyboardSelected ? .isSelected : [])
 
             Spacer(minLength: 8)
 
             if showsExpandedMetrics {
-                Text("\(process.pid)")
+                Text(verbatim: String(process.pid))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 70, alignment: .trailing)
                     .accessibilityHidden(true)
 
-                Text("\(process.parentPID)")
+                Text(verbatim: String(process.parentPID))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(width: 70, alignment: .trailing)
                     .accessibilityHidden(true)
 
+                // A busy process's pair can be wider than the column; shrink it
+                // rather than wrap it onto a second line.
                 Text(metricPair(process.netInKB, process.netOutKB, decimals: 1))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .frame(width: 96, alignment: .trailing)
                     .accessibilityHidden(true)
 
@@ -81,23 +94,25 @@ struct ProcessRow: View {
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                     .frame(width: 96, alignment: .trailing)
                     .accessibilityHidden(true)
             }
 
-            Text(process.cpu, format: .number.precision(.fractionLength(1)))
-                .monospacedDigit()
-                .font(.caption)
-                .foregroundStyle(isHighlightedCPU ? .red : .primary)
-                .frame(width: 54, alignment: .trailing)
-                .accessibilityHidden(true)
+            metricValue(
+                Text(process.cpu, format: .number.precision(.fractionLength(1))),
+                isHighlighted: isHighlightedCPU
+            )
+            .frame(width: 54, alignment: .trailing)
+            .accessibilityHidden(true)
 
-            Text(process.memoryMB, format: .number.precision(.fractionLength(0)))
-                .monospacedDigit()
-                .font(.caption)
-                .foregroundStyle(isHighlightedMEM ? .red : .primary)
-                .frame(width: 64, alignment: .trailing)
-                .accessibilityHidden(true)
+            metricValue(
+                Text(process.memoryMB, format: .number.precision(.fractionLength(0))),
+                isHighlighted: isHighlightedMEM
+            )
+            .frame(width: 64, alignment: .trailing)
+            .accessibilityHidden(true)
 
             Button(role: .destructive) {
                 stopAction()
@@ -107,12 +122,13 @@ struct ProcessRow: View {
             .buttonStyle(.borderless)
             .disabled(isCurrentProcess)
             .help(isCurrentProcess ? "Use Quit TaskScope" : "Stop Process")
-            .accessibilityLabel("Stop \(process.name)")
+            .accessibilityLabel(isCurrentProcess ? "TaskScope cannot be stopped here" : "Stop \(processDescription)")
             .frame(width: 28)
         }
         .padding(.leading, 16 + leadingInset)
         .padding(.trailing, 16)
         .padding(.vertical, 7)
+        .opacity(isContextOnly ? 0.55 : 1)
         .background {
             if isKeyboardSelected {
                 Color.accentColor.opacity(0.12)
@@ -120,6 +136,28 @@ struct ProcessRow: View {
                 Color.orange.opacity(0.08)
             }
         }
+    }
+
+    /// A value over its threshold is marked by weight and a glyph, not by colour
+    /// alone, and keeps the primary text colour for contrast. The cue stays when
+    /// the row's keyboard-focus tint replaces the highlight tint.
+    @ViewBuilder
+    private func metricValue(_ text: Text, isHighlighted: Bool) -> some View {
+        HStack(spacing: 2) {
+            if isHighlighted {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            text
+                .monospacedDigit()
+                .font(.caption)
+                .fontWeight(isHighlighted ? .bold : .regular)
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private var processDescription: String {
+        "\(process.name), PID \(String(process.pid))"
     }
 
     private func metricPair(_ first: Double?, _ second: Double?, decimals: Int) -> String {
@@ -132,6 +170,8 @@ struct ProcessRow: View {
         values.append("memory \(process.memoryMB.formatted(.number.precision(.fractionLength(0)))) megabytes")
         if isHighlightedCPU { values.append("high CPU") }
         if isHighlightedMEM { values.append("high memory") }
+        if let treeLevel { values.append("level \(treeLevel)") }
+        if isContextOnly { values.append("shown for hierarchy, does not match the search or filter") }
         return values.joined(separator: ", ")
     }
 }

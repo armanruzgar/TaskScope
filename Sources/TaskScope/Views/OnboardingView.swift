@@ -63,6 +63,7 @@ private struct OnboardingRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon)
+                .accessibilityHidden(true)
                 .font(.system(size: 20))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 28)

@@ -17,6 +17,10 @@ final class ProcessManager: ObservableObject {
         operationGate.isWorking
     }
 
+    /// True while a stop, Open, Keep Off or other mutation holds the gate.
+    /// Controls that would only queue a second action behind it use this.
+    var isMutationActive: Bool { operationGate.isMutationActive }
+
     /// Test observation of queue admission; UI progress uses `isWorking`.
     var operationState: ProcessOperationState {
         operationGate.state
@@ -354,7 +358,7 @@ final class ProcessManager: ObservableObject {
             if refreshed {
                 message = snapshots.aggregateDetail
             } else {
-                message = "Could not refresh watched status: \(lastInventoryFailure ?? "the process list could not be read")"
+                message = "Could not refresh watched status: \(UIMessage.sentence(lastInventoryFailure ?? "the process list could not be read"))"
             }
         }
         return refreshed
@@ -397,7 +401,7 @@ final class ProcessManager: ObservableObject {
         if showMessage {
             message = refreshed
                 ? "Loaded \(displayProcesses().count) of \(fullProcessInventory.count) processes."
-                : "Could not load processes: \(lastInventoryFailure ?? "the process list could not be read")"
+                : "Could not load processes: \(UIMessage.sentence(lastInventoryFailure ?? "the process list could not be read"))"
         }
         return refreshed
     }
@@ -1197,6 +1201,10 @@ final class ProcessManager: ObservableObject {
             await refreshAfterMutation()
         }
         return result
+    }
+
+    func detailResult(for process: AppProcess) async -> ProcessDetailResult {
+        await detailReader.readResult(for: process)
     }
 
     func detail(for process: AppProcess) async -> ProcessDetail? {

@@ -128,7 +128,7 @@ final class LoginItemManager: ObservableObject {
         case .requiresApproval:
             "Launch at Login requires approval in System Settings."
         case .notFound:
-            "Launch at Login is unavailable for this app bundle."
+            "macOS has no login item for this copy of TaskScope. Turn the switch on to register it."
         }
     }
 }

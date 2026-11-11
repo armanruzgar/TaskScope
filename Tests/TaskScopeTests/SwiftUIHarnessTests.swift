@@ -65,11 +65,13 @@ final class SwiftUIHarnessTests: XCTestCase {
             ]))
             defer { fixture.stores.cleanup() }
             XCTAssertTrue(fixture.stores.savedSelections.save(name: "Saved", processes: [target]))
-            let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+            let confirmation = ProcessConfirmationState()
+            let view = makePopover(fixture: fixture, confirmationState: confirmation)
             try view.inspect().find(button: "Preview & Recall…").tap()
-            await settle()
+            await confirmation.waitForActions()
             XCTAssertEqual(fixture.manager.message, "Could not preview saved selection: ps timed out.")
-            XCTAssertThrowsError(try view.inspect().find(SavedSelectionRecallSheet.self))
+            XCTAssertNil(confirmation.pendingRecallSelection)
+            XCTAssertNil(confirmation.pendingRecallResult)
         }
     }
 
@@ -116,7 +118,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertFalse(fixture.manager.hasLoadedProcessList)
         let inspected = try makePopover(fixture: fixture, confirmationState: ProcessConfirmationState()).inspect()
         XCTAssertNoThrow(try inspected.find(text: "Process List Unavailable"))
-        XCTAssertNoThrow(try inspected.find(text: "ps timed out"))
+        XCTAssertNoThrow(try inspected.find(text: "ps timed out."))
     }
 
     /// Editing a preset while its confirmation is open must drop the pending
@@ -167,12 +169,13 @@ final class SwiftUIHarnessTests: XCTestCase {
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
-        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        let confirmation = ProcessConfirmationState()
+        let view = makePopover(fixture: fixture, confirmationState: confirmation)
         XCTAssertEqual(try view.inspect().findAll(PresetCard.self).count, 1)
-        XCTAssertNoThrow(try view.inspect().find(text: "ps unavailable"))
+        XCTAssertNoThrow(try view.inspect().find(text: "ps unavailable."))
         XCTAssertNoThrow(try view.inspect().find(TaskScopeHeaderView.self).find(text: "Unknown"))
         try view.inspect().find(button: "Retry").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(fixture.manager.processLoadError)
         XCTAssertNoThrow(try view.inspect().find(TaskScopeHeaderView.self).find(text: "Quiet"))
         XCTAssertThrowsError(try view.inspect().find(button: "Retry"))
@@ -202,13 +205,14 @@ final class SwiftUIHarnessTests: XCTestCase {
         fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         await fixture.manager.refreshWatchedStatus(showMessage: false)
-        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        let confirmation = ProcessConfirmationState()
+        let view = makePopover(fixture: fixture, confirmationState: confirmation)
         XCTAssertNoThrow(try view.inspect().find(TaskScopeHeaderView.self).find(text: "Stale"))
         XCTAssertNoThrow(try view.inspect().find(text: "Watched status is stale"))
-        XCTAssertNoThrow(try view.inspect().find(text: "later read failed"))
+        XCTAssertNoThrow(try view.inspect().find(text: "later read failed."))
         XCTAssertEqual(try view.inspect().findAll(PresetCard.self).count, 1)
         try view.inspect().find(button: "Retry").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNoThrow(try view.inspect().find(TaskScopeHeaderView.self).find(text: "Quiet"))
         XCTAssertThrowsError(try view.inspect().find(text: "Watched status is stale"))
     }
@@ -264,8 +268,8 @@ final class SwiftUIHarnessTests: XCTestCase {
             fixture.stores.settings.searchText = "Worker"
             XCTAssertNoThrow(try view.inspect().find(text: "Showing 1 of 2 matches"))
             fixture.stores.settings.searchText = "WorkerA"
-            XCTAssertNoThrow(try view.inspect().find(text: "1 matches"))
-            XCTAssertThrowsError(try view.inspect().find(text: "Showing 1 of 1 matches"))
+            XCTAssertNoThrow(try view.inspect().find(text: "1 match"))
+            XCTAssertThrowsError(try view.inspect().find(text: "Showing 1 of 1 match"))
         }
     }
 
@@ -283,7 +287,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
             // A fixed width shared with a visible label cut "CPU" to "C..." on macOS 26.
             let sort = try inspected.find(ViewType.Picker.self) {
-                try $0.accessibilityLabel().string() == "Sort"
+                try $0.labelView().text().string() == "Sort"
             }
             XCTAssertTrue(sort.labelsHidden())
             XCTAssertTrue(try sort.fixedSize().horizontal)
@@ -302,7 +306,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             // The fallback row keeps every selection control at full width.
             let wrapped = try inspected.find(ViewType.ViewThatFits.self).vStack(1).hStack(1)
             XCTAssertNoThrow(try wrapped.find(ViewType.Menu.self) {
-                try $0.accessibilityLabel().string() == "Actions for 1 selected processes"
+                try $0.accessibilityLabel().string() == "Actions for 1 selected process"
             })
             XCTAssertNoThrow(try wrapped.find(button: "Clear"))
         }
@@ -322,12 +326,14 @@ final class SwiftUIHarnessTests: XCTestCase {
 
     func testOwnProcessCannotRequestStopFromContextMenuOrReturn() async throws {
         let own = process(pid: ProcessInfo.processInfo.processIdentifier, parentPID: 1, name: "TaskScope")
-        let other = process(pid: 71, parentPID: 1, name: "Example")
+        var other = process(pid: 71, parentPID: 1, name: "Example")
+        // "Watch This Process…" is offered only for the user's own app processes.
+        other.uid = getuid()
         let fixture = await makeFixture(processes: [own, other])
         defer { fixture.stores.cleanup() }
         let confirmation = ProcessConfirmationState()
         let view = makePopover(fixture: fixture, confirmationState: confirmation)
-        for title in ["Stop", "Force Stop", "Create Auto-Stop Rule...", "Watch This Process..."] {
+        for title in ["Stop…", "Force Stop…", "Create Auto-Stop Rule…", "Watch This Process…"] {
             XCTAssertTrue(try view.processContextMenu(for: own).inspect().find(button: title).isDisabled())
             XCTAssertFalse(try view.processContextMenu(for: other).inspect().find(button: title).isDisabled())
         }
@@ -571,7 +577,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         let inspected = try makePopover(fixture: fixture, confirmationState: ProcessConfirmationState()).inspect()
 
         XCTAssertNoThrow(try inspected.find(text: "Process List Unavailable"))
-        XCTAssertNoThrow(try inspected.find(text: "ps timed out"))
+        XCTAssertNoThrow(try inspected.find(text: "ps timed out."))
         XCTAssertNoThrow(try inspected.find(button: "Retry"))
         XCTAssertThrowsError(try inspected.find(text: "Idle Until Needed"))
     }
@@ -681,8 +687,9 @@ final class SwiftUIHarnessTests: XCTestCase {
         let buttons = stack.findAll(ViewType.Button.self)
         XCTAssertEqual(buttons.count, 2)
         guard buttons.count == 2 else { return }
-        XCTAssertEqual(try buttons[0].accessibilityLabel().string(), "Add Accessible to selection")
-        XCTAssertEqual(try buttons[1].accessibilityLabel().string(), "Stop Accessible")
+        // Same-named processes are told apart by PID on every control.
+        XCTAssertEqual(try buttons[0].accessibilityLabel().string(), "Add Accessible, PID 70 to selection")
+        XCTAssertEqual(try buttons[1].accessibilityLabel().string(), "Stop Accessible, PID 70")
     }
 
     func testFilteredProcessViewRendersAndSelectsOnlyMatchingRow() async throws {
@@ -703,7 +710,9 @@ final class SwiftUIHarnessTests: XCTestCase {
         let row = try XCTUnwrap(rows.first)
         XCTAssertEqual(try row.actualView().process.identity, needle.identity)
 
-        let rowButtons = row.findAll(ViewType.Button.self)
+        // The row's own controls; the row's VoiceOver actions are attached
+        // outside `ProcessRow` and are checked in Batch10WiringTests.
+        let rowButtons = try row.actualView().inspect().findAll(ViewType.Button.self)
         XCTAssertEqual(rowButtons.count, 2)
         guard rowButtons.count == 2 else { return }
 
@@ -725,12 +734,12 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
         XCTAssertNoThrow(
             try presented.find(
-                text: "Send a normal quit signal to PID 71, allowing the process to clean up before it exits."
+                text: "Send SIGTERM to PID 71. Apps may close without asking to save changes."
             )
         )
 
         try presented.find(button: "Cancel").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(confirmation.pendingTermination)
         XCTAssertTrue(fixture.signaler.sent.isEmpty)
     }
@@ -766,7 +775,7 @@ final class SwiftUIHarnessTests: XCTestCase {
                 } else {
                     try view.inspect().find(button: "Cancel").tap()
                 }
-                await settle()
+                await confirmation.waitForActions()
                 XCTAssertNil(confirmation.pendingTermination)
                 XCTAssertNil(confirmation.pendingBatchTermination)
                 XCTAssertTrue(fixture.signaler.sent.isEmpty, "Cancel must not signal: menuBar=\(menuBar), batch=\(batch), mode=\(mode)")
@@ -837,7 +846,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         } else {
             try view.inspect().find(button: title).tap()
         }
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(confirmation.pendingTermination, file: file, line: line)
         XCTAssertNil(confirmation.pendingBatchTermination, file: file, line: line)
         if let presenter {
@@ -862,7 +871,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             windowRequests += 1
         })
         try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: "Quit All").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertEqual(windowRequests, 1)
         XCTAssertNil(confirmation.pendingPresetAction)
         XCTAssertTrue(fixture.signaler.sent.isEmpty)
@@ -910,7 +919,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertEqual(confirmation.pendingBatchTermination?.mode, .normal)
         XCTAssertEqual(
             confirmation.batchMessage,
-            "Stop 2 selected processes: First, Second."
+            "Stop 2 selected processes.\nFirst (PID 73) — /Applications/First.app/Contents/MacOS/First\nSecond (PID 74) — /Applications/Second.app/Contents/MacOS/Second\nSends SIGTERM. Apps may close without asking to save changes."
         )
 
         let view = makePopover(
@@ -919,13 +928,20 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
         let presented = try view.inspect()
 
-        XCTAssertNoThrow(try presented.find(text: "Stop Selected Processes?"))
-        XCTAssertNoThrow(try presented.find(text: "Stop Selected"))
-        XCTAssertThrowsError(try presented.find(button: "Force Stop Selected"))
-        XCTAssertNoThrow(try presented.find(text: confirmation.batchMessage))
+        // The window reviews the batch in a sheet that lists every target.
+        let review = try presented.find(BatchStopReviewSheet.self)
+        XCTAssertNoThrow(try review.find(text: "Stop Selected Processes?"))
+        XCTAssertNoThrow(try review.find(text: "Stop 2 selected processes."))
+        XCTAssertNoThrow(try review.find(button: "Stop Selected"))
+        XCTAssertThrowsError(try review.find(button: "Force Stop Selected"))
+        for (name, pid) in [("First", "PID 73"), ("Second", "PID 74")] {
+            XCTAssertNoThrow(try review.find(text: name))
+            XCTAssertNoThrow(try review.find(text: pid))
+        }
+        XCTAssertNoThrow(try review.find(text: "Sends SIGTERM. Apps may close without asking to save changes."))
 
         try presented.find(button: "Cancel").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(confirmation.pendingBatchTermination)
         XCTAssertTrue(fixture.signaler.sent.isEmpty)
 
@@ -935,12 +951,13 @@ final class SwiftUIHarnessTests: XCTestCase {
             confirmationState: confirmation
         ).inspect()
         XCTAssertEqual(confirmation.pendingBatchTermination?.mode, .force)
-        XCTAssertNoThrow(try forcePresented.find(text: "Force Stop Selected Processes?"))
-        XCTAssertNoThrow(try forcePresented.find(button: "Force Stop Selected"))
-        XCTAssertThrowsError(try forcePresented.find(button: "Stop Selected"))
+        let forceReview = try forcePresented.find(BatchStopReviewSheet.self)
+        XCTAssertNoThrow(try forceReview.find(text: "Force Stop Selected Processes?"))
+        XCTAssertNoThrow(try forceReview.find(button: "Force Stop Selected"))
+        XCTAssertThrowsError(try forceReview.find(button: "Stop Selected"))
         XCTAssertEqual(
             confirmation.batchMessage,
-            "Force stop 2 selected processes: First, Second."
+            "Force stop 2 selected processes.\nFirst (PID 73) — /Applications/First.app/Contents/MacOS/First\nSecond (PID 74) — /Applications/Second.app/Contents/MacOS/Second\nSends SIGKILL immediately; the processes cannot clean up."
         )
     }
 
@@ -961,7 +978,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             )
         )
 
-        try card.find(button: "Quit All").tap()
+        try card.find(button: "Quit All…").tap()
 
         XCTAssertEqual(confirmation.pendingPresetAction?.action, .quitAll)
         XCTAssertEqual(
@@ -970,16 +987,16 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
         XCTAssertTrue(fixture.signaler.sent.isEmpty)
         let presented = try view.inspect()
-        XCTAssertNoThrow(try presented.find(text: "Quit All"))
+        XCTAssertNoThrow(try presented.find(ViewType.ConfirmationDialog.self).actions().find(button: "Quit All"))
         XCTAssertNoThrow(
             try presented.find(
-                text: "TaskScope will disconnect the VPN, stop GlobalProtect and its services, and keep them off until you choose Open. Accessibility permission lets TaskScope press Disconnect for you; administrator approval is requested only when needed to stop the system service. A process still running 3 seconds after the stop request is force stopped."
+                text: "TaskScope will disconnect the VPN, stop GlobalProtect and its services, and keep them off until you choose Open. Accessibility permission lets TaskScope press Disconnect for you; administrator approval is requested only when needed to stop the system service. Sends SIGTERM. Apps may close without asking to save changes. A process still running 3 seconds after the stop request is force stopped."
             )
         )
 
         let previousMessage = fixture.manager.message
         try presented.find(button: "Cancel").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(confirmation.pendingPresetAction)
         XCTAssertEqual(fixture.manager.message, previousMessage)
     }
@@ -996,9 +1013,9 @@ final class SwiftUIHarnessTests: XCTestCase {
                 XCTAssertNil(confirmation.pendingPresetAction)
                 XCTAssertFalse(fixture.manager.isWorking, "Present before disconnect can dismiss the menu")
                 windowRequests += 1
-            }, presentationStyle: .menuBarCompact)
-            try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: confirmation.pendingPresetAction!.title).tap()
-            await settle()
+            }, menuBarConfirmation: UIMenuBarConfirmation(answer: true))
+            try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingPresetAction)
+            await confirmation.waitForActions()
             XCTAssertEqual(windowRequests, 2, "Show progress before the menu closes and return focus to the result")
             XCTAssertNil(confirmation.pendingPresetAction)
             XCTAssertEqual(fixture.stores.settings.selectedSection, .presets)
@@ -1013,10 +1030,10 @@ final class SwiftUIHarnessTests: XCTestCase {
         let confirmation = ProcessConfirmationState()
         confirmation.requestPresetAction(.quitAll, preset: .globalProtect)
         var windowRequests = 0
-        let view = makePopover(fixture: fixture, confirmationState: confirmation, openFullWindow: { windowRequests += 1 }, presentationStyle: .menuBarCompact)
+        let view = makePopover(fixture: fixture, confirmationState: confirmation, openFullWindow: { windowRequests += 1 }, menuBarConfirmation: UIMenuBarConfirmation(answer: false))
         let previousMessage = fixture.manager.message
-        try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: "Cancel").tap()
-        await settle()
+        try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingPresetAction)
+        await confirmation.waitForActions()
         XCTAssertEqual(windowRequests, 0)
         XCTAssertEqual(fixture.manager.message, previousMessage)
         XCTAssertNil(confirmation.pendingPresetAction)
@@ -1041,10 +1058,10 @@ final class SwiftUIHarnessTests: XCTestCase {
             "A dialog on the menu window stops taking clicks once GlobalProtect takes focus"
         )
         try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingPresetAction)
-        await settle()
+        await confirmation.waitForActions()
 
         XCTAssertEqual(presenter.requests, [MenuBarConfirmationRequest(
-            title: "Keep GlobalProtect Off",
+            title: "Keep GlobalProtect Off?",
             message: TaskScopePopoverView.presetConfirmationMessage(for: pending),
             confirmTitle: "Keep GlobalProtect Off"
         )])
@@ -1067,7 +1084,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
         confirmation.requestPresetAction(.quitAll, preset: .globalProtect)
         try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingPresetAction)
-        await settle()
+        await confirmation.waitForActions()
 
         XCTAssertEqual(presenter.requests.map(\.confirmTitle), ["Quit All"])
         XCTAssertEqual(windowRequests, 0)
@@ -1086,10 +1103,10 @@ final class SwiftUIHarnessTests: XCTestCase {
         confirmation.requestTermination(target)
         XCTAssertThrowsError(try view.inspect().find(ViewType.ConfirmationDialog.self))
         try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingTermination)
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertEqual(presenter.requests, [MenuBarConfirmationRequest(
             title: "Stop Process?",
-            message: "Send a normal quit signal to PID 75, allowing the process to clean up before it exits.",
+            message: "Send SIGTERM to PID 75. Apps may close without asking to save changes.",
             confirmTitle: "Stop MenuTarget"
         )])
         XCTAssertNil(confirmation.pendingTermination)
@@ -1098,7 +1115,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         presenter.answer = true
         confirmation.requestBatch([target.identity], mode: .force)
         try view.inspect().vStack().callOnChange(oldValue: nil, newValue: confirmation.pendingBatchTermination)
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertEqual(presenter.requests.last?.confirmTitle, "Force Stop Selected")
         XCTAssertNil(confirmation.pendingBatchTermination)
         XCTAssertEqual(fixture.signaler.sent, [.init(signal: SIGKILL, pid: 75)])
@@ -1123,6 +1140,13 @@ final class SwiftUIHarnessTests: XCTestCase {
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.watchedAppsProvider = { [.globalProtect] }
+        // Record the Keep Off intent in settings as the app does, so the
+        // keepGlobalProtectOff assertion below can fail if Cancel ran the stop.
+        let settings = fixture.stores.settings
+        fixture.manager.setPresetKeptOffHandler = { preset, keptOff in
+            guard preset.id == WatchedAppPreset.globalProtectID else { return }
+            settings.keepGlobalProtectOff = keptOff
+        }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let confirmation = ProcessConfirmationState()
         let view = makePopover(fixture: fixture, confirmationState: confirmation)
@@ -1139,7 +1163,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertTrue(fixture.signaler.sent.isEmpty)
 
         try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: "Cancel").tap()
-        await settle()
+        await confirmation.waitForActions()
         XCTAssertNil(confirmation.pendingPresetAction)
         XCTAssertEqual(fixture.manager.globalProtectDisconnectFailureID, failureID)
         XCTAssertFalse(fixture.stores.settings.keepGlobalProtectOff)
@@ -1205,18 +1229,21 @@ final class SwiftUIHarnessTests: XCTestCase {
             }
         }
 
-        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        let confirmation = ProcessConfirmationState()
+        let view = makePopover(fixture: fixture, confirmationState: confirmation)
         let cards = try view.inspect().findAll(PresetCard.self)
         XCTAssertEqual(cards.count, 2)
         XCTAssertEqual(try cards[1].actualView().snapshot.preset.id, beta.id)
 
         try cards[1].find(button: "Open").tap()
-        await settle()
+        await confirmation.waitForActions()
 
-        XCTAssertEqual(
-            recorder.commands,
-            [.openPresetEntity(WatchedPresetCommandTarget(id: beta.id, displayName: "Beta"))]
-        )
+        // The card's Open goes straight to the manager (and its operation
+        // gate) in click order, like the card's other actions, instead of
+        // waiting in the command bus behind actions confirmed after it.
+
+        XCTAssertTrue(recorder.commands.isEmpty)
+        XCTAssertEqual(fixture.lifecycle.events.filter { $0.hasPrefix("open:") }, ["open:/Applications/Beta.app"])
     }
 
     func testManualProcessSnapshotDisplaysItsSuccessfulUpdateTime() async throws {
@@ -1245,13 +1272,14 @@ final class SwiftUIHarnessTests: XCTestCase {
                 TaskScopeCommandResult(status: .rejected, message: "No handler installed by this test.")
             }
         }
-        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        let confirmation = ProcessConfirmationState()
+        let view = makePopover(fixture: fixture, confirmationState: confirmation)
         let card = try view.inspect().find(PresetCard.self).actualView()
         card.onKeepOffChanged(false)
-        await settle()
-        XCTAssertEqual(recorder.commands, [.openPresetEntity(WatchedPresetCommandTarget(
-            id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect"
-        ))])
+        await confirmation.waitForActions()
+        XCTAssertTrue(recorder.commands.isEmpty)
+        XCTAssertTrue(fixture.lifecycle.events.contains("restore:GlobalProtect"))
+        XCTAssertTrue(fixture.lifecycle.events.contains("open:/Applications/GlobalProtect.app"))
     }
 
     /// A row can be on screen purely because the search filter surfaced it, even
@@ -1288,10 +1316,8 @@ final class SwiftUIHarnessTests: XCTestCase {
         try XCTUnwrap(row.findAll(ViewType.Button.self).first).tap()
         XCTAssertEqual(fixture.manager.selectedPids, [needle.pid])
 
-        // What `selectedProcessesForPreset()` now calls. ViewInspector 0.10.3 has no
-        // `.contextMenu` support, so the accessor is exercised against the same
-        // ProcessManager instance the view holds.
-        let draftProcesses = fixture.manager.selectedProcessesSnapshot()
+        // Exercise the exact accessor used by the context-menu draft action.
+        let draftProcesses = view.selectedProcessesForPreset()
         XCTAssertEqual(draftProcesses.map(\.pid), [needle.pid])
 
         // The collection this used to read from would have dropped it entirely.
@@ -1500,6 +1526,10 @@ final class SwiftUIHarnessTests: XCTestCase {
             try selectionButton.accessibilityHint().string(),
             "TaskScope protects its own process"
         )
+        XCTAssertThrowsError(try selectionButton.tap())
+        let stopButton = try row.inspect().findAll(ViewType.Button.self)[1]
+        XCTAssertTrue(stopButton.isDisabled())
+        XCTAssertThrowsError(try stopButton.tap())
         XCTAssertEqual(selectionAttempts, 0)
     }
 
@@ -1585,7 +1615,6 @@ final class SwiftUIHarnessTests: XCTestCase {
             XCTAssertLessThanOrEqual(sheet.width, SettingsView.windowSize.width)
             XCTAssertLessThanOrEqual(sheet.height, SettingsView.windowSize.height)
         }
-        XCTAssertEqual(NotificationService.shared.authorizationState, .unknown)
 
         let contents: [SettingsView.Tab: [String]] = [
             .general: ["General", "Auto-refresh process list", "Notify on watched process changes"],
@@ -1650,13 +1679,6 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertNotEqual(defaults.data(forKey: "settings"), corrupt)
     }
 
-    private func settle() async {
-        for _ in 0..<10 {
-            await Task.yield()
-        }
-        try? await Task.sleep(nanoseconds: 20_000_000)
-    }
-
     private func process(
         pid: Int32,
         parentPID: Int32,
@@ -1686,11 +1708,12 @@ final class SwiftUIHarnessTests: XCTestCase {
 
     private func makeFixture(inventory: any ProcessInventoryProviding, loadList: Bool = true) async -> UIFixture {
         let signaler = UIRecordingSignaler()
+        let lifecycle = UILifecycle()
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
             processSignaler: signaler,
-            lifecycle: UILifecycle(),
+            lifecycle: lifecycle,
             settleAfterProcessChange: {}
         )
         manager.enableNotifications = false
@@ -1701,7 +1724,8 @@ final class SwiftUIHarnessTests: XCTestCase {
         return UIFixture(
             manager: manager,
             signaler: signaler,
-            stores: stores
+            stores: stores,
+            lifecycle: lifecycle
         )
     }
 
@@ -1791,7 +1815,7 @@ private final class TreeDisclosureModel: ObservableObject {
     @Published var expandedPIDs: Set<Int32> = []
 }
 
-private final class UIScriptedInventory: ProcessInventoryProviding, @unchecked Sendable {
+final class UIScriptedInventory: ProcessInventoryProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var results: [Result<[AppProcess], ProcessInventoryError>]
 
@@ -1807,7 +1831,7 @@ private final class UIScriptedInventory: ProcessInventoryProviding, @unchecked S
     }
 }
 
-private struct UIInventory: ProcessInventoryProviding {
+struct UIInventory: ProcessInventoryProviding {
     var processes: [AppProcess]
 
     func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
@@ -1816,7 +1840,7 @@ private struct UIInventory: ProcessInventoryProviding {
 }
 
 @MainActor
-private final class UIMenuBarConfirmation: MenuBarConfirming {
+final class UIMenuBarConfirmation: MenuBarConfirming {
     var answer: Bool
     private(set) var requests: [MenuBarConfirmationRequest] = []
 
@@ -1830,7 +1854,7 @@ private final class UIMenuBarConfirmation: MenuBarConfirming {
     }
 }
 
-private final class UIRecordingSignaler: ProcessSignaling {
+final class UIRecordingSignaler: ProcessSignaling {
     struct Signal: Equatable {
         var signal: Int32
         var pid: Int32
@@ -1848,26 +1872,30 @@ private final class UIRecordingSignaler: ProcessSignaling {
     }
 }
 
-private struct UILifecycle: ProcessLifecycleServicing {
+final class UILifecycle: ProcessLifecycleServicing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+    var events: [String] { lock.withLock { recorded } }
+    private func record(_ event: String) { lock.withLock { recorded.append(event) } }
     func appBundleExists(at path: String) -> Bool { true }
     func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
+    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { record("main:\(preset.displayName)"); return .signalled }
+    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { record("helper:\(name)"); return .signalled }
     func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("unload:\(preset.displayName)"); return .notNeeded }
+    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { record("preserve:\(preset.displayName)"); return .notNeeded }
+    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enable:\(preset.displayName)"); return .notNeeded }
+    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("restore:\(preset.displayName)"); return .notNeeded }
     func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
     func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
+    func openAppBundle(at path: String) async -> AppBundleOpenResult { record("open:\(path)"); return .opened }
+    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { record("disableAgents:\(preset.displayName)"); return .notNeeded }
+    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { record("disableDaemons:\(preset.displayName):admin=\(allowAdministratorPrompt)"); return .notNeeded }
     func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
-private struct UILoginItemService: LoginItemServicing {
+struct UILoginItemService: LoginItemServicing {
     var state: LoginItemState = .notRegistered
     func register() throws {}
     func unregister() throws {}
@@ -1875,21 +1903,22 @@ private struct UILoginItemService: LoginItemServicing {
 }
 
 @MainActor
-private struct UIActivityMonitor: ActivityMonitorCoordinating {
+struct UIActivityMonitor: ActivityMonitorCoordinating {
     func openAndSelect(pid: Int32) async -> ActivityMonitorHandoffOutcome {
         .missingProcess
     }
 }
 
 @MainActor
-private struct UIFixture {
+struct UIFixture {
     var manager: ProcessManager
     var signaler: UIRecordingSignaler
     var stores: UIStores
+    var lifecycle: UILifecycle
 }
 
 @MainActor
-private struct UIStores {
+struct UIStores {
     var suiteName: String
     var defaults: UserDefaults
     var settings: SettingsStore

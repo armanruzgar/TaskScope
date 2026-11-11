@@ -28,16 +28,31 @@ final class ProcessConfirmationState: ObservableObject {
             mode == .force ? "Force Stop \(process.name)" : "Stop \(process.name)"
         }
 
+        /// A normal stop is SIGTERM, which an ordinary AppKit app does not handle:
+        /// it exits without running its quit handling or asking to save changes.
         var message: String {
             mode == .force
                 ? "Immediately send a kill signal to PID \(process.pid). The process cannot clean up before it exits."
-                : "Send a normal quit signal to PID \(process.pid), allowing the process to clean up before it exits."
+                : "Send SIGTERM to PID \(process.pid). Apps may close without asking to save changes."
         }
     }
 
-    struct PendingBatchTermination: Equatable {
+    struct PendingBatchTermination: Equatable, Identifiable {
+        /// Each request is distinct, so an answer to an earlier request can never
+        /// be taken for a later one that captured the same targets.
+        let id = UUID()
         let targets: [ProcessIdentity]
         let mode: TerminationMode
+        /// Targets that are selected but not on screen when the request was made.
+        var hiddenCount: Int = 0
+
+        struct Row: Equatable, Identifiable {
+            var id: Int { index }
+            let index: Int
+            let name: String
+            let pid: Int32
+            let path: String
+        }
 
         var title: String {
             mode == .force ? "Force Stop Selected Processes?" : "Stop Selected Processes?"
@@ -47,18 +62,62 @@ final class ProcessConfirmationState: ObservableObject {
             mode == .force ? "Force Stop Selected" : "Stop Selected"
         }
 
-        /// Describes exactly the captured targets, so the dialog cannot drift
-        /// from what will be signalled if the live state changes meanwhile.
-        var message: String {
-            let names = targets.prefix(3).map { identity in
-                let component = URL(fileURLWithPath: identity.command).lastPathComponent
-                return component.isEmpty ? identity.command : component
+        /// One row per captured target, in capture order, named by the same rule
+        /// as the process list rows.
+        var rows: [Row] {
+            targets.enumerated().map { index, identity in
+                Row(
+                    index: index,
+                    name: Self.displayName(for: identity),
+                    pid: identity.pid,
+                    path: identity.executablePath ?? identity.command
+                )
             }
-            let suffix = targets.count > names.count
-                ? " and \(targets.count - names.count) more"
-                : ""
+        }
+
+        var summary: String {
             let action = mode == .force ? "Force stop" : "Stop"
-            return "\(action) \(targets.count) selected processes: \(names.joined(separator: ", "))\(suffix)."
+            let noun = targets.count == 1 ? "process" : "processes"
+            var text = "\(action) \(targets.count) selected \(noun)."
+            if hiddenCount > 0 {
+                text += hiddenCount == 1
+                    ? " 1 of these is not currently shown."
+                    : " \(hiddenCount) of these are not currently shown."
+            }
+            return text
+        }
+
+        var signalNote: String {
+            mode == .force
+                ? "Sends SIGKILL immediately; the processes cannot clean up."
+                : "Sends SIGTERM. Apps may close without asking to save changes."
+        }
+
+        /// One line per captured target: name, PID and executable path.
+        var targetList: String {
+            rows.map { "\($0.name) (PID \(String($0.pid))) — \($0.path)" }.joined(separator: "\n")
+        }
+
+        /// Names exactly the captured targets, so the review cannot drift from
+        /// what will be signalled if the live state changes meanwhile.
+        var message: String {
+            [summary, targetList, signalNote].joined(separator: "\n")
+        }
+
+        /// The menu-bar alert lists every target in a scrolling list below the
+        /// summary, however long the selection is.
+        var menuBarRequest: MenuBarConfirmationRequest {
+            MenuBarConfirmationRequest(
+                title: title,
+                message: "\(summary) \(signalNote)",
+                confirmTitle: confirmTitle,
+                details: targetList
+            )
+        }
+
+        static func displayName(for identity: ProcessIdentity) -> String {
+            let name = identity.command.isEmpty ? "" : AppProcess.name(from: identity.command)
+            return name.isEmpty ? "PID \(String(identity.pid))" : name
         }
     }
 
@@ -75,10 +134,50 @@ final class ProcessConfirmationState: ObservableObject {
         var action: PresetAction
         var disconnectFailureID: UUID?
 
-        var title: String {
+        /// The verb, as on the card's button.
+        var confirmTitle: String {
             action == .quitAll && preset.hasCanonicalGlobalProtectIdentity ? "Quit All" : action.rawValue
         }
+
+        /// A question that names the preset the card shows.
+        var title: String {
+            let name = preset.displayName
+            switch action {
+            case .quitApp: return "Quit \(name)?"
+            case .quitHelpers: return "Quit \(name) Helpers?"
+            case .quitAll: return "Quit All \(name) Processes?"
+            case .keepOff: return "Keep \(name) Off?"
+            case .stopServices: return "Stop \(name) Services Anyway?"
+            }
+        }
     }
+
+    /// Work started by the view's buttons and confirmations. Kept so a test can
+    /// wait for exactly that work instead of guessing with yields or sleeps.
+    private var tasks: [UUID: Task<Void, Never>] = [:]
+
+    func run(_ operation: @escaping @MainActor () async -> Void) {
+        let id = UUID()
+        tasks[id] = Task { [weak self] in
+            await operation()
+            self?.tasks[id] = nil
+        }
+    }
+
+    func waitForActions() async {
+        while !tasks.isEmpty {
+            let pending = Array(tasks.values)
+            for task in pending { await task.value }
+        }
+    }
+
+    // Sheet items the process list opens. Held here rather than in view
+    // @State so a test can observe what a button or key requested.
+    @Published var pendingRecallSelection: SavedSelectionsStore.SavedSelection?
+    @Published var pendingRecallResult: SavedSelectionsStore.RecallResult?
+    @Published var quickPresetDraft: QuickWatchedPresetDraft?
+    @Published var quickAutoStopProcess: AppProcess?
+    @Published var detailProcess: AppProcess?
 
     @Published private(set) var pendingTermination: PendingTermination?
     @Published private(set) var pendingBatchTermination: PendingBatchTermination?
@@ -92,10 +191,10 @@ final class ProcessConfirmationState: ObservableObject {
         pendingTermination = nil
     }
 
-    func requestBatch(_ targets: [ProcessIdentity], mode: TerminationMode = .normal) {
+    func requestBatch(_ targets: [ProcessIdentity], mode: TerminationMode = .normal, hiddenCount: Int = 0) {
         pendingBatchTermination = targets.isEmpty
             ? nil
-            : PendingBatchTermination(targets: targets, mode: mode)
+            : PendingBatchTermination(targets: targets, mode: mode, hiddenCount: hiddenCount)
     }
 
     func clearBatch() {

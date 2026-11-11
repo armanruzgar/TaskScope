@@ -11,11 +11,16 @@ struct PresetCard: View {
     var isKeepOffControlEnabled: Bool
     var onKeepOffChanged: @MainActor @Sendable (Bool) -> Void
     var onStopWithoutDisconnect: (() -> Void)? = nil
+    /// True while an action holds the operation gate. A second action would
+    /// only wait silently behind it, so the card's actions are unavailable.
+    var isMutationActive = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Label(snapshot.preset.displayName, systemImage: "network.badge.shield.half.filled")
+                // The shield belongs to the built-in VPN preset only; it suggests
+                // network protection and Keep Off, which other presets lack.
+                Label(snapshot.preset.displayName, systemImage: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "network.badge.shield.half.filled" : "app")
                     .font(.headline)
 
                 Spacer()
@@ -30,10 +35,19 @@ struct PresetCard: View {
 
             VStack(spacing: 8) {
                 PresetActionButton(title: "Open", systemImage: "arrow.up.forward.app", role: nil, action: onOpen)
-                PresetActionButton(title: "Quit App", systemImage: "power", role: .destructive, action: onQuitApp)
-                PresetActionButton(title: "Quit Helpers", systemImage: "wrench.and.screwdriver", role: .destructive, action: onQuitHelpers)
-                PresetActionButton(title: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "Quit All" : "Quit All Killable", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
+                PresetActionButton(title: "Quit App…", systemImage: "power", role: .destructive, action: onQuitApp)
+                PresetActionButton(title: "Quit Helpers…", systemImage: "wrench.and.screwdriver", role: .destructive, action: onQuitHelpers)
+                    .disabled(!hasHelperScope)
+                    .help(hasHelperScope ? "Quit Helpers" : "This preset has no helper processes or user launch agents to stop.")
+                PresetActionButton(title: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "Quit All…" : "Quit All Killable…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
                     .disabled(snapshot.preset.hasCanonicalGlobalProtectIdentity && !isKeepOffControlEnabled)
+            }
+            .disabled(isMutationActive)
+
+            if isMutationActive {
+                Text("Waiting for the current action to finish…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             if snapshot.preset.id == WatchedAppPreset.globalProtectID {
@@ -53,7 +67,7 @@ struct PresetCard: View {
                     }
                 }
                 .toggleStyle(.switch)
-                .disabled(!isKeepOffControlEnabled)
+                .disabled(!isKeepOffControlEnabled || isMutationActive)
                 .accessibilityHint(
                     "Automatically disconnects and stops GlobalProtect. Turning this off restores its VPN service and opens the app."
                 )
@@ -64,7 +78,7 @@ struct PresetCard: View {
                 }
                 if isKeptOff {
                     Button("Apply Keep Off…", role: .destructive) { onKeepOffChanged(true) }
-                        .disabled(!isKeepOffControlEnabled)
+                        .disabled(!isKeepOffControlEnabled || isMutationActive)
                         .help("Retry the confirmed disconnect and service stop. A system daemon preserved on a session installation remains running.")
                 }
                 if let onStopWithoutDisconnect {
@@ -74,7 +88,7 @@ struct PresetCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     Button("Stop Services Anyway…", role: .destructive, action: onStopWithoutDisconnect)
-                        .disabled(!isKeepOffControlEnabled)
+                        .disabled(!isKeepOffControlEnabled || isMutationActive)
                 }
                 GlobalProtectCompatibilityButton(
                     keepOffRequested: isKeepOffControlEnabled ? isKeptOff : nil
@@ -84,6 +98,12 @@ struct PresetCard: View {
         }
         .padding(12)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Quit Helpers acts on helper processes and, with launch agents
+    /// configured, unloads those agents; with neither it has nothing to do.
+    private var hasHelperScope: Bool {
+        !snapshot.preset.helperProcessNames.isEmpty || !snapshot.preset.lifecycleUserLaunchAgentJobs.isEmpty
     }
 
     private var statusBadge: some View {

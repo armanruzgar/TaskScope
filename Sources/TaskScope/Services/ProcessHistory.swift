@@ -9,6 +9,7 @@ final class ProcessHistory: ObservableObject {
         var observedProcessCPU: Double
         var observedProcessMemoryMB: Double
         var processCount: Int
+        var startsNewSegment = false
     }
 
     enum SamplingState: Equatable {
@@ -32,6 +33,7 @@ final class ProcessHistory: ObservableObject {
     private let now: () -> Date
     private let sleep: Sleeper
     private let maxSamples: Int
+    private var hasGap = false
     private var samplingTask: Task<Void, Never>?
     private var samplingGeneration = 0
     private var consumerCount = 0
@@ -157,6 +159,7 @@ final class ProcessHistory: ObservableObject {
     private func apply(_ result: Result<[AppProcess], ProcessInventoryError>) {
         switch result {
         case .failure(let error):
+            hasGap = true
             state = .unavailable(error.localizedDescription)
         case .success(let processes):
             record(processes: processes)
@@ -172,9 +175,11 @@ final class ProcessHistory: ObservableObject {
                 timestamp: now(),
                 observedProcessCPU: cpu,
                 observedProcessMemoryMB: memory,
-                processCount: processes.count
+                processCount: processes.count,
+                startsNewSegment: hasGap
             )
         )
+        hasGap = false
         if samples.count > maxSamples {
             samples.removeFirst(samples.count - maxSamples)
         }

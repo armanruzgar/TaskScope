@@ -14,28 +14,22 @@ struct TaskScopePopoverView: View {
     private let activityMonitor: any ActivityMonitorCoordinating
     private let menuBarConfirmation: (any MenuBarConfirming)?
     @StateObject private var confirmationState: ProcessConfirmationState
+    @StateObject private var listState: ProcessListInteractionState
+    @StateObject private var reportState: ProcessReportPresentationState
+    private var reportWindowState: ControlActiveState?
+    private var mainWindowVisible: @MainActor () -> Bool
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var shownLifecycleReportID: LifecycleReport.ID?
     @State private var shownBatchActionReportID: ProcessBatchActionReport.ID?
 
-    @State private var detailProcess: AppProcess?
     @State private var detailData: ProcessDetail?
     @State private var detailFailed: Bool = false
-    @State private var keyboardSelectedPid: Int32?
-    /// The identity of the focused row, so a recycled PID cannot inherit focus
-    /// and turn Return into a stop request for a different process.
-    @State private var keyboardSelectedIdentity: ProcessIdentity?
-    @State private var filterMode: ProcessFilterMode = .all
-    @State private var treeMode: Bool = false
-    @State private var expandedTreePids: Set<Int32> = []
+    @State private var detailFailure: ProcessDetailResult?
+    @State private var detailRetry = 0
     @State private var saveSelectionName: String = ""
     @State private var showSaveSelectionSheet: Bool = false
-    @State private var pendingRecallSelection: SavedSelectionsStore.SavedSelection?
-    @State private var pendingRecallResult: SavedSelectionsStore.RecallResult?
     @State private var renameSelection: SavedSelectionsStore.SavedSelection?
     @State private var renameSelectionName = ""
-    @State private var quickAutoStopProcess: AppProcess?
-    @State private var quickPresetDraft: QuickWatchedPresetDraft?
     @State private var registeredExtendedMetrics = false
     /// The list must own focus for `.onKeyPress` to receive arrow, Return, and
     /// Escape without Full Keyboard Access; tapping a row moves focus here.
@@ -53,9 +47,19 @@ struct TaskScopePopoverView: View {
         presentationStyle: TaskScopePresentationStyle = .menuBarCompact,
         openFullWindow: (() -> Void)? = nil,
         confirmationState: ProcessConfirmationState? = nil,
+        listState: ProcessListInteractionState? = nil,
+        reportState: ProcessReportPresentationState? = nil,
+        reportWindowState: ControlActiveState? = nil,
+        mainWindowVisible: @escaping @MainActor () -> Bool = {
+            NSApplication.shared.windows.contains { $0.isVisible && ($0.title == "TaskScope" || $0.title == "TaskScope Processes") }
+        },
         activityMonitor: (any ActivityMonitorCoordinating)? = nil,
         menuBarConfirmation: (any MenuBarConfirming)? = nil
     ) {
+        self.reportWindowState = reportWindowState
+        self.mainWindowVisible = mainWindowVisible
+        _reportState = StateObject(wrappedValue: reportState ?? ProcessReportPresentationState())
+        _listState = StateObject(wrappedValue: listState ?? ProcessListInteractionState())
         self.processManager = processManager
         self.loginItemManager = loginItemManager
         self.settings = settings
@@ -123,42 +127,43 @@ struct TaskScopePopoverView: View {
             // Forget disclosure state for processes that no longer exist; a
             // recycled pid must not inherit an old expansion.
             let livePIDs = Set(processManager.inventorySnapshot.map(\.pid))
-            // Search can show processes below the unfiltered display limit.
-            // Preserve their keyboard focus for as long as they are live.
-            if let pid = keyboardSelectedPid {
-                let live = processManager.inventorySnapshot.first { $0.pid == pid }
-                if live == nil || (keyboardSelectedIdentity.map { $0 != live?.identity } ?? false) {
-                    keyboardSelectedPid = nil
-                }
-            }
-            expandedTreePids = expandedTreePids.intersection(livePIDs)
+            listState.retainLiveFocus(in: processManager.inventorySnapshot)
+            listState.expandedTreePids = listState.expandedTreePids.intersection(livePIDs)
+            // A match that first appears on a later read must not stay hidden
+            // under a collapsed ancestor.
+            expandAncestorsOfNewMatches()
         }
-        // Ancestors are expanded once per *filter* change, never on every poll,
-        // so a node collapsed while searching stays collapsed.
+        // Only the ancestors of newly displayed matches are expanded, so a node
+        // the user collapsed stays collapsed until it gains a new match.
         .onChange(of: settings.searchText) { _, _ in
-            expandFilteredTreeAncestors()
+            expandAncestorsOfNewMatches()
         }
-        .onChange(of: filterMode) { _, _ in
-            expandFilteredTreeAncestors()
+        .onChange(of: listState.filterMode) { _, _ in
+            expandAncestorsOfNewMatches()
         }
-        .onChange(of: treeMode) { _, enabled in
+        .onChange(of: listState.treeMode) { _, enabled in
             if enabled {
-                expandFilteredTreeAncestors()
+                expandAncestorsOfNewMatches()
             }
         }
         // A persisted search can be active before the first list loads; expand
         // its matches' ancestors once there is a tree to expand.
         .onChange(of: processManager.hasLoadedProcessList) { _, loaded in
             if loaded {
-                expandFilteredTreeAncestors()
+                expandAncestorsOfNewMatches()
             }
         }
-        .onChange(of: keyboardSelectedPid) { _, pid in
-            keyboardSelectedIdentity = pid.flatMap { pid in
-                processManager.inventorySnapshot.first { $0.pid == pid }?.identity
+        .onChange(of: listState.keyboardSelectedPid) { _, pid in
+            let focused = pid.flatMap { pid in
+                processManager.inventorySnapshot.first { $0.pid == pid }
             }
+            listState.keyboardSelectedIdentity = focused?.identity
             if pid != nil {
                 processListFocused = true
+            }
+            // The highlight is not VoiceOver's cursor; say where it moved.
+            if let focused {
+                AccessibilityNotification.Announcement("\(focused.name), PID \(String(focused.pid))").post()
             }
         }
         // Selection is deliberately *not* pruned to the rows currently rendered:
@@ -186,20 +191,20 @@ struct TaskScopePopoverView: View {
         } message: { pending in
             Text(pending.message)
         }
-        .confirmationDialog(
-            confirmationState.pendingBatchTermination?.title ?? "Stop Selected Processes?",
-            isPresented: batchConfirmationBinding,
-            presenting: confirmationState.pendingBatchTermination
-        ) { pending in
-            Button(pending.confirmTitle, role: .destructive) {
-                stopSelection(pending)
-                confirmationState.clearBatch()
-            }
-            Button("Cancel", role: .cancel) {
-                confirmationState.clearBatch()
-            }
-        } message: { pending in
-            Text(pending.message)
+        // Every captured target is listed, including selected rows that are not
+        // on screen; see `BatchStopReviewSheet`.
+        .sheet(item: batchReviewBinding) { pending in
+            BatchStopReviewSheet(
+                pending: pending,
+                onConfirm: {
+                    guard confirmationState.pendingBatchTermination == pending else { return }
+                    confirmationState.clearBatch()
+                    stopSelection(pending)
+                },
+                onCancel: {
+                    confirmationState.clearBatch()
+                }
+            )
         }
     }
 
@@ -210,7 +215,7 @@ struct TaskScopePopoverView: View {
             isPresented: presetConfirmationBinding,
             presenting: confirmationState.pendingPresetAction
         ) { pending in
-            Button(pending.title, role: .destructive) {
+            Button(pending.confirmTitle, role: .destructive) {
                 confirmationState.clearPresetAction()
                 runPresetAction(pending)
             }
@@ -241,7 +246,7 @@ struct TaskScopePopoverView: View {
         .onChange(of: confirmationState.pendingBatchTermination) { _, pending in
             guard let pending else { return }
             confirmInMenuBar(
-                MenuBarConfirmationRequest(title: pending.title, message: pending.message, confirmTitle: pending.confirmTitle),
+                pending.menuBarRequest,
                 isCurrent: { $0.pendingBatchTermination == pending },
                 clear: { $0.clearBatch() },
                 perform: { stopSelection(pending) }
@@ -250,7 +255,7 @@ struct TaskScopePopoverView: View {
         .onChange(of: confirmationState.pendingPresetAction) { _, pending in
             guard let pending else { return }
             confirmInMenuBar(
-                MenuBarConfirmationRequest(title: pending.title, message: presetConfirmationMessage(for: pending), confirmTitle: pending.title),
+                MenuBarConfirmationRequest(title: pending.title, message: presetConfirmationMessage(for: pending), confirmTitle: pending.confirmTitle),
                 isCurrent: { $0.pendingPresetAction == pending },
                 clear: { $0.clearPresetAction() },
                 perform: { runPresetAction(pending) }
@@ -268,12 +273,13 @@ struct TaskScopePopoverView: View {
         // The menu window may close while the alert is up; keep the state it
         // asked about rather than reading this view's storage afterwards.
         let state = confirmationState
-        Task {
+        state.run {
             // Leave the view update that queued the request before the alert
             // runs its modal loop.
             await Task.yield()
             guard isCurrent(state) else { return }
             let confirmed = await menuBarConfirmation.confirm(request)
+            guard isCurrent(state) else { return }
             clear(state)
             if confirmed { perform() }
         }
@@ -283,14 +289,14 @@ struct TaskScopePopoverView: View {
         let process = pending.process
         let forceKill = pending.mode == .force
         let manager = processManager
-        Task { await manager.terminate(process, forceKill: forceKill) }
+        confirmationState.run { await manager.terminate(process, forceKill: forceKill) }
     }
 
     private func stopSelection(_ pending: ProcessConfirmationState.PendingBatchTermination) {
         let targets = pending.targets
         let forceKill = pending.mode == .force
         let manager = processManager
-        Task { await manager.batchTerminate(targets, forceKill: forceKill) }
+        confirmationState.run { await manager.batchTerminate(targets, forceKill: forceKill) }
     }
 
     private func runPresetAction(_ pending: ProcessConfirmationState.PendingPresetAction) {
@@ -302,7 +308,7 @@ struct TaskScopePopoverView: View {
         let showResult = openFullWindow
         let isExpandedWindow = isExpandedWindow
         let manager = processManager
-        Task {
+        confirmationState.run {
             // GlobalProtect opens its own menu to disconnect, which
             // dismisses MenuBarExtra. Keep this user-requested action
             // and its result visible in the regular window instead.
@@ -332,29 +338,32 @@ struct TaskScopePopoverView: View {
 
     private var processDetailContent: some View {
         presetConfirmationContent
-        .sheet(item: $detailProcess) { process in
+        .sheet(item: $confirmationState.detailProcess) { process in
             ProcessDetailSheet(
-                process: process,
+                process: processManager.inventorySnapshot.first(where: { $0.identity == process.identity }) ?? process,
                 detail: detailData,
                 failed: detailFailed,
+                failure: detailFailure,
+                onRetry: { detailRetry += 1 },
+                metricsAreLive: processManager.inventorySnapshot.contains(where: { $0.identity == process.identity }),
                 onClose: {
-                    detailProcess = nil
+                    confirmationState.detailProcess = nil
                     detailData = nil
                     detailFailed = false
+                    detailFailure = nil
                 }
             )
-            .task(id: process.pid) {
+            .task(id: "\(process.pid)-\(detailRetry)") {
                 detailData = nil
                 detailFailed = false
-                let result = await processManager.detail(for: process)
+                detailFailure = nil
+                let result = await processManager.detailResult(for: process)
                 // The sheet may have moved to another process, or closed,
                 // while the read was in flight.
-                guard !Task.isCancelled, detailProcess?.pid == process.pid else { return }
-                if let result {
-                    detailData = result
-                } else {
-                    detailFailed = true
-                }
+                guard !Task.isCancelled, confirmationState.detailProcess?.pid == process.pid else { return }
+                detailData = result.detail
+                detailFailed = result.detail == nil
+                detailFailure = result.detail == nil ? result : nil
             }
         }
     }
@@ -379,19 +388,19 @@ struct TaskScopePopoverView: View {
                 }
             )
         }
-        .sheet(item: $pendingRecallSelection) { selection in
-            if let result = pendingRecallResult {
+        .sheet(item: $confirmationState.pendingRecallSelection) { selection in
+            if let result = confirmationState.pendingRecallResult {
                 SavedSelectionRecallSheet(
                     selection: selection,
                     result: result,
                     onApply: {
                         processManager.select(result.matched)
-                        pendingRecallSelection = nil
-                        pendingRecallResult = nil
+                        confirmationState.pendingRecallSelection = nil
+                        confirmationState.pendingRecallResult = nil
                     },
                     onCancel: {
-                        pendingRecallSelection = nil
-                        pendingRecallResult = nil
+                        confirmationState.pendingRecallSelection = nil
+                        confirmationState.pendingRecallResult = nil
                     }
                 )
             }
@@ -418,7 +427,10 @@ struct TaskScopePopoverView: View {
         ) { report in
             LifecycleReportSheet(
                 report: report,
-                onClose: { processManager.dismissLifecycleReport() }
+                onClose: {
+                    if processManager.lifecycleReport?.id == report.id { processManager.dismissLifecycleReport() }
+                    reportState.dismissLifecycle()
+                }
             )
             .onAppear { shownLifecycleReportID = report.id }
         }
@@ -427,7 +439,10 @@ struct TaskScopePopoverView: View {
         ) { report in
             ProcessBatchActionReportSheet(
                 report: report,
-                onClose: { processManager.dismissBatchActionReport() }
+                onClose: {
+                    if processManager.batchActionReport?.id == report.id { processManager.dismissBatchActionReport() }
+                    reportState.dismissBatch()
+                }
             )
             .onAppear { shownBatchActionReportID = report.id }
         }
@@ -435,7 +450,7 @@ struct TaskScopePopoverView: View {
 
     private var quickActionSheetContent: some View {
         reportSheetContent
-        .sheet(item: $quickAutoStopProcess) { process in
+        .sheet(item: $confirmationState.quickAutoStopProcess, onDismiss: { autoStopRules.clearValidationError() }) { process in
             QuickAutoStopRuleSheet(
                 process: process,
                 existingRule: QuickAutoStopRuleSaver.existingRule(for: process, in: autoStopRules),
@@ -447,18 +462,19 @@ struct TaskScopePopoverView: View {
                     )
                 },
                 onCancel: {
-                    quickAutoStopProcess = nil
+                    confirmationState.quickAutoStopProcess = nil
+                    autoStopRules.clearValidationError()
                 }
             )
         }
-        .sheet(item: $quickPresetDraft) { draft in
+        .sheet(item: $confirmationState.quickPresetDraft) { draft in
             QuickWatchedPresetSheet(
                 draft: draft,
                 onSave: { preset in
                     saveQuickWatchedPreset(preset)
                 },
                 onCancel: {
-                    quickPresetDraft = nil
+                    confirmationState.quickPresetDraft = nil
                 }
             )
         }
@@ -469,8 +485,12 @@ struct TaskScopePopoverView: View {
         .background {
             // Replace only the alert presenter when the queue head changes.
             // The list and its focus/selection keep their own identity.
-            AutoStopPromptAlert(prompt: autoStopRules.currentPrompt, rules: autoStopRules)
-                .id(autoStopRules.currentPrompt?.id)
+            if !autoStopRules.hasAppPromptPresenter {
+                if menuBarConfirmation == nil {
+                    AutoStopPromptAlert(prompt: autoStopRules.currentPrompt, rules: autoStopRules)
+                        .id(autoStopRules.currentPrompt?.id)
+                }
+            }
         }
     }
 
@@ -508,10 +528,12 @@ struct TaskScopePopoverView: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
+                    .accessibilityHidden(true)
                     .foregroundStyle(.secondary)
 
                 TextField("Search processes", text: $settings.searchText)
                     .textFieldStyle(.plain)
+                    .accessibilityLabel("Search processes")
 
                 if !settings.searchText.isEmpty {
                     Button {
@@ -573,10 +595,11 @@ struct TaskScopePopoverView: View {
                 .padding(10)
                 .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 .padding(.horizontal, 16)
-                .accessibilityElement(children: .combine)
+                .accessibilityElement(children: .contain)
             }
 
-            HStack {
+            // Same spacing as `ProcessRow`, so each title sits over its column.
+            HStack(spacing: 10) {
                 Text(processCountTitle)
                 if let updated = processManager.lastSuccessfulInventoryAt,
                    !settings.autoRefreshProcessList {
@@ -585,20 +608,22 @@ struct TaskScopePopoverView: View {
                 }
                 if isExpandedWindow {
                     Spacer()
-                    Text("PID")
+                    columnHeader("PID", sortKey: .pid)
                         .frame(width: 70, alignment: .trailing)
                     Text("PPID")
                         .frame(width: 70, alignment: .trailing)
                     Text("NET KB TOTAL")
+                        .help("Kilobytes received / sent since the process started")
                         .frame(width: 96, alignment: .trailing)
                     Text("DISK MB TOTAL")
+                        .help("Megabytes read / written since the process started")
                         .frame(width: 96, alignment: .trailing)
                 } else {
                     Spacer()
                 }
-                Text("CPU")
+                columnHeader("CPU", sortKey: .cpu)
                     .frame(width: 54, alignment: .trailing)
-                Text("MEM MB")
+                columnHeader("MEM MB", sortKey: .memory)
                     .frame(width: 64, alignment: .trailing)
                 Text("")
                     .frame(width: 28)
@@ -619,20 +644,24 @@ struct TaskScopePopoverView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            if treeMode {
+                            if listState.treeMode {
                                 ForEach(treeRoots, id: \.id) { node in
                                     ProcessTreeRow(
                                         node: node,
                                         depth: 0,
                                         settings: settings,
                                         processManager: processManager,
-                                        keyboardSelectedPid: $keyboardSelectedPid,
+                                        keyboardSelectedPid: $listState.keyboardSelectedPid,
                                         pendingTermination: pendingTerminationBinding,
-                                        expandedPids: $expandedTreePids,
+                                        expandedPids: $listState.expandedTreePids,
                                         showsExpandedMetrics: isExpandedWindow,
+                                        matchedPIDs: Set(filteredProcesses.map(\.pid)),
                                         requestListFocus: { processListFocused = true },
                                         contextMenuContent: { process in
                                             processContextMenu(for: process)
+                                        },
+                                        accessibilityActionsContent: { process in
+                                            AnyView(processAccessibilityActions(for: process))
                                         }
                                     )
                                 }
@@ -642,11 +671,14 @@ struct TaskScopePopoverView: View {
                                         .id(process.pid)
                                         .contentShape(Rectangle())
                                         .onTapGesture {
-                                            keyboardSelectedPid = process.pid
+                                            listState.keyboardSelectedPid = process.pid
                                             processListFocused = true
                                         }
                                         .contextMenu {
                                             processContextMenu(for: process)
+                                        }
+                                        .accessibilityActions {
+                                            processAccessibilityActions(for: process)
                                         }
                                 }
                             }
@@ -663,23 +695,38 @@ struct TaskScopePopoverView: View {
                         moveKeyboard(by: 1, in: keyboardNavigationProcesses, proxy: proxy)
                         return .handled
                     }
+                    .onKeyPress(.space) {
+                        toggleKeyboardSelection()
+                        return .handled
+                    }
+                    .onKeyPress(.leftArrow) {
+                        setKeyboardDisclosure(expanded: false)
+                        return listState.treeMode ? .handled : .ignored
+                    }
+                    .onKeyPress(.rightArrow) {
+                        setKeyboardDisclosure(expanded: true)
+                        return listState.treeMode ? .handled : .ignored
+                    }
                     .onKeyPress(.return) {
-                        requestKeyboardTermination(pid: keyboardSelectedPid)
+                        requestKeyboardTermination(pid: listState.keyboardSelectedPid)
                         return .handled
                     }
                     .onKeyPress(.escape) {
-                        processManager.clearSelection()
-                        keyboardSelectedPid = nil
+                        clearKeyboardFocus()
                         return .handled
                     }
                     .onKeyPress { keyPress in
                         // Shift may arrive applied to the character ("A"), and Caps
                         // Lock adds a modifier, so compare case-insensitively and
                         // ignore modifiers that do not change the shortcut.
-                        guard keyPress.characters.lowercased() == "a" else { return .ignored }
                         let modifiers = keyPress.modifiers.subtracting([.capsLock, .numericPad])
+                        if keyPress.characters.lowercased() == "i", modifiers == .command {
+                            showKeyboardDetail()
+                            return .handled
+                        }
+                        guard keyPress.characters.lowercased() == "a" else { return .ignored }
                         if modifiers == .command {
-                            processManager.select(selectableProcesses)
+                            selectAllVisibleMatches()
                             return .handled
                         }
                         if modifiers == [.command, .shift] {
@@ -704,8 +751,7 @@ struct TaskScopePopoverView: View {
         Picker("Sort", selection: Binding(
             get: { settings.sortKey },
             set: { newValue in
-                settings.sortKeyRaw = newValue.rawValue
-                processManager.sortKey = newValue
+                setSortKey(newValue)
             }
         )) {
             ForEach(ProcessSortKey.allCases) { key in
@@ -718,9 +764,8 @@ struct TaskScopePopoverView: View {
         .labelsHidden()
         .fixedSize()
         .help("Sort By")
-        .accessibilityLabel("Sort")
 
-        Picker("Filter", selection: $filterMode) {
+        Picker("Filter", selection: $listState.filterMode) {
             ForEach(ProcessFilterMode.allCases) { mode in
                 Text(mode.label).tag(mode)
             }
@@ -729,14 +774,14 @@ struct TaskScopePopoverView: View {
         .labelsHidden()
         .fixedSize()
 
-        Toggle(isOn: $treeMode) {
+        Toggle(isOn: $listState.treeMode) {
             Label("Tree", systemImage: "list.bullet.indent")
                 .labelStyle(.iconOnly)
         }
         .toggleStyle(.button)
         .help("Tree View")
         .accessibilityLabel("Tree view")
-        .accessibilityValue(treeMode ? "On" : "Off")
+        .accessibilityValue(listState.treeMode ? "On" : "Off")
     }
 
     @ViewBuilder
@@ -761,18 +806,18 @@ struct TaskScopePopoverView: View {
                         Button("Preview & Recall…") {
                             // Resolve against a fresh inventory: the list may
                             // never have been loaded, or may be a poll old.
-                            Task {
+                            confirmationState.run {
                                 guard await processManager.loadProcessList(showMessage: false) else {
-                                    pendingRecallResult = nil
-                                    pendingRecallSelection = nil
-                                    processManager.setMessage("Could not preview saved selection: \(processManager.processLoadError ?? "the process list could not be refreshed").")
+                                    confirmationState.pendingRecallResult = nil
+                                    confirmationState.pendingRecallSelection = nil
+                                    processManager.setMessage("Could not preview saved selection: \(UIMessage.sentence(processManager.processLoadError ?? "the process list could not be refreshed"))")
                                     return
                                 }
-                                pendingRecallResult = savedSelections.resolve(
+                                confirmationState.pendingRecallResult = savedSelections.resolve(
                                     sel,
                                     in: processManager.inventorySnapshot
                                 )
-                                pendingRecallSelection = sel
+                                confirmationState.pendingRecallSelection = sel
                             }
                         }
                         Button("Rename…") {
@@ -780,10 +825,12 @@ struct TaskScopePopoverView: View {
                             renameSelectionName = sel.name
                             renameSelection = sel
                         }
+                        .disabled(savedSelections.isReadOnlyAfterCorruption)
                         Divider()
                         Button("Delete", role: .destructive) {
                             savedSelections.remove(sel)
                         }
+                        .disabled(savedSelections.isReadOnlyAfterCorruption)
                     }
                 }
                 Divider()
@@ -794,6 +841,7 @@ struct TaskScopePopoverView: View {
                     saveSelectionName = ""
                     showSaveSelectionSheet = true
                 }
+                .disabled(savedSelections.isReadOnlyAfterCorruption)
             }
         } label: {
             Label("Saved", systemImage: "bookmark")
@@ -806,14 +854,16 @@ struct TaskScopePopoverView: View {
             Menu {
                 Button("Stop Selected…", role: .destructive) {
                     confirmationState.requestBatch(
-                        processManager.selectionSnapshot(),
-                        mode: .normal
+                        batchTargets,
+                        mode: .normal,
+                        hiddenCount: hiddenSelectedCount
                     )
                 }
                 Button("Force Stop Selected…", role: .destructive) {
                     confirmationState.requestBatch(
-                        processManager.selectionSnapshot(),
-                        mode: .force
+                        batchTargets,
+                        mode: .force,
+                        hiddenCount: hiddenSelectedCount
                     )
                 }
             } label: {
@@ -823,7 +873,7 @@ struct TaskScopePopoverView: View {
             .tint(.red)
             .controlSize(.small)
             .accessibilityLabel(
-                "Actions for \(processManager.selectedPids.count) selected processes"
+                "Actions for \(processManager.selectedPids.count) selected \(processManager.selectedPids.count == 1 ? "process" : "processes")"
             )
 
             Button {
@@ -839,11 +889,12 @@ struct TaskScopePopoverView: View {
     private func firstLoadFailedState(error: String) -> some View {
         VStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle")
+                    .accessibilityHidden(true)
                 .font(.system(size: 28))
                 .foregroundStyle(.secondary)
             Text("Process List Unavailable")
                 .font(.headline)
-            Text(error)
+            Text(UIMessage.sentence(error))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -853,12 +904,13 @@ struct TaskScopePopoverView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
     }
 
     private var noMatchingProcessesState: some View {
         VStack(spacing: 10) {
             Image(systemName: "line.3.horizontal.decrease.circle")
+                    .accessibilityHidden(true)
                 .font(.system(size: 28))
                 .foregroundStyle(.secondary)
             Text("No Matching Processes")
@@ -869,7 +921,7 @@ struct TaskScopePopoverView: View {
                 .multilineTextAlignment(.center)
             Button("Clear Search & Filter") {
                 settings.searchText = ""
-                filterMode = .all
+                listState.filterMode = .all
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -888,11 +940,14 @@ struct TaskScopePopoverView: View {
 
     private var footer: some View {
         TaskScopeFooterView(
+            // Progress is shown for actions and explicit refreshes, never for
+            // the silent reads polling makes.
             isWorking: processManager.isWorking,
             message: processManager.message,
             workingMessage: settings.selectedSection == .presets ? processManager.message : nil,
             expandsMessage: settings.selectedSection == .presets,
             summary: footerSummary,
+            quitDisabled: processManager.isMutationActive,
             quitAction: { NSApplication.shared.terminate(nil) }
         )
     }
@@ -900,7 +955,7 @@ struct TaskScopePopoverView: View {
     private var listQuery: ProcessListQuery {
         ProcessListQuery(
             searchText: settings.searchText,
-            filterMode: filterMode,
+            filterMode: listState.filterMode,
             watchedScopes: watchedApps.presets.map { WatchedProcessScope(preset: $0) },
             cpuHighlightThreshold: settings.cpuHighlightThreshold,
             memoryHighlightThresholdMB: settings.memHighlightThresholdMB
@@ -922,8 +977,43 @@ struct TaskScopePopoverView: View {
         let list = processManager.displayList(for: listQuery)
         let count = list.matchCount
         let shown = list.processes.count
-        let noun = hasSearch ? "matches" : "processes"
-        return shown < count ? "Showing \(shown) of \(count) \(noun)" : "\(shown) \(noun)"
+        let noun = hasSearch ? (count == 1 ? "match" : "matches") : (count == 1 ? "process" : "processes")
+        let title = shown < count ? "Showing \(shown) of \(count) \(noun)" : "\(shown) \(noun)"
+        guard listState.treeMode else { return title }
+        // Tree view hides collapsed children and adds context-only ancestors,
+        // so also say how many rows are actually on screen.
+        let visible = visibleTreeProcesses.count
+        return "\(title), \(visible) \(visible == 1 ? "row" : "rows") visible"
+    }
+
+    func setSortKey(_ key: ProcessSortKey) {
+        settings.sortKeyRaw = key.rawValue
+        processManager.sortKey = key
+    }
+
+    /// A column title that sorts by its column, marking the active sort and its
+    /// direction (CPU and memory sort descending, PID ascending).
+    @ViewBuilder
+    private func columnHeader(_ title: String, sortKey: ProcessSortKey) -> some View {
+        let isActive = settings.sortKey == sortKey
+        let descending = sortKey == .cpu || sortKey == .memory
+        Button {
+            setSortKey(sortKey)
+        } label: {
+            HStack(spacing: 2) {
+                if isActive {
+                    Image(systemName: descending ? "chevron.down" : "chevron.up")
+                        .font(.system(size: 7, weight: .bold))
+                        .accessibilityHidden(true)
+                }
+                Text(title)
+                    .fontWeight(isActive ? .semibold : .regular)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Sort by \(sortKey.label)")
+        .accessibilityValue(isActive ? (descending ? "sorted descending" : "sorted ascending") : "")
+        .accessibilityHint("Sorts the process list by this column")
     }
 
     private func refreshVisibleSection() {
@@ -945,10 +1035,10 @@ struct TaskScopePopoverView: View {
     }
 
     private var footerSummary: String? {
-        guard processManager.hasLoadedProcessList, !filteredProcesses.isEmpty else { return nil }
+        guard settings.selectedSection == .processes, processManager.hasLoadedProcessList, !filteredProcesses.isEmpty else { return nil }
         let totalCPU = filteredProcesses.reduce(0.0) { $0 + $1.cpu }
         let totalMem = filteredProcesses.reduce(0.0) { $0 + $1.memoryMB }
-        return String(format: "Σ %.1f%% CPU · %.0f MB MEM", totalCPU, totalMem)
+        return String(format: "Σ shown %.1f%% CPU · %.0f MB MEM", totalCPU, totalMem)
     }
 
     private var treeRoots: [ProcessTreeNode] {
@@ -956,7 +1046,7 @@ struct TaskScopePopoverView: View {
     }
 
     private var keyboardNavigationProcesses: [AppProcess] {
-        guard treeMode else { return filteredProcesses }
+        guard listState.treeMode else { return filteredProcesses }
         return visibleTreeProcesses
     }
 
@@ -964,15 +1054,24 @@ struct TaskScopePopoverView: View {
     /// also renders ancestors purely for hierarchy context; selecting those
     /// would let a batch stop reach a parent app the user never matched.
     private var selectableProcesses: [AppProcess] {
-        guard treeMode else { return filteredProcesses }
-        let matchedPIDs = Set(filteredProcesses.map(\.pid))
-        return visibleTreeProcesses.filter { matchedPIDs.contains($0.pid) }
+        ProcessListInteractionState.selectable(matches: filteredProcesses, visible: listState.treeMode ? visibleTreeProcesses : nil)
+    }
+
+    private var batchTargets: [ProcessIdentity] {
+        let captured = processManager.selectionSnapshot()
+        let visible = keyboardNavigationProcesses.map(\.identity).filter { captured.contains($0) }
+        return visible + captured.filter { !visible.contains($0) }
+    }
+
+    private var hiddenSelectedCount: Int {
+        let visible = Set(keyboardNavigationProcesses.map(\.identity))
+        return processManager.selectionSnapshot().filter { !visible.contains($0) }.count
     }
 
     private var visibleTreeProcesses: [AppProcess] {
         ProcessTreeBuilder.visibleProcesses(
             in: treeRoots,
-            expandedPIDs: expandedTreePids
+            expandedPIDs: listState.expandedTreePids
         )
     }
 
@@ -1000,11 +1099,11 @@ struct TaskScopePopoverView: View {
         )
     }
 
-    private var batchConfirmationBinding: Binding<Bool> {
+    private var batchReviewBinding: Binding<ProcessConfirmationState.PendingBatchTermination?> {
         Binding(
-            get: { menuBarConfirmation == nil && confirmationState.pendingBatchTermination != nil },
-            set: { isPresented in
-                if !isPresented {
+            get: { menuBarConfirmation == nil ? confirmationState.pendingBatchTermination : nil },
+            set: { value in
+                if value == nil {
                     confirmationState.clearBatch()
                 }
             }
@@ -1025,16 +1124,24 @@ struct TaskScopePopoverView: View {
     private var lifecycleReportBinding: Binding<LifecycleReport?> {
         Binding(
             get: {
-                Self.presentedReport(
-                    ownsLifecycleReportPresentation ? processManager.lifecycleReport : nil,
+                guard ownsLifecycleReportPresentation else {
+                    reportState.forgetUnpresented()
+                    return nil
+                }
+                return reportState.retain(Self.presentedReport(
+                    processManager.lifecycleReport,
                     alreadyShown: shownLifecycleReportID,
-                    windowState: controlActiveState
-                )
+                    windowState: reportWindowState ?? controlActiveState
+                ))
             },
             set: { value in
-                if value == nil && ownsLifecycleReportPresentation {
+                guard value == nil, ownsLifecycleReportPresentation else { return }
+                // Clear the manager's slot only when it still holds the report
+                // that was on screen; a newer one is presented next.
+                if reportState.lifecycle == nil || processManager.lifecycleReport?.id == reportState.lifecycle?.id {
                     processManager.dismissLifecycleReport()
                 }
+                reportState.dismissLifecycle()
             }
         )
     }
@@ -1056,42 +1163,35 @@ struct TaskScopePopoverView: View {
     private var ownsLifecycleReportPresentation: Bool {
         // Both views share the manager. Once the regular window is visible it
         // owns the report; the menu must not create or dismiss a second sheet.
-        isExpandedWindow || !NSApplication.shared.windows.contains {
-            $0.isVisible && ($0.title == "TaskScope" || $0.title == "TaskScope Processes")
-        }
+        isExpandedWindow || !mainWindowVisible()
     }
 
     private var batchActionReportBinding: Binding<ProcessBatchActionReport?> {
         Binding(
             get: {
-                Self.presentedReport(
-                    ownsLifecycleReportPresentation ? processManager.batchActionReport : nil,
+                guard ownsLifecycleReportPresentation else {
+                    reportState.forgetUnpresented()
+                    return nil
+                }
+                return reportState.retain(Self.presentedReport(
+                    processManager.batchActionReport,
                     alreadyShown: shownBatchActionReportID,
-                    windowState: controlActiveState
-                )
+                    windowState: reportWindowState ?? controlActiveState
+                ))
             },
             set: { value in
-                if value == nil && ownsLifecycleReportPresentation {
+                guard value == nil, ownsLifecycleReportPresentation else { return }
+                if reportState.batch == nil || processManager.batchActionReport?.id == reportState.batch?.id {
                     processManager.dismissBatchActionReport()
                 }
+                reportState.dismissBatch()
             }
         )
     }
 
-    private func expandFilteredTreeAncestors() {
-        let isFiltering = !settings.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || filterMode != .all
-        guard treeMode, isFiltering else { return }
-
-        func collectParents(_ nodes: [ProcessTreeNode]) {
-            for node in nodes {
-                if !node.children.isEmpty {
-                    expandedTreePids.insert(node.process.pid)
-                    collectParents(node.children)
-                }
-            }
-        }
-        collectParents(treeRoots)
+    private func expandAncestorsOfNewMatches() {
+        guard listState.treeMode else { return }
+        listState.updateTree(matches: filteredProcesses, roots: treeRoots)
     }
 
     @ViewBuilder
@@ -1100,7 +1200,7 @@ struct TaskScopePopoverView: View {
             process: process,
             isCurrentProcess: processManager.isCurrentProcess(process),
             isSelected: processManager.selectedPids.contains(process.pid),
-            isKeyboardSelected: keyboardSelectedPid == process.pid,
+            isKeyboardSelected: listState.keyboardSelectedPid == process.pid,
             isHighlightedCPU: process.cpu >= settings.cpuHighlightThreshold,
             isHighlightedMEM: process.memoryMB >= settings.memHighlightThresholdMB,
             showsExpandedMetrics: isExpandedWindow,
@@ -1116,55 +1216,144 @@ struct TaskScopePopoverView: View {
         } else {
             lastUpdated = "The last successful update time is unavailable."
         }
-        return "\(lastUpdated) Refresh failed: \(error) Actions will be revalidated before signaling."
+        return "\(lastUpdated) Refresh failed: \(UIMessage.sentence(error)) Actions will be revalidated before signaling."
+    }
+
+    /// The row with keyboard focus, but only while it is still the process
+    /// that received focus: a recycled PID must not inherit it.
+    private var keyboardFocusedProcess: AppProcess? {
+        guard let pid = listState.keyboardSelectedPid,
+              let process = keyboardNavigationProcesses.first(where: { $0.pid == pid }),
+              listState.keyboardSelectedIdentity == nil || listState.keyboardSelectedIdentity == process.identity
+        else { return nil }
+        return process
     }
 
     func requestKeyboardTermination(pid: Int32?) {
         guard let pid,
               let process = keyboardNavigationProcesses.first(where: { $0.pid == pid }),
               !processManager.isCurrentProcess(process) else { return }
+        guard listState.keyboardSelectedIdentity == nil || listState.keyboardSelectedIdentity == process.identity else { return }
         confirmationState.requestTermination(process)
+    }
+
+    /// Escape clears only the keyboard highlight. The selection is shared by
+    /// the window and the popover and may hold rows a search has hidden.
+    func clearKeyboardFocus() {
+        listState.keyboardSelectedPid = nil
+        listState.keyboardSelectedIdentity = nil
+    }
+
+    /// Cmd-A adds the displayed matching rows to the selection. Selections a
+    /// search or filter has hidden stay selected, as the guide promises, and
+    /// tree ancestors shown only for context are never added.
+    func selectAllVisibleMatches() {
+        processManager.select(processManager.selectedProcessesSnapshot() + selectableProcesses)
+    }
+
+    /// Space toggles the selection of the row with keyboard focus.
+    func toggleKeyboardSelection() {
+        guard let process = keyboardFocusedProcess,
+              !processManager.isCurrentProcess(process) else { return }
+        processManager.toggleSelection(process.pid)
+    }
+
+    func setKeyboardDisclosure(expanded: Bool) {
+        guard listState.treeMode, let pid = listState.keyboardSelectedPid else { return }
+        if expanded { listState.expandedTreePids.insert(pid) }
+        else { listState.expandedTreePids.remove(pid) }
     }
 
     @ViewBuilder
     func processContextMenu(for process: AppProcess) -> some View {
-        Button("Create Auto-Stop Rule...") {
-            quickAutoStopProcess = process
+        Button("Create Auto-Stop Rule…") {
+            confirmationState.quickAutoStopProcess = process
         }
         .disabled(processManager.isCurrentProcess(process))
-        Button("Watch This Process...") {
-            quickPresetDraft = QuickWatchedPresetDraft(processes: [process])
+        // Only a current-user app process can become a preset; for anything
+        // else the sheet could only end in a validation error.
+        let watchUnavailable = processManager.isCurrentProcess(process)
+            || QuickWatchedPresetDraft.unavailabilityReason(for: process) != nil
+        Button("Watch This Process…") {
+            confirmationState.quickPresetDraft = QuickWatchedPresetDraft(processes: [process])
         }
-        .disabled(processManager.isCurrentProcess(process))
+        .disabled(watchUnavailable)
+        .help(watchUnavailable
+              ? "Only your own apps running from an app bundle's Contents/MacOS folder can be watched."
+              : "Watch this app as a preset")
         if !processManager.selectedPids.isEmpty {
-            Button("Save Selection as Preset...") {
-                quickPresetDraft = QuickWatchedPresetDraft(processes: selectedProcessesForPreset())
+            Button("Save Selection as Preset…") {
+                confirmationState.quickPresetDraft = QuickWatchedPresetDraft(processes: selectedProcessesForPreset())
             }
         }
         Divider()
-        Button("Stop") { confirmationState.requestTermination(process) }
+        Button("Stop…") { confirmationState.requestTermination(process) }
             .disabled(processManager.isCurrentProcess(process))
-        Button("Force Stop") {
+        Button("Force Stop…") {
             confirmationState.requestTermination(process, mode: .force)
         }
         .disabled(processManager.isCurrentProcess(process))
         Divider()
         Button("Show Detail") {
-            detailData = nil
-            detailFailed = false
-            detailProcess = process
+            showDetail(for: process)
         }
         Button("Copy Command") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(
-                process.executablePath ?? process.command,
-                forType: .string
-            )
+            copyCommand(of: process)
         }
         Divider()
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
         }
+    }
+
+    /// The row actions that otherwise live only in the context menu, for
+    /// VoiceOver's Actions rotor. Unavailable actions are left out rather than
+    /// offered disabled. Stop is the row's own button.
+    @ViewBuilder
+    func processAccessibilityActions(for process: AppProcess) -> some View {
+        if !processManager.isCurrentProcess(process) {
+            Button("Create Auto-Stop Rule…") {
+                confirmationState.quickAutoStopProcess = process
+            }
+            if QuickWatchedPresetDraft.unavailabilityReason(for: process) == nil {
+                Button("Watch This Process…") {
+                    confirmationState.quickPresetDraft = QuickWatchedPresetDraft(processes: [process])
+                }
+            }
+            Button("Force Stop…") {
+                confirmationState.requestTermination(process, mode: .force)
+            }
+        }
+        Button("Show Detail") {
+            showDetail(for: process)
+        }
+        Button("Copy Command") {
+            copyCommand(of: process)
+        }
+        Button("Open in Activity Monitor") {
+            openInActivityMonitor(identity: process.identity)
+        }
+    }
+
+    func showDetail(for process: AppProcess) {
+        detailData = nil
+        detailFailed = false
+        detailFailure = nil
+        confirmationState.detailProcess = process
+    }
+
+    /// Cmd-I on the list: Show Detail for the row with keyboard focus.
+    func showKeyboardDetail() {
+        guard let process = keyboardFocusedProcess else { return }
+        showDetail(for: process)
+    }
+
+    private func copyCommand(of process: AppProcess) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(
+            process.executablePath ?? process.command,
+            forType: .string
+        )
     }
 
     private func presetConfirmationMessage(
@@ -1196,7 +1385,7 @@ struct TaskScopePopoverView: View {
         let agentLabels = agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
         let agentList = agentLabels.joined(separator: ", ")
         let window = Int(ProcessTerminationController.gracefulExitWindowSeconds)
-        let forceStopDisclosure = "A process still running \(window) seconds after the stop request is force stopped."
+        let forceStopDisclosure = "Sends SIGTERM. Apps may close without asking to save changes. A process still running \(window) seconds after the stop request is force stopped."
 
         if pending.action == .stopServices {
             return "GlobalProtect did not complete a normal disconnect. TaskScope will stop and disable its services anyway and keep them off until you choose Open. This can interrupt network access or leave VPN DNS settings behind. If internet access stops working, choose Open to restore the service. Administrator approval may be required. \(forceStopDisclosure)"
@@ -1219,28 +1408,24 @@ struct TaskScopePopoverView: View {
                     "TaskScope will unload the helper launch agents (\(agentList)); an agent that is running the main \(preset.mainProcessName) process is left loaded."
                 )
             }
-            sentences.append("It will then stop the currently running matches for: \(targets).")
+            sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
         case .quitApp, .quitAll:
             if !agentLabels.isEmpty {
                 sentences.append("TaskScope will unload the user launch agents (\(agentList)).")
             }
-            sentences.append("It will then stop the currently running matches for: \(targets).")
+            sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
         }
         sentences.append(forceStopDisclosure)
         return sentences.joined(separator: " ")
     }
 
     private func moveKeyboard(by delta: Int, in processes: [AppProcess], proxy: ScrollViewProxy) {
-        guard !processes.isEmpty else { return }
-        let current = keyboardSelectedPid
-        var index = processes.firstIndex(where: { $0.pid == current }) ?? -1
-        index = max(0, min(processes.count - 1, index + delta))
-        let target = processes[index]
-        keyboardSelectedPid = target.pid
+        guard let target = ProcessListInteractionState.nextFocus(current: listState.keyboardSelectedPid, delta: delta, processes: processes) else { return }
+        listState.keyboardSelectedPid = target.pid
         proxy.scrollTo(target.pid, anchor: .center)
     }
 
-    private func selectedProcessesForPreset() -> [AppProcess] {
+    func selectedProcessesForPreset() -> [AppProcess] {
         // Must come from the full inventory, not the display slice: a row surfaced
         // by the search filter can rank below the display limit, so filtering
         // `processManager.processes` would silently drop it from the draft.
@@ -1258,11 +1443,11 @@ struct TaskScopePopoverView: View {
         let outcome = QuickAutoStopRuleSaver.save(
             into: autoStopRules,
             processName: processName,
-            observedProcessName: quickAutoStopProcess?.name ?? "",
-            observedExecutablePath: quickAutoStopProcess?.executablePath,
+            observedProcessName: confirmationState.quickAutoStopProcess?.name ?? "",
+            observedExecutablePath: confirmationState.quickAutoStopProcess?.executablePath,
             runtimeMinutes: runtimeMinutes,
             action: action,
-            existingRule: quickAutoStopProcess.flatMap { QuickAutoStopRuleSaver.existingRule(for: $0, in: autoStopRules) }
+            existingRule: confirmationState.quickAutoStopProcess.flatMap { QuickAutoStopRuleSaver.existingRule(for: $0, in: autoStopRules) }
         )
         if let error = outcome.error {
             return error
@@ -1270,11 +1455,11 @@ struct TaskScopePopoverView: View {
         if let status = outcome.statusMessage {
             processManager.setMessage(status)
         }
-        quickAutoStopProcess = nil
+        confirmationState.quickAutoStopProcess = nil
         return nil
     }
 
-    private func saveQuickWatchedPreset(_ preset: WatchedAppPreset) -> String? {
+    func saveQuickWatchedPreset(_ preset: WatchedAppPreset) -> String? {
         guard watchedApps.add(preset) else {
             return watchedApps.validationError
                 ?? watchedApps.persistenceIssue
@@ -1286,7 +1471,25 @@ struct TaskScopePopoverView: View {
         // is the single owner of preset-change refreshes. A second one raced it
         // and was either coalesced away or ran first and diffed the new preset's
         // already-running process against a baseline that never contained it.
-        quickPresetDraft = nil
+        confirmationState.quickPresetDraft = nil
         return nil
+    }
+}
+
+extension QuickWatchedPresetDraft {
+    /// Why "Watch This Process…" cannot succeed for `process`, or nil when it
+    /// can. Watching needs a current-user process with a trusted executable
+    /// path inside an app bundle's Contents/MacOS; for anything else the sheet
+    /// could only end in a validation error.
+    static func unavailabilityReason(for process: AppProcess) -> String? {
+        let path = QuickWatchedPresetSheet.inferredAppPath(for: process, fallbackName: process.name)
+        let preset = WatchedAppPreset(
+            displayName: process.name,
+            mainProcessName: process.name,
+            helperProcessNames: [],
+            protectedProcessNames: [],
+            appPath: path
+        )
+        return QuickWatchedPresetDraft(processes: [process]).validationError(for: preset)
     }
 }

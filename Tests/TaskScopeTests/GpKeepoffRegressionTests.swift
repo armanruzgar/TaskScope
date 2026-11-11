@@ -10,11 +10,11 @@ final class GpKeepoffRegressionTests: XCTestCase {
         let card = makeCard(enabled: false, recovery: {})
         XCTAssertTrue(try card.inspect().find(ViewType.Toggle.self).isDisabled())
         XCTAssertFalse(try makeCard(enabled: true).inspect().find(ViewType.Toggle.self).isDisabled())
-        XCTAssertTrue(try card.inspect().find(button: "Quit All").isDisabled())
+        XCTAssertTrue(try card.inspect().find(button: "Quit All…").isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Apply Keep Off…").isDisabled())
         XCTAssertTrue(try card.inspect().find(button: "Stop Services Anyway…").isDisabled())
-        XCTAssertFalse(try card.inspect().find(button: "Quit App").isDisabled())
-        XCTAssertFalse(try card.inspect().find(button: "Quit Helpers").isDisabled())
+        XCTAssertFalse(try card.inspect().find(button: "Quit App…").isDisabled())
+        XCTAssertFalse(try card.inspect().find(button: "Quit Helpers…").isDisabled())
         XCTAssertNoThrow(try card.inspect().find(text: "Settings are unreadable. Reset settings in Settings → General before changing Keep Off."))
     }
 

@@ -9,6 +9,10 @@ struct TaskScopeHeaderView: View {
     var showsOpenWindowButton: Bool
     var openFullWindow: (() -> Void)?
     var refreshAction: () -> Void
+    /// Replaceable so tests can check what the Settings button does without
+    /// changing the test process's own activation state.
+    var settingsActivation: @MainActor () -> Void = SettingsWindowActivation.bringForward
+    var openSettingsOverride: (@MainActor () -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -19,6 +23,7 @@ struct TaskScopeHeaderView: View {
                 Image(systemName: "waveform.path.ecg")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(.white)
+                    .accessibilityHidden(true)
             }
             .frame(width: 42, height: 42)
 
@@ -39,7 +44,8 @@ struct TaskScopeHeaderView: View {
                         keyPath: \.observedProcessCPU,
                         color: .orange,
                         label: "PROC CPU %",
-                        unit: "percent"
+                        unit: "percent",
+                        samplingState: samplingState
                     )
                         .frame(width: 70)
                     SparklineView(
@@ -47,11 +53,19 @@ struct TaskScopeHeaderView: View {
                         keyPath: \.observedProcessMemoryMB,
                         color: .blue,
                         label: "PROC RSS",
-                        unit: "megabytes"
+                        unit: "megabytes",
+                        samplingState: samplingState
                     )
                         .frame(width: 70)
                 }
-                .help("Full observed process inventory · \(samplingState.label)")
+                .opacity(samplingState.isUnavailable ? 0.5 : 1)
+                .help(samplingState.detail)
+                if samplingState.isUnavailable {
+                    Text("History unavailable")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help(samplingState.detail)
+                }
             }
 
             Spacer()
@@ -69,7 +83,7 @@ struct TaskScopeHeaderView: View {
                 .accessibilityLabel("Open TaskScope Window")
             }
 
-            SettingsLink {
+            OpenSettingsButton(activateApp: settingsActivation, openSettings: openSettingsOverride) {
                 Image(systemName: "gearshape")
             }
             .buttonStyle(.borderless)
@@ -130,5 +144,48 @@ struct TaskScopeHeaderView: View {
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
+    }
+}
+
+extension ProcessHistory.SamplingState {
+    var isUnavailable: Bool {
+        if case .unavailable = self { return true }
+        return false
+    }
+    var detail: String {
+        if case .unavailable(let error) = self { return "History unavailable: \(error)" }
+        return "Full observed process inventory · \(label)"
+    }
+}
+
+/// After a login-item or other background launch TaskScope is an accessory
+/// app, and a window it opens can appear behind the frontmost app without
+/// focus. Settings is brought forward the way the main window is.
+enum SettingsWindowActivation {
+    @MainActor
+    static func bringForward() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+}
+
+/// Opens TaskScope's Settings window in front of other apps' windows.
+struct OpenSettingsButton<Label: View>: View {
+    var activateApp: @MainActor () -> Void = SettingsWindowActivation.bringForward
+    var openSettings: (@MainActor () -> Void)? = nil
+    @ViewBuilder var label: () -> Label
+    @Environment(\.openSettings) private var environmentOpenSettings
+
+    var body: some View {
+        Button {
+            activateApp()
+            if let openSettings {
+                openSettings()
+            } else {
+                environmentOpenSettings()
+            }
+        } label: {
+            label()
+        }
     }
 }

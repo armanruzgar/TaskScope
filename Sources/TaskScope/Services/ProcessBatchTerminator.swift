@@ -266,7 +266,7 @@ struct ProcessBatchTerminator {
     private func displayName(for identity: ProcessIdentity) -> String {
         identity.command.isEmpty
             ? "PID \(identity.pid)"
-            : URL(fileURLWithPath: identity.command).lastPathComponent
+            : AppProcess.name(from: identity.command)
     }
 
     private func sort(

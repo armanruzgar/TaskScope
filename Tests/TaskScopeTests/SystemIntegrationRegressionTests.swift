@@ -15,7 +15,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
             let manager = LoginItemManager(service: service)
             let view = presets(manager: manager, defaults: defaults)
 
-            try view.inspect().find(button: "Turn Off Launch at Login").tap()
+            try view.inspect().find(button: state == .notFound ? "Remove Stale Login Item" : "Turn Off Launch at Login").tap()
 
             XCTAssertEqual(service.unregisterCount, 1)
             XCTAssertEqual(service.registerCount, 0)
@@ -35,7 +35,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
             let manager = LoginItemManager(service: service)
             let view = presets(manager: manager, defaults: defaults)
 
-            try view.inspect().find(button: "Turn Off Launch at Login").tap()
+            try view.inspect().find(button: state == .notFound ? "Remove Stale Login Item" : "Turn Off Launch at Login").tap()
 
             XCTAssertEqual(service.unregisterCount, 1)
             XCTAssertEqual(manager.state, state)

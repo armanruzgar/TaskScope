@@ -9,8 +9,13 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
     @Binding var pendingTermination: AppProcess?
     @Binding var expandedPids: Set<Int32>
     var showsExpandedMetrics: Bool
+    /// The displayed matches. Any other row is an ancestor shown only for
+    /// hierarchy context. Nil when every row counts as a match.
+    var matchedPIDs: Set<Int32>? = nil
     var requestListFocus: () -> Void = {}
     @ViewBuilder var contextMenuContent: (AppProcess) -> ContextMenuContent
+    /// The row's context-menu actions for VoiceOver's Actions rotor.
+    var accessibilityActionsContent: ((AppProcess) -> AnyView)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -24,6 +29,8 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
                     isHighlightedMEM: node.process.memoryMB >= settings.memHighlightThresholdMB,
                     showsExpandedMetrics: showsExpandedMetrics,
                     leadingInset: 20 + CGFloat(depth) * 16,
+                    treeLevel: depth + 1,
+                    isContextOnly: matchedPIDs.map { !$0.contains(node.process.pid) } ?? false,
                     stopAction: { pendingTermination = node.process },
                     toggleSelection: { processManager.toggleSelection(node.process.pid) }
                 )
@@ -46,14 +53,17 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
                     .layoutPriority(1)
                     .accessibilityLabel(
                         isExpanded
-                            ? "Collapse children of \(node.process.name)"
-                            : "Expand children of \(node.process.name)"
+                            ? "Collapse children of \(node.process.name), PID \(String(node.process.pid))"
+                            : "Expand children of \(node.process.name), PID \(String(node.process.pid))"
                     )
                     .padding(.leading, 4 + CGFloat(depth) * 16)
                 } else {
+                    // An invisible spacer that keeps leaf rows aligned; it is not
+                    // a control and must not be announced.
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundStyle(.clear)
+                        .accessibilityHidden(true)
                         .frame(width: 20, height: 28)
                         .padding(.leading, 4 + CGFloat(depth) * 16)
                 }
@@ -72,6 +82,11 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
             .contextMenu {
                 contextMenuContent(node.process)
             }
+            .accessibilityActions {
+                if let accessibilityActionsContent {
+                    accessibilityActionsContent(node.process)
+                }
+            }
 
             if isExpanded {
                 ForEach(node.children) { child in
@@ -84,8 +99,10 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
                         pendingTermination: $pendingTermination,
                         expandedPids: $expandedPids,
                         showsExpandedMetrics: showsExpandedMetrics,
+                        matchedPIDs: matchedPIDs,
                         requestListFocus: requestListFocus,
-                        contextMenuContent: contextMenuContent
+                        contextMenuContent: contextMenuContent,
+                        accessibilityActionsContent: accessibilityActionsContent
                     )
                 }
             }

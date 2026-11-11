@@ -160,7 +160,7 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertNotNil(lastSuccess)
         XCTAssertEqual(manager.lastSuccessfulInventoryAt, lastSuccess)
         XCTAssertEqual(manager.processLoadError, "temporary failure")
-        XCTAssertEqual(manager.message, "Could not load processes: temporary failure")
+        XCTAssertEqual(manager.message, "Could not load processes: temporary failure.")
     }
 
     /// A poll restart or view teardown cancels the running read. That says

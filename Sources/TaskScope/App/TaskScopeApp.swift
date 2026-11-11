@@ -396,6 +396,8 @@ struct TaskScopeApp: App {
     @State private var showOnboarding: Bool
     @State private var didBootstrapRuntime = false
     @State private var didRequestOnboarding = false
+    @State private var promptCoordinator: AutoStopPromptCoordinator?
+    @State private var actionFeedback: ProcessActionFeedback?
     @State private var notificationEnablement = NotificationEnablementCoordinator()
     /// One coordinator for the app's lifetime. Constructing it per view init
     /// created a new Accessibility runtime on every body evaluation, whose
@@ -651,6 +653,8 @@ struct TaskScopeApp: App {
             activityMonitor.restoreActivityMonitorState()
             settings.flushPendingWrites()
         }
+        promptCoordinator = AutoStopPromptCoordinator(rules: autoStopRules, confirmation: AppModalMenuBarConfirmation())
+        actionFeedback = ProcessActionFeedback(manager: processManager)
         configurePolling()
         autoStopRules.start(
             cadence: 10,

@@ -30,13 +30,13 @@ final class AutoStopPromptAlertTests: XCTestCase {
         let view = makePopover(fixture: fixture)
         let alert = try view.inspect().find(ViewType.Alert.self)
         XCTAssertNoThrow(
-            try alert.find(text: "Example (PID 41) has run for 03:00, beyond the 1-minute rule. Stop it now?"),
+            try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
         )
 
         try alert.find(button: "Stop Now").tap()
         try alert.dismiss()
-        await settle()
+        await store.waitForPromptActions()
 
         XCTAssertEqual(
             stopped.pids,
@@ -69,13 +69,13 @@ final class AutoStopPromptAlertTests: XCTestCase {
         let view = makePopover(fixture: fixture)
         let alert = try view.inspect().find(ViewType.Alert.self)
         XCTAssertNoThrow(
-            try alert.find(text: "Example (PID 41) has run for 03:00, beyond the 1-minute rule. Stop it now?"),
+            try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
         )
 
         try alert.find(button: "Stop Now").tap()
         try alert.dismiss()
-        await settle()
+        await store.waitForPromptActions()
 
         XCTAssertFalse(
             stopped.pids.contains(42),
@@ -92,6 +92,9 @@ final class AutoStopPromptAlertTests: XCTestCase {
         defer { fixture.stores.cleanup() }
 
         let store = fixture.stores.autoStopRules
+        let stopped = StopRecorder()
+        store.start(cadence: 60) { _, process in stopped.record(process.pid) }
+        store.stop()
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt))
         store.add(AutoStopRule(processName: "Other", runtimeMinutes: 1, action: .prompt))
         await store.evaluateNow()
@@ -100,19 +103,21 @@ final class AutoStopPromptAlertTests: XCTestCase {
         let view = makePopover(fixture: fixture)
         let alert = try view.inspect().find(ViewType.Alert.self)
         XCTAssertNoThrow(
-            try alert.find(text: "Example (PID 41) has run for 03:00, beyond the 1-minute rule. Stop it now?"),
+            try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
         )
 
         try alert.find(button: "Dismiss").tap()
         try alert.dismiss()
-        await settle()
+        await store.waitForPromptActions()
 
         XCTAssertEqual(
             store.pendingPrompts.map(\.process.pid),
             [42],
             "One Dismiss tap must consume only the displayed prompt; pid 42 must still be queued"
         )
+        XCTAssertTrue(stopped.pids.isEmpty)
+        XCTAssertEqual(store.events.map(\.outcome), [.dismissed])
         XCTAssertEqual(
             store.events.count,
             1,
@@ -136,7 +141,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
         let firstPresenter = try view.inspect().find(AutoStopPromptAlert.self)
         let firstID = try firstPresenter.id()
         let firstAlert = try firstPresenter.find(ViewType.Alert.self)
-        XCTAssertNoThrow(try firstAlert.find(text: "Example (PID 41) has run for 03:00, beyond the 1-minute rule. Stop it now?"))
+        XCTAssertNoThrow(try firstAlert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."))
 
         await fixture.inventory.setProcesses([queued])
         await store.evaluateNow()
@@ -146,15 +151,15 @@ final class AutoStopPromptAlertTests: XCTestCase {
         XCTAssertEqual(try firstPresenter.actualView().prompt?.process.pid, 41)
         try firstAlert.find(button: "Stop Now").tap()
         try firstAlert.dismiss()
-        await settle()
+        await store.waitForPromptActions()
         XCTAssertTrue(stopped.pids.isEmpty, "The retired alert cannot authorize its replacement")
         XCTAssertEqual(store.currentPrompt?.process.pid, 42)
 
         let nextAlert = try nextPresenter.find(ViewType.Alert.self)
-        XCTAssertNoThrow(try nextAlert.find(text: "Example (PID 42) has run for 03:00, beyond the 1-minute rule. Stop it now?"))
+        XCTAssertNoThrow(try nextAlert.find(text: "Example (PID 42) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."))
         try nextAlert.find(button: "Stop Now").tap()
         try nextAlert.dismiss()
-        await settle()
+        await store.waitForPromptActions()
         XCTAssertEqual(stopped.pids, [42])
     }
 
@@ -162,12 +167,6 @@ final class AutoStopPromptAlertTests: XCTestCase {
 
     /// Lets the `Task { await autoStopRules.stopCurrentPrompt() }` enqueued by the button
     /// action run on the MainActor, mirroring SwiftUI's deferred execution of that Task.
-    private func settle() async {
-        for _ in 0..<10 {
-            await Task.yield()
-        }
-        try? await Task.sleep(nanoseconds: 20_000_000)
-    }
 
     private func process(pid: Int32, name: String) -> AppProcess {
         AppProcess(

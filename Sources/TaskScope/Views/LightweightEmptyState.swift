@@ -8,6 +8,7 @@ struct LightweightEmptyState: View {
             Spacer()
 
             Image(systemName: "leaf")
+                .accessibilityHidden(true)
                 .font(.system(size: 28, weight: .medium))
                 .foregroundStyle(.secondary)
 

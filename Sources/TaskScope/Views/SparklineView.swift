@@ -7,6 +7,8 @@ struct SparklineView: View {
     var label: String
     var unit: String
 
+    var samplingState: ProcessHistory.SamplingState = .sampling
+
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label)
@@ -21,7 +23,7 @@ struct SparklineView: View {
                 for (index, value) in values.enumerated() {
                     let x = CGFloat(index) * stepX
                     let y = size.height - (CGFloat(value) / CGFloat(max)) * size.height
-                    if index == 0 {
+                    if index == 0 || samples[index].startsNewSegment {
                         path.move(to: CGPoint(x: x, y: y))
                     } else {
                         path.addLine(to: CGPoint(x: x, y: y))
@@ -48,6 +50,8 @@ struct SparklineView: View {
         guard let latest = samples.last?[keyPath: keyPath] else {
             return "No samples"
         }
-        return "Latest \(latest.formatted(.number.precision(.fractionLength(1)))) \(unit), \(samples.count) samples"
+        let summary = "Latest \(latest.formatted(.number.precision(.fractionLength(1)))) \(unit), \(samples.count) \(samples.count == 1 ? "sample" : "samples")"
+        // A paused or failed history otherwise reads exactly like a live one.
+        return samplingState == .sampling ? summary : "\(summary), \(samplingState.label)"
     }
 }

@@ -4,6 +4,14 @@ struct AutoStopPromptAlert: View {
     let prompt: AutoStopPrompt?
     let rules: AutoStopRulesStore
 
+    static func message(for prompt: AutoStopPrompt) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.day, .hour, .minute, .second]
+        formatter.unitsStyle = .abbreviated
+        let runtime = prompt.process.runtimeSeconds.flatMap { formatter.string(from: $0) } ?? "an unknown duration"
+        return "\(prompt.process.name) (PID \(prompt.process.pid)) has run for \(runtime), beyond the \(prompt.rule.runtimeMinutes)-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."
+    }
+
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
@@ -20,14 +28,13 @@ struct AutoStopPromptAlert: View {
                 presenting: prompt
             ) { prompt in
                 Button("Stop Now", role: .destructive) {
-                    guard let claimed = rules.claimPrompt(prompt) else { return }
-                    Task { await rules.finishStop(claimed) }
+                    rules.stopPrompt(prompt)
                 }
                 Button("Dismiss", role: .cancel) {
                     rules.dismissPrompt(prompt)
                 }
             } message: { prompt in
-                Text("\(prompt.process.name) (PID \(prompt.process.pid)) has run for \(prompt.process.elapsedTime), beyond the \(prompt.rule.runtimeMinutes)-minute rule. Stop it now?")
+                Text(Self.message(for: prompt))
             }
     }
 }
