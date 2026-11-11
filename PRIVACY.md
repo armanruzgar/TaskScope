@@ -164,10 +164,15 @@ built-in GlobalProtect entry also contains its fixed service fields. Inspect and
 sanitize an export before sharing.
 
 TaskScope gives macOS the display name of every valid preset, custom names
-included, as the choices for the **Open Watched App** and **Stop Watched App**
-App Shortcuts. These names can appear in the Shortcuts app, Spotlight, and Siri.
-TaskScope updates them once a launch has settled and whenever a preset is
-added, renamed, or deleted.
+included, as the choices for the **Get Watched App Status**, **Open Watched
+App**, and **Stop Watched App** App Shortcuts. These names can appear in the
+Shortcuts app, Spotlight, and Siri. TaskScope updates them once a launch has
+settled and whenever a preset is added, renamed, or deleted. Get Watched App
+Status, and a completed Open or Stop, return the chosen preset's name, whether
+its main app is running, how many of its helpers are running, whether Keep Off
+is on, and whether that status is current, stale, or unknown, to the shortcut,
+Siri, or Spotlight request that ran them. They return no process IDs, paths, or
+command lines, and TaskScope sends the value nowhere else.
 
 TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
 diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Executable

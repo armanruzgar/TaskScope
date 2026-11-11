@@ -521,9 +521,40 @@ taskscope_list_differences() {
     <(printf '%s\n' "$2" | /usr/bin/sed '/^$/d' | /usr/bin/sort -u) | /usr/bin/sed 's/^/+/'
 }
 
+# Prints the names a metadata group declares, one per line: the keys of a
+# dictionary group (actions, entities, queries) or the identifier of each entry
+# of an array group (enums). A missing group declares nothing; an array entry
+# without an identifier fails.
+taskscope_metadata_names() {
+  local file="$1"
+  local group="$2"
+  local type
+  local count
+  local index
+
+  type="$(/usr/bin/plutil -type "$group" "$file" 2>/dev/null)" || return 0
+  case "$type" in
+    dictionary)
+      # A dictionary prints one key per line in raw format.
+      /usr/bin/plutil -extract "$group" raw -o - "$file" 2>/dev/null
+      ;;
+    array)
+      count="$(/usr/bin/plutil -extract "$group" raw -o - "$file" 2>/dev/null)" || return 1
+      [[ "$count" =~ ^[0-9]+$ ]] || return 1
+      for ((index = 0; index < count; index++)); do
+        /usr/bin/plutil -extract "$group.$index.identifier" raw -expect string -o - "$file" 2>/dev/null \
+          || return 1
+      done
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 # Checks a Metadata.appintents folder against the expectations file: the
-# metadata format version, exactly the listed actions, entities and queries,
-# and exactly the listed App Shortcuts, each with exactly its phrases.
+# metadata format version, exactly the listed actions, entities, queries and
+# enums, and exactly the listed App Shortcuts, each with exactly its phrases.
 taskscope_verify_app_intents_metadata() {
   local metadata="$1"
   local expected="$2"
@@ -567,13 +598,15 @@ taskscope_verify_app_intents_metadata() {
     return 1
   fi
 
-  for group in actions entities queries; do
+  for group in actions entities queries enums; do
     wanted="$(taskscope_string_list "$expected" "$group")" || {
       echo "Bundle verification failed: $expected lists no valid $group." >&2
       return 1
     }
-    # A dictionary prints one key per line in raw format.
-    found="$(/usr/bin/plutil -extract "$group" raw -expect dictionary -o - "$actions_file" 2>/dev/null || true)"
+    found="$(taskscope_metadata_names "$actions_file" "$group")" || {
+      echo "Bundle verification failed: App Intents metadata has a malformed $group entry." >&2
+      return 1
+    }
     while IFS= read -r difference; do
       case "$difference" in
         -*) echo "Bundle verification failed: App Intents metadata lacks $group.${difference#-}." >&2 ;;

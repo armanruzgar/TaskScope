@@ -7,6 +7,7 @@ final class TaskScopeIntentsTests: XCTestCase {
         XCTAssertFalse(RefreshTaskScopeIntent.openAppWhenRun)
         XCTAssertFalse(OpenWatchedAppIntent.openAppWhenRun)
         XCTAssertFalse(StopWatchedAppIntent.openAppWhenRun)
+        XCTAssertFalse(GetWatchedAppStatusIntent.openAppWhenRun)
     }
 
     @MainActor

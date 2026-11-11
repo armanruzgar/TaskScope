@@ -18,6 +18,8 @@ extension ExpectedAppIntents {
         return (
             ["version": metadataVersion, "toolsVersion": toolsVersion],
             ["actions": entries(actions), "entities": entries(entities), "queries": entries(queries),
+             // Metadata lists enums as an array of descriptions, not by key.
+             "enums": enums.map { ["identifier": $0, "cases": [Any]()] as [String: Any] },
              "autoShortcuts": shortcutEntries]
         )
     }
@@ -45,7 +47,7 @@ final class ExpectedAppIntentsTests: XCTestCase {
         XCTAssertEqual(expected, try ExpectedAppIntents.decode(ExpectedAppIntents.sourceJSON))
         XCTAssertFalse(expected.metadataVersion.isEmpty)
         for (group, names) in [("actions", expected.actions), ("entities", expected.entities),
-                               ("queries", expected.queries)] {
+                               ("queries", expected.queries), ("enums", expected.enums)] {
             XCTAssertFalse(names.isEmpty, group)
             XCTAssertEqual(Set(names).count, names.count, "\(group) lists a name twice")
         }
@@ -102,6 +104,11 @@ final class ExpectedAppIntentsTests: XCTestCase {
         rejects("missing action", group("actions") { $0.removeValue(forKey: expected.actions[0]) })
         rejects("unlisted action", group("actions") { $0["UnlistedIntent"] = [String: Any]() })
         rejects("unlisted entity", group("entities") { $0["UnlistedEntity"] = [String: Any]() })
+        let enums = try XCTUnwrap(metadata.actions["enums"] as? [[String: Any]])
+        rejects("missing enum") { $0["enums"] = Array(enums.dropFirst()) }
+        rejects("unlisted enum") { $0["enums"] = enums + [["identifier": "UnlistedEnum"]] }
+        rejects("enum without an identifier") { $0["enums"] = enums + [["cases": [Any]()]] }
+        rejects("a group of the wrong type") { $0["actions"] = "not a group" }
         rejects("missing query", group("queries") { $0.removeValue(forKey: expected.queries[0]) })
         rejects("no queries") { $0.removeValue(forKey: "queries") }
         rejects("no App Shortcuts") { $0.removeValue(forKey: "autoShortcuts") }
@@ -135,6 +142,15 @@ final class ExpectedAppIntentsTests: XCTestCase {
         var description: String {
             "AppShortcut no longer exposes its intent and phrase templates by reflection; update ExpectedAppIntentsTests.reflect."
         }
+    }
+
+    func testGroupsDeclareNamesByKeyOrByIdentifier() {
+        XCTAssertEqual(ExpectedAppIntents.declaredNames(nil), [])
+        XCTAssertEqual(ExpectedAppIntents.declaredNames(["A": [String: Any](), "B": 1]), ["A", "B"])
+        XCTAssertEqual(ExpectedAppIntents.declaredNames([["identifier": "A"], ["identifier": "B"]]), ["A", "B"])
+        XCTAssertEqual(ExpectedAppIntents.declaredNames([[String: Any]]()), [])
+        XCTAssertNil(ExpectedAppIntents.declaredNames([["identifier": "A"], ["name": "B"]]))
+        XCTAssertNil(ExpectedAppIntents.declaredNames("A"))
     }
 
     /// AppShortcut has no public accessors, so read the intent type and phrase

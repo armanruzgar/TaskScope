@@ -357,6 +357,11 @@ Required invariants:
 - finish an admitted preset Stop despite caller cancellation; keep Open readiness
   cancellable and report possible prior changes without retaining cancellation
   as an inventory or lifecycle failure;
+- keep Get Watched App Status read-only: it refreshes watched status and
+  reports one preset's state from the verified snapshot, marked stale or unknown
+  when that read failed, without changing processes, services, settings, or the
+  status line; Open and Stop return that value only after they complete, and no
+  App Intent changes Keep Off or performs an administrator operation;
 - route App Intent actions through the same identity validation and truthful
   result reporting as the app; Stop Watched App must request system confirmation
   naming the app, the user launch agents it unloads, `SIGTERM`, and the force

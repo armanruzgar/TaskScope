@@ -9,15 +9,20 @@ extension ExpectedAppIntents {
 {
   "metadataVersion": "3.0",
   "actions": [
+    "GetWatchedAppStatusIntent",
     "OpenWatchedAppIntent",
     "RefreshTaskScopeIntent",
     "StopWatchedAppIntent"
   ],
   "entities": [
+    "WatchedAppStatusEntity",
     "WatchedPresetEntity"
   ],
   "queries": [
     "WatchedPresetEntityQuery"
+  ],
+  "enums": [
+    "WatchedStatusAvailabilityAppEnum"
   ],
   "shortcuts": [
     {
@@ -36,6 +41,12 @@ extension ExpectedAppIntents {
       "action": "OpenWatchedAppIntent",
       "phrases": [
         "Open ${app} in ${applicationName}"
+      ]
+    },
+    {
+      "action": "GetWatchedAppStatusIntent",
+      "phrases": [
+        "Get ${app} status in ${applicationName}"
       ]
     }
   ]

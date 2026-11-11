@@ -171,6 +171,11 @@ Record evidence for every locally testable item:
   or Dock icon; query-only parameter pickers, pickers open beyond the launch
   grace period, late intents, and intents in an already-interactive app;
 - Stop confirmation and cancellation from Shortcuts, Siri, Spotlight, and App Shortcuts;
+- Get Watched App Status from a shortcut's **If** action and from "Get *preset*
+  status in TaskScope", with the preset running, quiet, kept off, and with a
+  failed read (Stale, then Unknown after a fresh launch); it changes nothing;
+  Open and Stop return the same value after they complete, and no action offers
+  Keep Off;
 - installed/staged duplicate same-identifier launch handoff before background
   enforcement, reopening the existing window after quiet login-item launches or
   window closure; startup verification leaves normal preferences untouched;

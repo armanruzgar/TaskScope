@@ -3,6 +3,8 @@ import Foundation
 
 enum TaskScopeCommand: Equatable, Sendable {
     case refresh
+    /// Read-only: refreshes watched status and reports one preset's state.
+    case statusPresetEntity(WatchedPresetCommandTarget)
     case openPresetEntity(WatchedPresetCommandTarget)
     case stopPresetEntity(WatchedPresetCommandTarget)
 }
@@ -21,6 +23,9 @@ struct TaskScopeCommandResult: Equatable, Sendable {
 
     var status: Status
     var message: String
+    /// The preset's status after a completed status, Open or Stop command,
+    /// for the value Shortcuts receives.
+    var watchedStatus: WatchedAppStatusSummary? = nil
 
     var succeeded: Bool {
         status == .completed
@@ -66,19 +71,34 @@ final class AppCommandCoordinator {
                 message: processManager.message
             )
 
+        case .statusPresetEntity(let target):
+            guard let preset = preset(id: target.id) else {
+                return missingPresetResult(target.displayName)
+            }
+            return await processManager.watchedStatus(for: preset)
+
         case .openPresetEntity(let target):
             guard let preset = preset(id: target.id) else {
                 return missingPresetResult(target.displayName)
             }
-            return await processManager.openApp(preset)
+            return withStatus(await processManager.openApp(preset), of: preset)
 
         case .stopPresetEntity(let target):
             guard let preset = preset(id: target.id) else {
                 return missingPresetResult(target.displayName)
             }
-            return await processManager.quitAllKillable(preset)
+            return withStatus(await processManager.quitAllKillable(preset), of: preset)
 
         }
+    }
+
+    /// A completed Open or Stop verified the preset's state with a final read,
+    /// so its status value comes from that snapshot. A failed one has none.
+    private func withStatus(_ result: TaskScopeCommandResult, of preset: WatchedAppPreset) -> TaskScopeCommandResult {
+        guard result.succeeded else { return result }
+        var result = result
+        result.watchedStatus = processManager.watchedStatusSummary(for: preset)
+        return result
     }
 
     private func preset(id: UUID) -> WatchedAppPreset? {

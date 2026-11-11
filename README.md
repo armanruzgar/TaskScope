@@ -227,8 +227,12 @@ preserve an accepted request's retry budget.
 
 ### Shortcuts and URLs
 
-A properly signed, installed app exposes **Refresh TaskScope**, **Open Watched
-App**, and **Stop Watched App**. Stop runs the same stop as a custom preset's
+A properly signed, installed app exposes **Refresh TaskScope**, **Get Watched
+App Status**, **Open Watched App**, and **Stop Watched App**. Get Watched App
+Status is read-only: it returns whether the preset's main app is running, how
+many of its helpers are running, whether Keep Off is on, and whether TaskScope
+could verify that status, so a shortcut can branch on it. Open and Stop return
+the same value when they complete. Stop runs the same stop as a custom preset's
 Quit App and Helpers and requires system confirmation, including direct Siri,
 Spotlight, and App Shortcut invocation. The confirmation names the app and the
 user launch agents it unloads, and says that a process still running three

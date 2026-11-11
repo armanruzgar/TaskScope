@@ -241,6 +241,7 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
         for command in [
             TaskScopeCommand.refresh,
+            .statusPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect")),
             .openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect")),
             .stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect"))
         ] {

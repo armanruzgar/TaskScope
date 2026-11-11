@@ -111,6 +111,86 @@ struct WatchedPresetEntityQuery: EntityStringQuery {
     }
 }
 
+/// Whether TaskScope could verify a watched app's status, as Shortcuts offers it.
+@available(macOS 13.0, *)
+enum WatchedStatusAvailabilityAppEnum: String, AppEnum {
+    case current
+    case stale
+    case unknown
+
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Status Availability")
+    static let caseDisplayRepresentations: [WatchedStatusAvailabilityAppEnum: DisplayRepresentation] = [
+        .current: "Current",
+        .stale: "Stale",
+        .unknown: "Unknown"
+    ]
+
+    init(_ availability: WatchedStatusAvailability) {
+        switch availability {
+        case .current: self = .current
+        case .stale: self = .stale
+        case .unknown: self = .unknown
+        }
+    }
+}
+
+/// The value Get Watched App Status, Open Watched App and Stop Watched App
+/// return. It is a read-only report: nothing in Shortcuts can change TaskScope
+/// through it.
+@available(macOS 13.0, *)
+struct WatchedAppStatusEntity: TransientAppEntity {
+    static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Watched App Status")
+
+    @Property(title: "Watched App")
+    var watchedApp: String
+
+    @Property(title: "Status Availability")
+    var availability: WatchedStatusAvailabilityAppEnum
+
+    /// Empty while the status is unknown.
+    @Property(title: "Main App Running")
+    var isMainAppRunning: Bool?
+
+    /// Empty while the status is unknown.
+    @Property(title: "Helpers Running")
+    var runningHelperCount: Int?
+
+    @Property(title: "Keep Off")
+    var isKeptOff: Bool
+
+    init() {
+        watchedApp = ""
+        availability = .unknown
+        isMainAppRunning = nil
+        runningHelperCount = nil
+        isKeptOff = false
+    }
+
+    init(_ summary: WatchedAppStatusSummary) {
+        self.init()
+        watchedApp = summary.presetName
+        availability = WatchedStatusAvailabilityAppEnum(summary.availability)
+        isMainAppRunning = summary.isMainAppRunning
+        runningHelperCount = summary.runningHelperCount
+        isKeptOff = summary.isKeptOff
+    }
+
+    var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(watchedApp)", subtitle: "\(subtitle)")
+    }
+
+    private var subtitle: String {
+        guard availability != .unknown, let isMainAppRunning, let runningHelperCount else {
+            return "Status unknown"
+        }
+        var parts = [isMainAppRunning ? "Running" : "Not running"]
+        parts.append(runningHelperCount == 1 ? "1 helper" : "\(runningHelperCount) helpers")
+        if isKeptOff { parts.append("Keep Off") }
+        if availability == .stale { parts.append("stale") }
+        return parts.joined(separator: " · ")
+    }
+}
+
 @available(macOS 13.0, *)
 enum TaskScopeIntentDialog {
     enum CommandError: LocalizedError {
@@ -151,6 +231,23 @@ enum TaskScopeIntentDialog {
         case .failed:
             throw CommandError.failed("Failed to \(action): \(result.message)")
         }
+    }
+
+    /// The status value and dialog of a completed command. A rejected or
+    /// failed command throws, as before. A completed one that carries no
+    /// status, which TaskScope's own commands always attach, still completed:
+    /// its value says the status is unknown rather than failing the shortcut.
+    static func statusResult(
+        for result: TaskScopeCommandResult,
+        action: String,
+        presetName: String
+    ) throws -> (value: WatchedAppStatusEntity, message: String) {
+        let message = try successMessage(for: result, action: action)
+        let summary = result.watchedStatus ?? WatchedAppStatusSummary(
+            presetName: presetName, availability: .unknown,
+            isMainAppRunning: nil, runningHelperCount: nil, isKeptOff: false
+        )
+        return (WatchedAppStatusEntity(summary), message)
     }
 }
 
@@ -202,15 +299,14 @@ struct StopWatchedAppIntent: AppIntent {
         try await requestStopConfirmation(intent, message)
     }
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<WatchedAppStatusEntity> & ProvidesDialog {
         let result = try await executeStop(bus: Self.commandBus) { message in
             try await Self.confirmStop(self, message)
         }
-        let message = try TaskScopeIntentDialog.successMessage(
-            for: result,
-            action: "stop \(app.displayName)"
+        let status = try TaskScopeIntentDialog.statusResult(
+            for: result, action: "stop \(app.displayName)", presetName: app.displayName
         )
-        return .result(dialog: IntentDialog(stringLiteral: message))
+        return .result(value: status.value, dialog: IntentDialog(stringLiteral: status.message))
     }
 
     @MainActor
@@ -251,13 +347,43 @@ struct OpenWatchedAppIntent: AppIntent {
     /// The bus `perform()` submits to; tests replace it and restore it.
     @MainActor static var commandBus = AppCommandBus.shared
 
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult & ReturnsValue<WatchedAppStatusEntity> & ProvidesDialog {
         let result = try await TaskScopeIntentExecution.perform(.openPresetEntity(app.commandTarget), bus: Self.commandBus)
-        let message = try TaskScopeIntentDialog.successMessage(
-            for: result,
-            action: "open \(app.displayName)"
+        let status = try TaskScopeIntentDialog.statusResult(
+            for: result, action: "open \(app.displayName)", presetName: app.displayName
         )
-        return .result(dialog: IntentDialog(stringLiteral: message))
+        return .result(value: status.value, dialog: IntentDialog(stringLiteral: status.message))
+    }
+}
+
+/// Read-only: refreshes watched status and returns one watched app's state.
+/// Keep Off and every privileged operation stay out of App Intents.
+@available(macOS 13.0, *)
+struct GetWatchedAppStatusIntent: AppIntent {
+    static let title: LocalizedStringResource = "Get Watched App Status"
+    static let description = IntentDescription(
+        "Report whether a watched app and its helpers are running, whether Keep Off is on, and whether TaskScope could verify that status. It changes nothing."
+    )
+
+    @Parameter(title: "Watched App")
+    var app: WatchedPresetEntity
+
+    static var openAppWhenRun: Bool { false }
+
+    /// The bus `perform()` submits to; tests replace it and restore it.
+    @MainActor static var commandBus = AppCommandBus.shared
+
+    func perform() async throws -> some IntentResult & ReturnsValue<WatchedAppStatusEntity> & ProvidesDialog {
+        let result = try await executeStatus(bus: Self.commandBus)
+        let status = try TaskScopeIntentDialog.statusResult(
+            for: result, action: "get the status of \(app.displayName)", presetName: app.displayName
+        )
+        return .result(value: status.value, dialog: IntentDialog(stringLiteral: status.message))
+    }
+
+    @MainActor
+    func executeStatus(bus: AppCommandBus) async throws -> TaskScopeCommandResult {
+        try await TaskScopeIntentExecution.perform(.statusPresetEntity(app.commandTarget), bus: bus)
     }
 }
 
@@ -306,6 +432,12 @@ struct TaskScopeShortcuts: AppShortcutsProvider {
             phrases: ["Open \(\.$app) in \(.applicationName)"],
             shortTitle: "Open Watched App",
             systemImageName: "arrow.up.forward.app"
+        )
+        AppShortcut(
+            intent: GetWatchedAppStatusIntent(),
+            phrases: ["Get \(\.$app) status in \(.applicationName)"],
+            shortTitle: "Watched App Status",
+            systemImageName: "info.circle"
         )
     }
 }

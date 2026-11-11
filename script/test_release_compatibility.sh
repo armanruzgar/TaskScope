@@ -49,6 +49,8 @@ taskscope_fixture_actions_data() {
   local phrase_index
 
   printf '{'
+  # Metadata keys actions, entities and queries by name; enums is an array of
+  # descriptions that carry an identifier.
   for group in actions entities queries; do
     printf '"%s":{' "$group"
     count="$(/usr/bin/plutil -extract "$group" raw -o - "$expected")" || return 1
@@ -59,6 +61,14 @@ taskscope_fixture_actions_data() {
     done
     printf '},'
   done
+  printf '"enums":['
+  count="$(/usr/bin/plutil -extract enums raw -o - "$expected")" || return 1
+  for ((index = 0; index < count; index++)); do
+    name="$(/usr/bin/plutil -extract "enums.$index" raw -o - "$expected")" || return 1
+    [[ "$index" -eq 0 ]] || printf ','
+    printf '{"identifier":"%s","cases":[]}' "$name"
+  done
+  printf '],'
   printf '"autoShortcuts":['
   count="$(/usr/bin/plutil -extract shortcuts raw -o - "$expected")" || return 1
   for ((index = 0; index < count; index++)); do
@@ -1039,6 +1049,7 @@ test_bundle_metadata_check() (
   "actions": ["FirstIntent", "SecondIntent"],
   "entities": ["ExampleEntity"],
   "queries": ["ExampleQuery"],
+  "enums": ["ExampleEnum"],
   "shortcuts": [
     {"action": "FirstIntent", "phrases": ["First ${applicationName}", "Begin ${applicationName}"]},
     {"action": "SecondIntent", "phrases": ["Second ${item} in ${applicationName}"]}
@@ -1150,6 +1161,18 @@ JSON
   reset_bundle
   edit_metadata -remove queries
   refuses full 'App Intents metadata lacks queries.ExampleQuery.'
+  reset_bundle
+  edit_metadata -remove enums.0
+  refuses full 'App Intents metadata lacks enums.ExampleEnum.'
+  reset_bundle
+  edit_metadata -insert enums.1 -json '{"identifier":"ExtraEnum","cases":[]}'
+  refuses full 'App Intents metadata declares enums.ExtraEnum, which'
+  reset_bundle
+  edit_metadata -insert enums.1 -json '{"cases":[]}'
+  refuses full 'App Intents metadata has a malformed enums entry.'
+  reset_bundle
+  edit_metadata -replace actions -json '"not a group"'
+  refuses full 'App Intents metadata has a malformed actions entry.'
   reset_bundle
   edit_metadata -remove autoShortcuts
   refuses full 'App Shortcut metadata is missing'

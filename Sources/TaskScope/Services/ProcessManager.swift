@@ -383,6 +383,27 @@ final class ProcessManager: ObservableObject {
         return refreshed
     }
 
+    /// Get Watched App Status. It refreshes watched status like a poll tick,
+    /// without changing the status line, and reports the preset from the
+    /// snapshot that read verified, or, when the read failed, from the last
+    /// snapshot as stale (unknown if there is none). It changes nothing else.
+    func watchedStatus(for preset: WatchedAppPreset) async -> TaskScopeCommandResult {
+        await refreshWatchedStatus(showMessage: false)
+        if Task.isCancelled || lastInventoryReadWasCancelled {
+            return TaskScopeCommandResult(status: .rejected, message: "Status check for \(preset.displayName) was cancelled.")
+        }
+        let summary = watchedStatusSummary(for: preset)
+        return TaskScopeCommandResult(status: .completed, message: summary.sentence, watchedStatus: summary)
+    }
+
+    /// The preset's state in the snapshots on screen, with its Keep Off intent.
+    func watchedStatusSummary(for preset: WatchedAppPreset) -> WatchedAppStatusSummary {
+        WatchedAppStatusSummary(
+            preset: preset, snapshots: snapshots, availability: watchedStatusAvailability,
+            isKeptOff: isPresetKeptOffProvider?(preset) ?? false
+        )
+    }
+
     /// Returns whether a fresh list was applied by this call or the equivalent
     /// read it joined. With `sampleHistory`, a successful read also feeds the
     /// history; a poll tick whose list read fails falls back to a watched read,

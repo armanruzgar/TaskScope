@@ -25,9 +25,10 @@ Changes to the URL contract require threat-model review and regression coverage.
 ## Shortcuts
 
 Install and launch a properly signed packaged app to discover **Refresh
-TaskScope**, **Open Watched App**, and **Stop Watched App**. Open and Stop use a
-user-selected entity from stored presets and share the app's lifecycle result
-reporting. Stop requests confirmation naming that app before stopping eligible
+TaskScope**, **Get Watched App Status**, **Open Watched App**, and **Stop
+Watched App**. Status, Open and Stop take a preset chosen from the stored
+presets; Open and Stop share the app's lifecycle result reporting. Stop requests
+confirmation naming that app before stopping eligible
 watched processes, including direct App Shortcut invocation. It runs the same
 stop as a custom preset's **Quit App and Helpers** button, which support
 diagnostics record as `close`: it first unloads the preset's user launch agents
@@ -36,8 +37,30 @@ and force stops a process still running three seconds after the stop request.
 The confirmation says all of this, names the agents, and warns that apps may
 close without asking to save changes.
 
+**Get Watched App Status** is read-only. It refreshes watched status, as a poll
+does, and returns a **Watched App Status** value that a shortcut can test in an
+**If** action:
+
+| Property | Value |
+| --- | --- |
+| Watched App | The preset's display name |
+| Status Availability | **Current** after a successful read, **Stale** when the read failed after an earlier one succeeded, **Unknown** when no read has covered the preset |
+| Main App Running | Whether the preset's main app is running; empty while the status is Unknown |
+| Helpers Running | How many of the preset's helper processes are running; empty while the status is Unknown |
+| Keep Off | Whether Keep Off is on for the preset |
+
+A Stale value repeats what TaskScope last observed. The action changes no
+process, service, setting, or the status line; its dialog says the same as the
+value, for example "GlobalProtect: main app running, 2 helpers running." After a
+completed run, **Open Watched App** and **Stop Watched App** return the same
+value, read from the inventory TaskScope checked at the end of the action; a
+rejected or failed run stops the shortcut with its message instead. No App
+Intent turns Keep Off on or off or performs an administrator operation; those
+stay explicit in-app actions.
+
 The App Shortcut phrases are "Refresh TaskScope", "Open *preset* in TaskScope",
-and "Stop *preset* in TaskScope", where *preset* is a preset's display name.
+"Stop *preset* in TaskScope", and "Get *preset* status in TaskScope", where
+*preset* is a preset's display name.
 
 Unreadable stored preset data, including wrong-type property-list values,
 publishes no default watched-app targets in Shortcuts. A preset that carries

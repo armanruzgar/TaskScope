@@ -19,6 +19,7 @@ struct ExpectedAppIntents: Decodable, Equatable, Sendable {
     let actions: [String]
     let entities: [String]
     let queries: [String]
+    let enums: [String]
     let shortcuts: [Shortcut]
 
     /// The embedded list. Nil only if the embedded JSON were malformed, which
@@ -33,14 +34,15 @@ struct ExpectedAppIntents: Decodable, Equatable, Sendable {
     /// Whether extracted metadata (version.json and extract.actionsdata)
     /// matches this list exactly, by the rules that
     /// `taskscope_verify_app_intents_metadata` in script/packaging_common.sh
-    /// applies: the format version, exactly the listed actions, entities and
-    /// queries, and exactly the listed App Shortcuts, each with its phrases.
+    /// applies: the format version, exactly the listed actions, entities,
+    /// queries and enums, and exactly the listed App Shortcuts, each with its
+    /// phrases.
     func matches(version: [String: Any], actions extracted: [String: Any]) -> Bool {
         guard version["version"] as? String == metadataVersion,
               let tools = version["toolsVersion"] as? String, !tools.isEmpty else { return false }
-        for (group, names) in [("actions", actions), ("entities", entities), ("queries", queries)] {
-            let declared = extracted[group] as? [String: Any] ?? [:]
-            guard Set(declared.keys) == Set(names) else { return false }
+        for (group, names) in [("actions", actions), ("entities", entities), ("queries", queries),
+                               ("enums", enums)] {
+            guard Self.declaredNames(extracted[group]) == Set(names) else { return false }
         }
         guard let declared = extracted["autoShortcuts"] as? [[String: Any]],
               declared.count == shortcuts.count else { return false }
@@ -50,6 +52,27 @@ struct ExpectedAppIntents: Decodable, Equatable, Sendable {
             }
             let templates = entry["phraseTemplates"] as? [[String: Any]] ?? []
             return Set(templates.compactMap { $0["key"] as? String }) == Set(shortcut.phrases)
+        }
+    }
+
+    /// The names a metadata group declares: the keys of a dictionary group
+    /// (actions, entities, queries) or the identifiers of an array group
+    /// (enums). A missing group declares nothing; an array entry without an
+    /// identifier makes the group malformed (nil).
+    static func declaredNames(_ group: Any?) -> Set<String>? {
+        guard let group else { return [] }
+        switch group {
+        case let dictionary as [String: Any]:
+            return Set(dictionary.keys)
+        case let entries as [[String: Any]]:
+            var names: Set<String> = []
+            for entry in entries {
+                guard let identifier = entry["identifier"] as? String else { return nil }
+                names.insert(identifier)
+            }
+            return names
+        default:
+            return nil
         }
     }
 }

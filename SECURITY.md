@@ -61,6 +61,8 @@ The custom URL scheme accepts refresh only. Destructive preset actions and app
 quit are intentionally excluded because another local app or browser can open a
 custom URL. Stop Watched App requires system confirmation naming the app,
 including direct Siri, Spotlight, and App Shortcut invocation without prior
-configuration. Its GlobalProtect scope preserves VPN services. The complete
+configuration. Its GlobalProtect scope preserves VPN services. Get Watched App
+Status only reads and reports status. No App Intent turns Keep Off on or off or
+performs an administrator operation. The complete
 security model and residual risks are documented in
 [THREAT_MODEL.md](THREAT_MODEL.md).
