@@ -64,7 +64,8 @@ final class Batch03EscalationRecheckTests: XCTestCase {
             sendSignal: { signal, pid in recorder.append(signal, pid); return true },
             isProcessAlive: { _ in true },
             sleep: { _ in },
-            systemUptime: { 0 }
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
         return await ProcessLifecycleController.terminateProcess(
             named: "Example",

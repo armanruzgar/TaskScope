@@ -217,22 +217,29 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testAdmittedBusStopFinishesAfterCallerCancellation() async {
         let blocked = ManualBlockingInventory(result: .success([]), honorsCancellation: true)
-        let lifecycle = ManualLifecycle()
+        let cancellation = ManualCancellationLog()
         let main = row()
         var helper = row(pid: 43)
         helper.command = "/Applications/Example.app/Contents/MacOS/Helper"
         helper.executablePath = helper.command
         let rows = [main, helper]
         let signals = ManualSignalLog()
-        lifecycle.runtime = ProcessLifecycleRuntime(
+        // The production service on a fake runtime: every signal it sends
+        // records whether the stop had inherited the caller's cancellation.
+        let lifecycle = SystemProcessLifecycleService(runtime: ProcessLifecycleRuntime(
             userID: getuid(), fileExists: { _ in false }, launchAgentLabel: { _ in nil },
             runCommand: { _, _ in XCTFail("Unexpected command"); return ShellCommandResult(command: "fake", stdout: "", stderr: "", exitCode: 1) },
             loadProcessInventory: { Task.isCancelled ? .failure(.cancelled) : .success(rows) },
             executablePathForPID: { pid in rows.first { $0.pid == pid }?.executablePath },
-            sendSignal: { signal, pid in signals.append(signal, pid); return true },
+            sendSignal: { signal, pid in
+                if Task.isCancelled { cancellation.record() }
+                signals.append(signal, pid)
+                return true
+            },
             isProcessAlive: { _ in true },
-            sleep: { _ in _ = await blocked.load(fetchExtendedStats: false) }, systemUptime: { 0 }
-        )
+            sleep: { _ in _ = await blocked.load(fetchExtendedStats: false) }, systemUptime: { 0 },
+            isAppBundle: { _ in false }
+        ))
         let inventory = ManualInventory(rows)
         let manager = manager(inventory, lifecycle: lifecycle)
         var preset = examplePreset()
@@ -249,7 +256,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let result = await stop.value
         XCTAssertEqual(result.status, .completed)
         XCTAssertEqual(result.message, "Example and helpers quit.")
-        XCTAssertFalse(lifecycle.sawCancellation, "An admitted Stop must complete without inheriting caller cancellation")
+        XCTAssertFalse(cancellation.sawCancellation, "An admitted Stop must complete without inheriting caller cancellation")
         XCTAssertEqual(signals.pids, [main.pid, main.pid, helper.pid, helper.pid])
         XCTAssertEqual(signals.signals, [SIGTERM, SIGKILL, SIGTERM, SIGKILL])
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
@@ -344,7 +351,8 @@ final class ProcessManualRegressionTests: XCTestCase {
                 loadProcessInventory: { .success(rows) },
                 executablePathForPID: { pid in rows.first { $0.pid == pid }?.executablePath },
                 sendSignal: { signal, pid in signals.append(signal, pid); return true },
-                isProcessAlive: { _ in true }, sleep: { _ in }, systemUptime: { 0 }
+                isProcessAlive: { _ in true }, sleep: { _ in }, systemUptime: { 0 },
+                isAppBundle: { _ in false }
             )
             let result = await ProcessLifecycleController.terminateProcess(
                 named: own.name, policy: .gracefulThenForce,
@@ -440,7 +448,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         _ inventory: any ProcessInventoryProviding,
         verification: (any ProcessInventoryProviding)? = nil,
         signaler: ManualSignaler = ManualSignaler(),
-        lifecycle: ManualLifecycle = ManualLifecycle(),
+        lifecycle: any ProcessLifecycleServicing = ManualLifecycle(),
         currentPID: Int32 = 99999,
         now: @escaping () -> Date = Date.init
     ) -> ProcessManager {
@@ -528,25 +536,26 @@ private final class ManualSignalLog: @unchecked Sendable {
     func append(_ signal: Int32, _ pid: Int32) { lock.lock(); defer { lock.unlock() }; entries.append((signal, pid)) }
 }
 
+private final class ManualCancellationLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    var sawCancellation: Bool { lock.withLock { cancelled } }
+    func record() { lock.withLock { cancelled = true } }
+}
+
 private final class ManualLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    var runtime: ProcessLifecycleRuntime?
     var onWait: (@Sendable () async -> Bool)?
     private(set) var openRequests = 0
     private(set) var terminatedNames: [String] = []
-    var sawCancellation = false
     func appBundleExists(at path: String) -> Bool { true }
     func settleAfterProcessChange() async {}
     func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
         terminatedNames.append(preset.mainProcessName)
-        guard let runtime else { return .signalled }
-        let result = await SystemProcessLifecycleService(runtime: runtime).terminateMainProcess(for: preset)
-        sawCancellation = Task.isCancelled
-        return result
+        return .signalled
     }
     func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
         terminatedNames.append(name)
-        guard let runtime else { return .signalled }
-        return await SystemProcessLifecycleService(runtime: runtime).terminateHelperProcess(named: name, for: preset)
+        return .signalled
     }
     func isProcessNamedRunning(_ name: String) async -> Bool { false }
     func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }

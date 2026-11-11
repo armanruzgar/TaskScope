@@ -585,7 +585,7 @@ struct TaskScopeApp: App {
             processHistory: processHistory
         )
         processManager.globalProtectServiceObservationProvider = {
-            await GlobalProtectServiceObservation.read()
+            await GlobalProtectServiceObservation.read(runtime: .live)
         }
         let appRuntime = TaskScopeRuntime(
             session: launchSession,

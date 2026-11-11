@@ -32,7 +32,7 @@ enum ProcessLifecycleController {
     }
 
     static func settleAfterProcessChange(
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async {
         await ProcessTerminationController.settle(runtime: runtime)
     }
@@ -43,7 +43,7 @@ enum ProcessLifecycleController {
         policy: TerminationPolicy,
         expectedExecutableDirectory: String,
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> ProcessTerminationOutcome {
         await ProcessTerminationController.terminate(
             named: name,
@@ -63,7 +63,7 @@ enum ProcessLifecycleController {
         for preset: WatchedAppPreset,
         scope: PresetStopScope,
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> [ProcessTerminationOutcome] {
         var outcomes: [ProcessTerminationOutcome] = []
         if scope != .helpers {
@@ -100,7 +100,7 @@ enum ProcessLifecycleController {
     static func unloadUserLaunchAgents(
         for preset: WatchedAppPreset,
         preservingPIDs: Set<Int32> = [],
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         let jobs = preset.lifecycleUserLaunchAgentJobs
         guard !jobs.isEmpty else { return .notNeeded }
@@ -194,7 +194,7 @@ enum ProcessLifecycleController {
     static func disableUserLaunchAgents(
         for preset: WatchedAppPreset,
         preservingVPNService: Bool = false,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         let jobs = preset.lifecycleUserLaunchAgentJobs
         guard !jobs.isEmpty else { return .notNeeded }
@@ -276,7 +276,7 @@ enum ProcessLifecycleController {
     /// verifying jobs when the user explicitly opens the preset.
     static func enableUserLaunchAgents(
         for preset: WatchedAppPreset,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         let jobs = preset.lifecycleUserLaunchAgentJobs
         guard !jobs.isEmpty else { return .notNeeded }
@@ -328,7 +328,7 @@ enum ProcessLifecycleController {
     /// Off had disabled the job). Enabling an already-enabled job is a no-op.
     static func bootstrapUserLaunchAgents(
         for preset: WatchedAppPreset,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         await bootstrapUserLaunchAgents(
             jobs: preset.lifecycleUserLaunchAgentJobs,
@@ -490,7 +490,7 @@ enum ProcessLifecycleController {
     /// waits for launchd instead and fails closed if the process never appears.
     static func ensureSystemLaunchDaemons(
         for preset: WatchedAppPreset,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         guard preset.isBuiltInGlobalProtect else { return .notNeeded }
         // On current installations PanGPS is a setuid executable launched by
@@ -634,7 +634,7 @@ enum ProcessLifecycleController {
         _ name: String,
         timeoutSeconds: TimeInterval,
         expectedExecutableDirectory: String? = nil,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> Bool {
         await ProcessTerminationController.waitUntilRunning(
             named: name,
@@ -649,7 +649,7 @@ enum ProcessLifecycleController {
     /// whenever its `pangpa` launch agent already runs the main binary.
     static func openAppBundle(
         at path: String,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> AppBundleOpenResult {
         guard runtime.fileExists(path) else { return .failed("The app bundle is missing.") }
         let result = await runtime.runCommand(

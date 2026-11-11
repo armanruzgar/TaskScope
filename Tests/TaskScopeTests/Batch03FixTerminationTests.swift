@@ -197,7 +197,8 @@ private final class Batch03TerminationWorld: @unchecked Sendable {
                 lock.withLock { rows.contains { $0.pid == pid } }
             },
             sleep: { [self] _ in lock.withLock { sleeps += 1 } },
-            systemUptime: { 0 }
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 }

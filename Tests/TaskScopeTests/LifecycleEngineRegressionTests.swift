@@ -334,7 +334,8 @@ private final class CommandRuntime: @unchecked Sendable {
             userID: getuid(), fileExists: { _ in true }, launchAgentLabel: { _ in "example.agent" },
             runCommand: { [self] command, _ in run(command) }, loadProcessInventory: { .success([]) },
             executablePathForPID: { _ in nil }, sendSignal: { _, _ in false }, isProcessAlive: { _ in false },
-            sleep: { [self] duration in lock.withLock { recordedSleeps.append(duration) } }, systemUptime: { 0 }
+            sleep: { [self] duration in lock.withLock { recordedSleeps.append(duration) } }, systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 

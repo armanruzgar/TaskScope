@@ -241,7 +241,8 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
                     recordedSleepDurations.append(duration)
                 }
             },
-            systemUptime: { 0 }
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 

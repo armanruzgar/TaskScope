@@ -335,7 +335,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
         }, loadProcessInventory: { .success(processes) }, executablePathForPID: {
             $0 == 4343 ? GlobalProtectAccessibilityDisconnect.executable : kernelPath
         }, sendSignal: { _, _ in XCTFail("No signal is permitted"); return false },
-           isProcessAlive: { _ in false }, sleep: { _ in }, systemUptime: { 0 })
+           isProcessAlive: { _ in false }, sleep: { _ in }, systemUptime: { 0 }, isAppBundle: { _ in false })
     }
 
     private func makeCard(snapshot: WatchedAppSnapshot = WatchedAppSnapshot(preset: .globalProtect, runningNames: []),
@@ -376,7 +376,7 @@ final class GpKeepoffRegressionTests: XCTestCase {
             return ShellCommandResult(command: command, stdout: "", stderr: "Unexpected command", exitCode: 1)
         }, loadProcessInventory: { .success([]) }, executablePathForPID: { _ in nil }, sendSignal: { _, _ in
             XCTFail("No signal is permitted"); return false
-        }, isProcessAlive: { _ in false }, sleep: { _ in }, systemUptime: { 0 })
+        }, isProcessAlive: { _ in false }, sleep: { _ in }, systemUptime: { 0 }, isAppBundle: { _ in false })
     }
 }
 

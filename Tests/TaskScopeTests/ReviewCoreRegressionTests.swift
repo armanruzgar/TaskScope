@@ -350,7 +350,7 @@ private actor Commands {
                                 runCommand: { await self.run($0, $1) }, loadProcessInventory: { .success([]) },
                                 executablePathForPID: { _ in nil },
                                 sendSignal: { _, _ in XCTFail("Unexpected signal"); return false },
-                                isProcessAlive: { _ in false }, sleep: { await self.sleep($0) }, systemUptime: { 0 })
+                                isProcessAlive: { _ in false }, sleep: { await self.sleep($0) }, systemUptime: { 0 }, isAppBundle: { _ in false })
     }
     func run(_ command: String, _ timeout: TimeInterval) -> ShellCommandResult {
         if command.contains("launchctl print ") { prints += 1 }

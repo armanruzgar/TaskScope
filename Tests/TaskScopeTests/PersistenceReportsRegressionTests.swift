@@ -311,7 +311,8 @@ final class PersistenceReportsRegressionTests: XCTestCase {
               runCommand: { _, _ in .init(command: "private-fixture", stdout: "", stderr: "private-fixture", exitCode: 1) },
               loadProcessInventory: { XCTFail("Unexpected inventory read"); return .success([]) },
               executablePathForPID: { _ in nil }, sendSignal: { _, _ in XCTFail("Unexpected signal"); return false },
-              isProcessAlive: { _ in false }, sleep: { _ in XCTFail("Unexpected wait") }, systemUptime: { 0 })
+              isProcessAlive: { _ in false }, sleep: { _ in XCTFail("Unexpected wait") }, systemUptime: { 0 },
+              isAppBundle: { _ in false })
     }
 
     private func healthRuntime() -> InstallationHealthRuntime {

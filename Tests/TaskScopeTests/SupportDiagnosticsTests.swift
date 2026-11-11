@@ -364,7 +364,7 @@ private final class DiagnosticsInspectionHarness: @unchecked Sendable {
             XCTFail("Diagnostics must not signal processes")
             return false
         }, isProcessAlive: { _ in false }, sleep: { _ in XCTFail("Diagnostics must not run lifecycle waits") },
-        systemUptime: { 0 })
+        systemUptime: { 0 }, isAppBundle: { _ in false })
     }
 }
 

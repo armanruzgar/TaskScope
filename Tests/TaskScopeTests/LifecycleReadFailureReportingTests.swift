@@ -152,6 +152,7 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
         ProcessLifecycleRuntime(
             userID: 501,
             fileExists: { _ in false },
+            launchAgentLabel: { _ in nil },
             runCommand: { [self] command, _ in
                 lock.withLock {
                     recordedCommands.append(command)
@@ -175,7 +176,9 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
                 lock.withLock {
                     recordedSleepDurations.append(duration)
                 }
-            }
+            },
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 

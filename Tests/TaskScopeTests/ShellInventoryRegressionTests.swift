@@ -279,7 +279,8 @@ private final class ReadinessHarness: @unchecked Sendable {
                 // the real system clock; the fixed loop never reaches this.
                 if count >= 20 { withUnsafeCurrentTask { $0?.cancel() } }
             },
-            systemUptime: { [self] in lock.withLock { uptime } }
+            systemUptime: { [self] in lock.withLock { uptime } },
+            isAppBundle: { _ in false }
         )
     }
 

@@ -7,7 +7,7 @@ struct GlobalProtectServiceObservation: Equatable, Sendable {
 
     /// Names and effective UID alone cannot identify another login session's
     /// setuid PanGPS. Only the fixed local jobs and a kernel product path count.
-    static func read(runtime: ProcessLifecycleRuntime = .live) async -> Self {
+    static func read(runtime: ProcessLifecycleRuntime) async -> Self {
         func state(for service: GlobalProtectCompatibilityReport.Service) async -> State {
             let domain = service.isSystem ? "system" : "gui/\(runtime.userID)"
             let inspection = await runtime.runCommand(
@@ -42,7 +42,7 @@ extension ProcessLifecycleController {
     static func disableSystemLaunchDaemons(
         for preset: WatchedAppPreset,
         allowAdministratorPrompt: Bool,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         guard preset.isBuiltInGlobalProtect else { return .notNeeded }
         let job = WatchedAppPreset.globalProtectSystemDaemon
@@ -187,7 +187,7 @@ extension ProcessLifecycleController {
     /// disabled so every Open/Keep Off cycle does not request root privileges.
     static func enableSystemLaunchDaemons(
         for preset: WatchedAppPreset,
-        runtime: ProcessLifecycleRuntime = .live
+        runtime: ProcessLifecycleRuntime
     ) async -> LifecycleBatchResult {
         guard preset.isBuiltInGlobalProtect else { return .notNeeded }
         let job = WatchedAppPreset.globalProtectSystemDaemon

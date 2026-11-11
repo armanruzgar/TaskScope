@@ -130,7 +130,7 @@ final class ProcessManager: ObservableObject {
         processSignaler: any ProcessSignaling = DarwinProcessSignaler(),
         lifecycle: any ProcessLifecycleServicing = SystemProcessLifecycleService(),
         settleAfterProcessChange: @escaping () async -> Void = {
-            await ProcessLifecycleController.settleAfterProcessChange()
+            await ProcessLifecycleController.settleAfterProcessChange(runtime: .live)
         },
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
         pollingController: ProcessPollingController? = nil,

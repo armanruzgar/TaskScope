@@ -567,7 +567,8 @@ private actor ServiceHarness {
             sendSignal: { _, _ in false },
             isProcessAlive: { _ in false },
             sleep: { _ in },
-            systemUptime: { 0 }
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 

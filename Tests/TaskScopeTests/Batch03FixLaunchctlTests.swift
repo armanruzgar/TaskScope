@@ -79,7 +79,9 @@ final class Batch03LaunchctlHarness: @unchecked Sendable {
             executablePathForPID: { _ in nil },
             sendSignal: { _, _ in false },
             isProcessAlive: { _ in false },
-            sleep: { _ in }
+            sleep: { _ in },
+            systemUptime: { 0 },
+            isAppBundle: { _ in false }
         )
     }
 }

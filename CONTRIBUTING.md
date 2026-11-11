@@ -90,6 +90,15 @@ from `Tests/TaskScopeTests/InMemoryUserDefaults.swift`, never with
 parallel test processes cannot overwrite each other's fixtures and a run leaves
 no preference files behind.
 
+Tests of preset lifecycle actions run the production code on a fake
+`ProcessLifecycleRuntime`, for example
+`SystemProcessLifecycleService(runtime: fake)`. The runtime has no default
+members, so every launchd command, inventory read, signal, wait and clock
+the test can reach is one it wrote; `ProcessLifecycleRuntime.live` is the only
+real one. Give `sendSignal` a closure that fails the test unless the test
+expects signals, and send a real signal only to a child process the test
+started itself.
+
 The packaging test requires macOS and Xcode 26 and launches test copies of the
 app. It stages and signs them ad hoc in its own temporary directory, never in
 the checkout's `dist/`, uses a unique test bundle identifier, and checks for
