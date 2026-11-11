@@ -180,8 +180,11 @@ final class Batch05ReaderFixTests: XCTestCase {
     ) async -> Result<[AppProcess], ProcessInventoryError> {
         let processTable = table ?? self.table(live: [42, 43])
         // Each read runs in a task of its own, so a cancellation stays in it.
+        // The class is named rather than `Self`: a dynamic `Self` captured by
+        // the task is a pattern Xcode 26's region-based isolation checker
+        // rejects as an error in the strict CI step.
         return await Task {
-            await Self.read(results, processTable, extended, cancelDuringRowReads)
+            await Batch05ReaderFixTests.read(results, processTable, extended, cancelDuringRowReads)
         }.value
     }
 
