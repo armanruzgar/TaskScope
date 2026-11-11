@@ -54,7 +54,11 @@ final class ShellCommandRunnerTests: XCTestCase {
         let sources = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/TaskScope")
-        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        // Hidden folders are skipped, as SwiftPM skips them when it collects the
+        // target's sources (a checkout can hold worktrees under `.claude`).
+        let files = try XCTUnwrap(FileManager.default.enumerator(
+            at: sources, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ))
             .compactMap { $0 as? URL }
             .filter { $0.pathExtension == "swift" }
         XCTAssertGreaterThan(files.count, 50, "The scan must see the production sources at \(sources.path)")

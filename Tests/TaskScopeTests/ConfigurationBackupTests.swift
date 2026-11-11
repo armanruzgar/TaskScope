@@ -9,7 +9,8 @@ import XCTest
 /// section, rules arrive turned off, and nothing turns background enforcement on.
 @MainActor
 final class ConfigurationBackupTests: XCTestCase {
-    private var defaults: InMemoryUserDefaults!
+    // XCTest calls setUp and tearDown outside the main actor.
+    nonisolated(unsafe) private var defaults: InMemoryUserDefaults!
 
     override func setUp() {
         super.setUp()
