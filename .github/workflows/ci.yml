@@ -52,10 +52,13 @@ jobs:
           2>&1 | tee strict.log
 
       # Some concurrency diagnostics stay warnings even under
-      # -warnings-as-errors, so fail on any Swift warning in the logs.
+      # -warnings-as-errors, so fail on any Swift compiler warning in the logs.
+      # Compiler diagnostics carry a column (file.swift:12:5: warning:);
+      # SwiftUI runtime messages printed while tests run do not
+      # (file.swift:12: warning:), so they are not matched.
       - name: No compiler warnings
         run: |
-          if grep -hE '\.swift:[0-9]+(:[0-9]+)?: warning:' build.log test.log strict.log; then
+          if grep -hE '\.swift:[0-9]+:[0-9]+: warning:' build.log test.log strict.log; then
             echo "::error::Swift compiler warnings found (listed above)."
             exit 1
           fi
