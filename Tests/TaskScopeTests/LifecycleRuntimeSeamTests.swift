@@ -229,7 +229,7 @@ private final class SeamRecorder: @unchecked Sendable {
     func clearFileChecks() { lock.withLock { recordedFileChecks.removeAll() } }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: 501,
             fileExists: { [self] path in
                 lock.withLock {

@@ -11,7 +11,7 @@ final class CommandLineSearchTests: XCTestCase {
     private let startSeconds = 1_791_392_687
 
     private func row(_ pid: Int32, name: String, uid: uid_t = getuid(), cpu: Double = 0) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 1, uid: uid, cpu: cpu, memoryMB: 1,
             command: "/usr/bin/\(name)", executablePath: "/usr/bin/\(name)", elapsedTime: "00:01", startTime: start,
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -135,27 +135,6 @@ final class CommandLineSearchTests: XCTestCase {
         XCTAssertTrue(found.processes.contains { $0.pid == alpha.pid })
         XCTAssertFalse(found.processes.contains { $0.pid == beta.pid })
         XCTAssertTrue(found.commandLineMatches.contains(alpha.pid))
-    }
-}
-
-/// The row shows and announces a command-line match without showing the
-/// command line.
-@MainActor
-final class CommandLineSearchRowTests: XCTestCase {
-    func testRowMarksACommandLineMatch() throws {
-        let process = Batch10.process(60, name: "Worker")
-        func row(_ matched: Bool) -> ProcessRow {
-            ProcessRow(process: process, isCurrentProcess: false, isSelected: false, isKeyboardSelected: false,
-                       isHighlightedCPU: false, isHighlightedMEM: false, matchedByCommandLine: matched,
-                       stopAction: {}, toggleSelection: {})
-        }
-        let marked = try row(true).inspect()
-        XCTAssertNoThrow(try marked.find(ViewType.Image.self) { try $0.actualImage().name() == "text.magnifyingglass" })
-        XCTAssertTrue(try marked.find(ViewType.VStack.self).accessibilityValue().string()
-            .contains("matches the search in its command line"))
-        let plain = try row(false).inspect()
-        XCTAssertThrowsError(try plain.find(ViewType.Image.self) { try $0.actualImage().name() == "text.magnifyingglass" })
-        XCTAssertFalse(try plain.find(ViewType.VStack.self).accessibilityValue().string().contains("command line"))
     }
 }
 

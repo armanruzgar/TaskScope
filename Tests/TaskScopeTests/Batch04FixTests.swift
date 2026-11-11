@@ -8,7 +8,7 @@ func batch04Result(_ output: String = "", error: String = "", code: Int32 = 0, s
 }
 
 func batch04Process(pid: Int32 = 424242, uid: uid_t = 501, path: String = "/Applications/Batch04NeverInstalled.app/Contents/MacOS/Batch04NeverRunning") -> AppProcess {
-    AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: path,
+    AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: path,
                executablePath: path, elapsedTime: "00:10", startTime: "stable fake identity",
                netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
 }

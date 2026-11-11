@@ -4,11 +4,11 @@ import XCTest
 @MainActor
 final class ProcessHistoryTests: XCTestCase {
     func testSamplesFullObservedPopulationAndRetainsBoundedWindow() async {
-        let inventory = HistoryInventory(results: [
+        let inventory = ScriptedInventory([
             .success([process(pid: 1, cpu: 10, memory: 100), process(pid: 2, cpu: 20, memory: 200)]),
             .success([process(pid: 3, cpu: 5, memory: 50)]),
             .success([])
-        ])
+        ], repeatsLast: true)
         var timestamp = Date(timeIntervalSince1970: 100)
         let history = ProcessHistory(inventory: inventory, maxSamples: 2, now: { timestamp })
 
@@ -27,10 +27,10 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testFailureIsVisibleAndPreservesLastGoodSamples() async {
-        let inventory = HistoryInventory(results: [
+        let inventory = ScriptedInventory([
             .success([process(pid: 1, cpu: 10, memory: 100)]),
             .failure(.commandFailed("ps unavailable"))
-        ])
+        ], repeatsLast: true)
         let history = ProcessHistory(inventory: inventory)
 
         await history.sampleNow()
@@ -85,16 +85,16 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testSamplingStartsOnlyWhileAConsumerIsVisible() async {
-        let inventory = CountingHistoryInventory()
+        let inventory = ScriptedInventory(processes: [])
         let history = ProcessHistory(inventory: inventory)
 
         for _ in 0..<10 { await Task.yield() }
-        let initialLoadCount = await inventory.loadCount()
+        let initialLoadCount = inventory.readCount
         XCTAssertEqual(initialLoadCount, 0)
 
         history.beginSampling(cadence: 60)
-        await inventory.waitForLoad()
-        let visibleLoadCount = await inventory.loadCount()
+        await inventory.waitForRead(1)
+        let visibleLoadCount = inventory.readCount
         XCTAssertEqual(visibleLoadCount, 1)
 
         history.endSampling()
@@ -106,10 +106,10 @@ final class ProcessHistoryTests: XCTestCase {
     /// new segment instead of joining them as if contiguous (the concern behind
     /// the old rule that discarded them).
     func testResumingFromZeroConsumersKeepsSamplesInsideTheWindowAsASeparateSegment() async {
-        let inventory = HistoryInventory(results: [
+        let inventory = ScriptedInventory([
             .success([process(pid: 1, cpu: 400, memory: 100)]),
             .success([process(pid: 2, cpu: 5, memory: 50)])
-        ])
+        ], repeatsLast: true)
         var clock = Date(timeIntervalSince1970: 1_000)
         let history = ProcessHistory(inventory: inventory, now: { clock })
 
@@ -135,10 +135,10 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testResumingAfterTheWindowDropsSamplesItNoLongerReaches() async {
-        let inventory = HistoryInventory(results: [
+        let inventory = ScriptedInventory([
             .success([process(pid: 1, cpu: 400, memory: 100)]),
             .success([process(pid: 2, cpu: 5, memory: 50)])
-        ])
+        ], repeatsLast: true)
         var clock = Date(timeIntervalSince1970: 1_000)
         let history = ProcessHistory(inventory: inventory, maxSamples: 6, now: { clock })
 
@@ -161,7 +161,7 @@ final class ProcessHistoryTests: XCTestCase {
 
     func testTheWindowFollowsTheCadenceAndRecordingDropsSamplesOutsideIt() {
         var clock = Date(timeIntervalSince1970: 1_000)
-        let history = ProcessHistory(inventory: HistoryInventory(results: []), maxSamples: 60, now: { clock })
+        let history = ProcessHistory(inventory: ScriptedInventory([], repeatsLast: true), maxSamples: 60, now: { clock })
         XCTAssertEqual(history.windowDuration, 600, "10 minutes at the default 10 s")
         history.updateConsumerCadence(2)
         XCTAssertEqual(history.windowDuration, 120)
@@ -178,7 +178,7 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testAdditionalConsumerDoesNotDiscardSamples() async {
-        let inventory = HistoryInventory(results: [.success([process(pid: 1, cpu: 10, memory: 100)])])
+        let inventory = ScriptedInventory([.success([process(pid: 1, cpu: 10, memory: 100)])], repeatsLast: true)
         let history = ProcessHistory(inventory: inventory)
 
         history.beginSampling(cadence: 60)
@@ -192,7 +192,7 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testCadenceChangeKeepsUnavailableStateUntilNextRead() async {
-        let inventory = HistoryInventory(results: [.failure(.commandFailed("ps unavailable"))])
+        let inventory = ScriptedInventory([.failure(.commandFailed("ps unavailable"))], repeatsLast: true)
         let history = ProcessHistory(inventory: inventory)
 
         history.beginSampling(cadence: 10)
@@ -210,7 +210,7 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     func testCadenceChangeWhileLiveStaysLive() async {
-        let inventory = HistoryInventory(results: [.success([process(pid: 1, cpu: 10, memory: 100)])])
+        let inventory = ScriptedInventory([.success([process(pid: 1, cpu: 10, memory: 100)])], repeatsLast: true)
         let history = ProcessHistory(inventory: inventory)
 
         history.beginSampling(cadence: 10)
@@ -224,7 +224,7 @@ final class ProcessHistoryTests: XCTestCase {
     }
 
     private func process(pid: Int32, cpu: Double, memory: Double) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             cpu: cpu,
@@ -237,38 +237,6 @@ final class ProcessHistoryTests: XCTestCase {
             diskReadBytes: nil,
             diskWriteBytes: nil
         )
-    }
-}
-
-private actor CountingHistoryInventory: ProcessInventoryProviding {
-    private var count = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        count += 1
-        waiters.forEach { $0.resume() }
-        waiters.removeAll()
-        return .success([])
-    }
-
-    func loadCount() -> Int { count }
-
-    func waitForLoad() async {
-        guard count == 0 else { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-}
-
-private final class HistoryInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        if results.count == 1 { return results[0] }
-        return results.removeFirst()
     }
 }
 

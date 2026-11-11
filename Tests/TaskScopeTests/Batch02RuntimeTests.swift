@@ -1,5 +1,4 @@
 import AppKit
-import Carbon.HIToolbox
 import XCTest
 @testable import TaskScope
 
@@ -8,103 +7,6 @@ import XCTest
 // Stop Watched App intent. Lifecycle, inventory and signaler are fakes: nothing
 // is signalled and no launchctl, Accessibility or notification call is made.
 
-/// Records the polling intervals ProcessManager schedules; never fires a tick.
-final class Batch02PollingRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [TimeInterval] = []
-    private var cancelled = 0
-
-    var intervals: [TimeInterval] { lock.withLock { recorded } }
-    var cancellations: Int { lock.withLock { cancelled } }
-
-    @MainActor
-    func controller() -> ProcessPollingController {
-        ProcessPollingController(sleep: { [self] interval in
-            lock.withLock { recorded.append(interval) }
-            do {
-                try await Task.sleep(nanoseconds: 3_600_000_000_000)
-                return true
-            } catch {
-                lock.withLock { cancelled += 1 }
-                return false
-            }
-        })
-    }
-}
-
-@MainActor
-private struct Batch02RuntimeRig {
-    let defaults: InMemoryUserDefaults
-    let session: TaskScopeLaunchSession
-    let stores: TaskScopeLaunchStores
-    let lifecycle: Batch02RecordingLifecycle
-    let polling: Batch02PollingRecorder
-    let manager: ProcessManager
-    let bus: AppCommandBus
-    let runtime: TaskScopeRuntime
-    let effects: Batch02EffectsRecorder
-
-    init(
-        context: TaskScopeLaunchContext = .interactive,
-        defaults: InMemoryUserDefaults = batch02Defaults(),
-        inventory: any ProcessInventoryProviding = Batch02FixedInventory(result: .success([]))
-    ) {
-        self.defaults = defaults
-        session = makeBatch02Session(context, standardDefaults: { defaults })
-        stores = TaskScopeLaunchStores(session: session, inventory: inventory)
-        lifecycle = Batch02RecordingLifecycle()
-        polling = Batch02PollingRecorder()
-        manager = ProcessManager(
-            processInventory: inventory,
-            verificationInventory: inventory,
-            processSignaler: Batch02InertSignaler(),
-            lifecycle: lifecycle,
-            settleAfterProcessChange: {},
-            currentPID: 99_999,
-            pollingController: polling.controller(),
-            // As TaskScopeApp wires it, with no live service reading.
-            keepOffActivity: stores.keepOffActivity,
-            dependencies: .app(settings: stores.settings, watchedApps: stores.watchedApps, globalProtectServiceObservation: { nil })
-        )
-        bus = AppCommandBus()
-        let effects = Batch02EffectsRecorder()
-        self.effects = effects
-        runtime = TaskScopeRuntime(
-            session: session,
-            stores: stores,
-            processManager: manager,
-            history: ProcessHistory(inventory: inventory),
-            bus: bus,
-            effects: .init(
-                requestNotificationAuthorization: { effects.events.append("request authorization") },
-                primeNotificationBaseline: { _ in effects.events.append("prime baseline") }
-            )
-        )
-    }
-
-    func start(_ context: TaskScopeLaunchContext) async {
-        let effects = effects
-        await runtime.start(context: context) { effects.events.append("refresh shortcuts") }
-    }
-
-    func tearDown() {
-        runtime.stop()
-        session.cleanUp()
-    }
-}
-
-@MainActor
-private final class Batch02EffectsRecorder {
-    var events: [String] = []
-}
-
-@MainActor
-private func waitUntil(_ condition: () -> Bool) async {
-    for _ in 0..<400 where !condition() {
-        try? await Task.sleep(nanoseconds: 5_000_000)
-    }
-}
-
 // MARK: - Composition root and runtime (T02-6, A01-3)
 
 @MainActor
@@ -112,7 +14,7 @@ final class Batch02RuntimeTests: XCTestCase {
     /// T02-6: Keep Off and Open record the intent where the app reads it back.
     func testKeepOffAndOpenPersistTheIntentThroughTheAppWiring() async {
         let rig = Batch02RuntimeRig(
-            inventory: Batch02ScriptedInventory(results: [.success([])])
+            inventory: ScriptedInventory([.success([])], repeatsLast: true)
         )
         defer { rig.tearDown() }
         XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff)
@@ -350,7 +252,7 @@ final class Batch02RuntimeTests: XCTestCase {
         let stores = ConfigurationBackupActions.Stores(
             watchedApps: rig.stores.watchedApps, autoStopRules: rig.stores.autoStopRules,
             savedSelections: nil, settings: rig.stores.settings, hotkey: HotkeyManager(
-                defaults: rig.defaults, defaultsKey: "batch02.hotkey", backend: Batch02InertHotkeyBackend()
+                defaults: rig.defaults, defaultsKey: "batch02.hotkey", backend: RecordingHotkeyBackend()
             )
         )
         backupActions.loadImport(from: URL(fileURLWithPath: "/nonexistent/backup.json"), into: stores)
@@ -422,245 +324,99 @@ final class Batch02RuntimeTests: XCTestCase {
     }
 }
 
-// MARK: - Coordinator routing (T05-2, T05-1)
-
 @MainActor
-final class Batch02CoordinatorTests: XCTestCase {
-    private func examplePreset() -> WatchedAppPreset {
-        WatchedAppPreset(
-            displayName: "Example",
-            mainProcessName: "Example",
-            helperProcessNames: [],
-            protectedProcessNames: [],
-            appPath: "/Applications/Example.app"
-        )
-    }
-
-    private func exampleRow(pid: Int32) -> AppProcess {
-        AppProcess(
-            pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0,
-            command: "/Applications/Example.app/Contents/MacOS/Example",
-            executablePath: "/Applications/Example.app/Contents/MacOS/Example",
-            elapsedTime: "00:10", startTime: "Sat Jul 26 11:20:17 2026",
-            netInKB: 0, netOutKB: 0, diskReadBytes: 0, diskWriteBytes: 0
-        )
-    }
-
-    private func manager(
-        inventory: any ProcessInventoryProviding, lifecycle: Batch02RecordingLifecycle
-    ) -> ProcessManager {
-        let manager = ProcessManager(
-            processInventory: inventory, processSignaler: Batch02InertSignaler(),
-            lifecycle: lifecycle, settleAfterProcessChange: {},
-            dependencies: .inert
-        )
-        manager.enableNotifications = false
-        return manager
-    }
-
-    /// T05-2: Open opens the app and never takes a stop path.
-    func testOpenEntityCommandOpensTheAppAndNeverStopsIt() async {
-        let lifecycle = Batch02RecordingLifecycle()
-        let inventory = Batch02ScriptedInventory(results: [.success([]), .success([]), .success([exampleRow(pid: 42)])])
-        let preset = examplePreset()
-        let coordinator = AppCommandCoordinator(
-            processManager: manager(inventory: inventory, lifecycle: lifecycle), presets: { [preset] }
-        )
-
-        let result = await coordinator.perform(.openPresetEntity(
-            WatchedPresetCommandTarget(id: preset.id, displayName: preset.displayName)
-        ))
-
-        XCTAssertEqual(result.status, .completed, result.message)
-        XCTAssertEqual(result.message, "Opened Example.")
-        XCTAssertTrue(lifecycle.calls.contains("open"), "\(lifecycle.calls)")
-        XCTAssertFalse(lifecycle.calls.contains { $0.hasPrefix("terminate") || $0 == "agents.unload" },
-                       "Open must never stop anything: \(lifecycle.calls)")
-    }
-
-    /// T05-2: Open resolves the preset by its stable identifier only; a preset
-    /// that merely has the same display name is not opened.
-    func testOpenEntityCommandRejectsAReplacementPresetWithTheSameDisplayName() async {
-        let lifecycle = Batch02RecordingLifecycle()
-        let replacement = examplePreset()
-        let coordinator = AppCommandCoordinator(
-            processManager: manager(inventory: Batch02FixedInventory(result: .success([])), lifecycle: lifecycle),
-            presets: { [replacement] }
-        )
-
-        let result = await coordinator.perform(.openPresetEntity(
-            WatchedPresetCommandTarget(id: UUID(), displayName: "Example")
-        ))
-
-        XCTAssertEqual(result.status, .rejected)
-        XCTAssertTrue(result.message.contains("Example"), result.message)
-        XCTAssertEqual(lifecycle.calls, [], "No lifecycle work for an unknown preset")
-    }
-
-    /// T05-2 control: Stop stops and never opens.
-    func testStopEntityCommandStopsTheAppAndNeverOpensIt() async {
-        let lifecycle = Batch02RecordingLifecycle()
-        let inventory = Batch02ScriptedInventory(results: [.success([exampleRow(pid: 42)]), .success([])])
-        let preset = examplePreset()
-        let coordinator = AppCommandCoordinator(
-            processManager: manager(inventory: inventory, lifecycle: lifecycle), presets: { [preset] }
-        )
-
-        _ = await coordinator.perform(.stopPresetEntity(
-            WatchedPresetCommandTarget(id: preset.id, displayName: preset.displayName)
-        ))
-
-        XCTAssertTrue(lifecycle.calls.contains("terminate:Example"), "\(lifecycle.calls)")
-        XCTAssertFalse(lifecycle.calls.contains("open"), "\(lifecycle.calls)")
-    }
-
-    /// T05-1: Shortcuts Stop of the built-in GlobalProtect preset, through the
-    /// app's own wiring, stays in user-process scope: no VPN disconnect, no Keep
-    /// Off intent, no persistent agent disable, no system daemon, and only the
-    /// interface agent is unloaded.
-    func testShortcutsStopOfGlobalProtectStaysInUserProcessScope() async throws {
-        let rig = Batch02RuntimeRig()
-        defer { rig.tearDown() }
-        let intent = StopWatchedAppIntent()
-        intent.app = WatchedPresetEntity(preset: .globalProtect)
-
-        _ = try await intent.executeStop(
-            bus: rig.bus, catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: batch02Defaults().objectReader)
-        ) { _ in }
-
-        XCTAssertFalse(rig.lifecycle.calls.contains("vpn.disconnect"), "\(rig.lifecycle.calls)")
-        XCTAssertFalse(rig.lifecycle.calls.contains("agents.disable"))
-        XCTAssertFalse(rig.lifecycle.calls.contains { $0.hasPrefix("daemon.disable") })
-        XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff, "Shortcuts Stop must not record Keep Off")
-        XCTAssertEqual(rig.lifecycle.unloadedAgentLabels.first, ["com.paloaltonetworks.gp.pangpa"])
-        XCTAssertEqual(rig.lifecycle.unloadedDaemonJobCounts.first, 0)
-    }
-
-    /// T05-1: a failed Shortcuts Stop is recorded as Close in diagnostics.
-    func testShortcutsStopFailureIsRecordedAsClose() async throws {
-        let rig = Batch02RuntimeRig(
-            inventory: Batch02FixedInventory(result: .failure(.commandFailed("ps unavailable")))
-        )
-        defer { rig.tearDown() }
-        let intent = StopWatchedAppIntent()
-        intent.app = WatchedPresetEntity(preset: .globalProtect)
-
-        let result = try await intent.executeStop(
-            bus: rig.bus, catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: batch02Defaults().objectReader)
-        ) { _ in }
-
-        XCTAssertEqual(result.status, .failed)
-        XCTAssertEqual(rig.manager.lifecycleDiagnostics.failures(for: WatchedAppPreset.globalProtectID).map(\.action),
-                       [.close])
-        XCTAssertEqual(rig.lifecycle.calls, [])
-        XCTAssertFalse(rig.stores.settings.keepGlobalProtectOff)
+private func waitUntil(_ condition: () -> Bool) async {
+    for _ in 0..<400 where !condition() {
+        try? await Task.sleep(nanoseconds: 5_000_000)
     }
 }
 
-// MARK: - Stop Watched App intent (T05-4, L12-1)
+/// Records the polling intervals ProcessManager schedules; never fires a tick.
+final class Batch02PollingRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [TimeInterval] = []
+    private var cancelled = 0
 
-@MainActor
-final class Batch02StopIntentTests: XCTestCase {
-    /// T05-4: perform() asks the system to confirm before anything is
-    /// submitted, and a declined confirmation submits nothing.
-    func testPerformAsksForConfirmationBeforeSubmittingAndDeclineStopsNothing() async throws {
-        let savedBus = StopWatchedAppIntent.commandBus
-        let savedConfirmation = StopWatchedAppIntent.requestStopConfirmation
-        defer {
-            StopWatchedAppIntent.commandBus = savedBus
-            StopWatchedAppIntent.requestStopConfirmation = savedConfirmation
-        }
-        var events: [String] = []
-        let bus = AppCommandBus()
-        bus.install { command in
-            events.append("submitted \(command)")
-            return .init(status: .completed, message: "Stopped Example.")
-        }
-        StopWatchedAppIntent.commandBus = bus
-        StopWatchedAppIntent.requestStopConfirmation = { intent, message in
-            XCTAssertTrue(message.contains("force stopped"), message)
-            events.append("confirm \(intent.app.displayName)")
-        }
-        let intent = StopWatchedAppIntent()
-        intent.app = WatchedPresetEntity(id: UUID(), displayName: "Example")
+    var intervals: [TimeInterval] { lock.withLock { recorded } }
+    var cancellations: Int { lock.withLock { cancelled } }
 
-        _ = try await intent.perform()
-
-        XCTAssertEqual(events, ["confirm Example", "submitted \(TaskScopeCommand.stopPresetEntity(intent.app.commandTarget))"])
-
-        StopWatchedAppIntent.requestStopConfirmation = { _, _ in throw CancellationError() }
-        do {
-            _ = try await intent.perform()
-            XCTFail("A declined confirmation must throw")
-        } catch is CancellationError {}
-        XCTAssertEqual(events.count, 2, "A declined confirmation submits nothing")
-    }
-
-    /// T05-4: on macOS 14 a declined confirmation comes back as false.
-    func testADeclinedMacOS14ConfirmationCancels() {
-        XCTAssertNoThrow(try StopWatchedAppIntent.requireConfirmed(true))
-        XCTAssertThrowsError(try StopWatchedAppIntent.requireConfirmed(false)) { error in
-            XCTAssertTrue(error is CancellationError)
-        }
-    }
-
-    /// L12-1: the Shortcuts confirmation discloses what the stop does, like the
-    /// in-app Close confirmation: the agents it unloads and the force stop.
-    func testTheConfirmationDisclosesAgentUnloadsAndTheForceStop() async throws {
-        let custom = WatchedAppPreset(
-            displayName: "Example",
-            mainProcessName: "Example",
-            helperProcessNames: ["ExampleHelper"],
-            protectedProcessNames: [],
-            appPath: "/Applications/Example.app",
-            userLaunchAgentJobs: [UserLaunchAgentJob(
-                label: "com.example.batch02.agent",
-                plistPath: "/Library/LaunchAgents/com.example.batch02.agent.plist"
-            )]
-        )
-        let customMessage = StopWatchedAppIntent.stopConfirmationMessage(
-            for: WatchedPresetEntity(preset: custom), preset: custom
-        )
-        XCTAssertTrue(customMessage.hasPrefix("Stop Example and its eligible watched processes?"), customMessage)
-        XCTAssertTrue(customMessage.contains("com.example.batch02.agent"), customMessage)
-        XCTAssertTrue(customMessage.contains(PresetStopScope.forceStopDisclosure), customMessage)
-        XCTAssertTrue(customMessage.contains("3 seconds"), customMessage)
-
-        let globalProtect = StopWatchedAppIntent.stopConfirmationMessage(
-            for: WatchedPresetEntity(preset: .globalProtect), preset: .globalProtect
-        )
-        XCTAssertTrue(globalProtect.contains("com.paloaltonetworks.gp.pangpa"), globalProtect)
-        XCTAssertFalse(globalProtect.contains("pangps"), "Shortcuts Stop never unloads the VPN service")
-
-        let unknown = StopWatchedAppIntent.stopConfirmationMessage(
-            for: WatchedPresetEntity(id: UUID(), displayName: "Gone"), preset: nil
-        )
-        XCTAssertTrue(unknown.contains(PresetStopScope.forceStopDisclosure), unknown)
-
-        // The intent looks the preset up in the stored catalog.
-        let bus = AppCommandBus()
-        bus.install { _ in .init(status: .completed, message: "Stopped.") }
-        let intent = StopWatchedAppIntent()
-        intent.app = WatchedPresetEntity(preset: .globalProtect)
-        var shown: String?
-        _ = try await intent.executeStop(
-            bus: bus, catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: batch02Defaults().objectReader)
-        ) { shown = $0 }
-        XCTAssertEqual(shown, globalProtect)
+    @MainActor
+    func controller() -> ProcessPollingController {
+        ProcessPollingController(sleep: { [self] interval in
+            lock.withLock { recorded.append(interval) }
+            do {
+                try await Task.sleep(nanoseconds: 3_600_000_000_000)
+                return true
+            } catch {
+                lock.withLock { cancelled += 1 }
+                return false
+            }
+        })
     }
 }
 
-/// Registers nothing with the system.
-final class Batch02InertHotkeyBackend: HotkeyRegistrationBackend {
-    private var nextReference = 1
+@MainActor
+struct Batch02RuntimeRig {
+    let defaults: InMemoryUserDefaults
+    let session: TaskScopeLaunchSession
+    let stores: TaskScopeLaunchStores
+    let lifecycle: FakeLifecycle
+    let polling: Batch02PollingRecorder
+    let manager: ProcessManager
+    let bus: AppCommandBus
+    let runtime: TaskScopeRuntime
+    let effects: Batch02EffectsRecorder
 
-    func installEventHandler(for manager: HotkeyManager) -> OSStatus { noErr }
-
-    func register(keyCode: UInt32, modifiers: UInt32, identifier: EventHotKeyID)
-        -> (status: OSStatus, reference: EventHotKeyRef?) {
-        defer { nextReference += 1 }
-        return (noErr, OpaquePointer(bitPattern: nextReference))
+    init(
+        context: TaskScopeLaunchContext = .interactive,
+        defaults: InMemoryUserDefaults = batch02Defaults(),
+        inventory: any ProcessInventoryProviding = ScriptedInventory(processes: [])
+    ) {
+        self.defaults = defaults
+        session = makeBatch02Session(context, standardDefaults: { defaults })
+        stores = TaskScopeLaunchStores(session: session, inventory: inventory)
+        lifecycle = FakeLifecycle.allSucceeding()
+        polling = Batch02PollingRecorder()
+        manager = ProcessManager(
+            processInventory: inventory,
+            verificationInventory: inventory,
+            processSignaler: FakeSignaler(),
+            lifecycle: lifecycle,
+            settleAfterProcessChange: {},
+            currentPID: 99_999,
+            pollingController: polling.controller(),
+            // As TaskScopeApp wires it, with no live service reading.
+            keepOffActivity: stores.keepOffActivity,
+            dependencies: .app(settings: stores.settings, watchedApps: stores.watchedApps, globalProtectServiceObservation: { nil })
+        )
+        bus = AppCommandBus()
+        let effects = Batch02EffectsRecorder()
+        self.effects = effects
+        runtime = TaskScopeRuntime(
+            session: session,
+            stores: stores,
+            processManager: manager,
+            history: ProcessHistory(inventory: inventory),
+            bus: bus,
+            effects: .init(
+                requestNotificationAuthorization: { effects.events.append("request authorization") },
+                primeNotificationBaseline: { _ in effects.events.append("prime baseline") }
+            )
+        )
     }
 
-    func unregister(_ reference: EventHotKeyRef) {}
+    func start(_ context: TaskScopeLaunchContext) async {
+        let effects = effects
+        await runtime.start(context: context) { effects.events.append("refresh shortcuts") }
+    }
+
+    func tearDown() {
+        runtime.stop()
+        session.cleanUp()
+    }
+}
+
+@MainActor
+final class Batch02EffectsRecorder {
+    var events: [String] = []
 }

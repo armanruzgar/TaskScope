@@ -13,7 +13,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
     private let presetID = UUID()
     func testAddingAPresetForAnAlreadyRunningAppDoesNotAnnounceAStart() async {
         let running = [appProcess(pid: 41, name: "Slack")]
-        let manager = makeManager(inventory: StubInventory(processes: running))
+        let manager = makeManager(inventory: ScriptedInventory(processes: running))
 
         var started: [Set<String>] = []
         var primed: [Set<String>] = []
@@ -44,7 +44,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
 
     /// The ordinary path must still report a genuine start.
     func testAGenuineStartIsStillReported() async {
-        let inventory = StubInventory(processes: [])
+        let inventory = ScriptedInventory(processes: [])
         let manager = makeManager(inventory: inventory)
         manager.dependencies.watchedPresets = { [self.preset(named: "Slack")] }
 
@@ -52,7 +52,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
 
         await manager.refreshWatchedStatus(showMessage: false)
-        inventory.processes = [appProcess(pid: 41, name: "Slack")]
+        inventory.setProcesses([appProcess(pid: 41, name: "Slack")])
         await manager.refreshWatchedStatus(showMessage: false)
 
         XCTAssertEqual(started, [["Slack"]], "a real start must still reach the notifier")
@@ -63,7 +63,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
     /// already-running app is announced as newly started.
     func testEnablingNotificationsForARunningPresetDoesNotAnnounceAStart() async {
         let manager = makeManager(
-            inventory: StubInventory(processes: [appProcess(pid: 41, name: "Slack")])
+            inventory: ScriptedInventory(processes: [appProcess(pid: 41, name: "Slack")])
         )
         var silent = preset(named: "Slack")
         silent.notificationsEnabled = false
@@ -88,7 +88,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
     /// refresh arriving first cannot produce a false start.
     func testAnExtraUnflaggedRefreshCannotProduceAFalseStart() async {
         let manager = makeManager(
-            inventory: StubInventory(processes: [appProcess(pid: 41, name: "Slack")])
+            inventory: ScriptedInventory(processes: [appProcess(pid: 41, name: "Slack")])
         )
         var calls: [String] = []
         manager.notifyTransitions = { _ in calls.append("diff") }
@@ -114,8 +114,8 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
-            processSignaler: InertSignaler(),
-            lifecycle: InertLifecycle(),
+            processSignaler: FakeSignaler(rejectingAll: true),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -135,7 +135,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
     }
 
     private func appProcess(pid: Int32, name: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: getuid(),
@@ -151,40 +151,4 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
             diskWriteBytes: nil
         )
     }
-}
-
-private final class StubInventory: ProcessInventoryProviding, @unchecked Sendable {
-    var processes: [AppProcess]
-
-    init(processes: [AppProcess]) {
-        self.processes = processes
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
-private struct InertSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { false }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct InertLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { false }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

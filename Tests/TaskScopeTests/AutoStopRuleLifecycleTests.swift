@@ -111,7 +111,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
     /// re-SIGTERMed on every tick and logged as "did not complete" each time.
     /// An accepted stop is now tracked until the identity disappears.
     func testAcceptedStopWhoseTargetHasNotExitedYetIsRecordedStoppedOnceItExits() async {
-        let inventory = MutableStubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
         let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(
             processName: "Example",
@@ -128,7 +128,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
         await waitUntil { attempts == 1 && !store.events.isEmpty }
         XCTAssertEqual(store.events.map(\.outcome), [.stopRequested])
 
-        inventory.processes = []
+        inventory.setProcesses([])
         await store.evaluateNow()
         store.stop()
 
@@ -167,7 +167,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
     }
 
     func testConfirmedPromptWhoseTargetHasNotExitedYetIsRecordedStoppedOnceItExits() async throws {
-        let inventory = MutableStubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
         let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt))
 
@@ -185,7 +185,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
         await store.evaluateNow()
         XCTAssertEqual(attempts, 1, "a confirmed prompt is never re-signalled automatically")
 
-        inventory.processes = []
+        inventory.setProcesses([])
         await store.evaluateNow()
 
         XCTAssertEqual(store.events.map(\.outcome), [.stopped, .stopRequested])
@@ -253,7 +253,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
         for retirement in ["edit", "disable", "delete"] {
             for result in [ProcessActionResult.stopped, .requestedStillRunning] {
                 defaults.removePersistentDomain(forName: suiteName)
-                let inventory = MutableStubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+                let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
                 let store = makeStore(inventory: inventory)
                 store.add(AutoStopRule(processName: "Example", executablePath: examplePath, runtimeMinutes: 1, action: .kill))
                 let stored = store.rules[0]
@@ -273,7 +273,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
 
                 await store.evaluateNow()
                 await store.evaluateNow()
-                inventory.processes = []
+                inventory.setProcesses([])
                 await store.evaluateNow()
                 store.stop()
 
@@ -306,7 +306,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
     }
 
     func testRuleRetiredDuringRetryRecordsAStopRequestWithoutTrackingExit() async {
-        let inventory = MutableStubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
         let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(processName: "Example", executablePath: examplePath, runtimeMinutes: 1, action: .kill))
         let stored = store.rules[0]
@@ -320,7 +320,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
 
         monotonicInstant = monotonicInstant.advanced(by: .seconds(3_600))
         await store.evaluateNow()
-        inventory.processes = []
+        inventory.setProcesses([])
         await store.evaluateNow()
         store.stop()
 
@@ -449,7 +449,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
     /// After the single re-signal leaves the process running, a later exit is
     /// still recorded instead of being forgotten.
     func testExitAfterTheFailedRetryIsStillRecorded() async {
-        let inventory = MutableAutoStopInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
         let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(
             processName: "Example",
@@ -469,7 +469,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
         monotonicInstant = monotonicInstant.advanced(by: .seconds(3_600))
         await store.evaluateNow()
         XCTAssertEqual(attempts, 2, "precondition: one automatic re-signal")
-        await inventory.set([])
+        inventory.setProcesses([])
         await store.evaluateNow()
         store.stop()
 
@@ -507,7 +507,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
     private func makeStore(
         processes: [AppProcess] = [appProcess(pid: 41, elapsed: "10:00")]
     ) -> AutoStopRulesStore {
-        makeStore(inventory: StubInventory(processes: processes))
+        makeStore(inventory: ScriptedInventory(processes: processes))
     }
 
     private func makeStore(inventory: any ProcessInventoryProviding) -> AutoStopRulesStore {
@@ -535,7 +535,7 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
 }
 
 private func appProcess(pid: Int32, elapsed: String) -> AppProcess {
-    AppProcess(
+    AppProcess.fixture(
         pid: pid,
         parentPID: 1,
         uid: getuid(),
@@ -550,26 +550,6 @@ private func appProcess(pid: Int32, elapsed: String) -> AppProcess {
         diskReadBytes: nil,
         diskWriteBytes: nil
     )
-}
-
-private struct StubInventory: ProcessInventoryProviding {
-    let processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
-private final class MutableStubInventory: ProcessInventoryProviding, @unchecked Sendable {
-    var processes: [AppProcess]
-
-    init(processes: [AppProcess]) {
-        self.processes = processes
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
 }
 
 /// Blocks the first load until released; later loads return immediately.
@@ -604,20 +584,4 @@ private actor BlockingLifecycleInventory: ProcessInventoryProviding {
     }
 
     func loadCount() -> Int { count }
-}
-
-private actor MutableAutoStopInventory: ProcessInventoryProviding {
-    private var processes: [AppProcess]
-
-    init(processes: [AppProcess]) {
-        self.processes = processes
-    }
-
-    func set(_ processes: [AppProcess]) {
-        self.processes = processes
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
 }

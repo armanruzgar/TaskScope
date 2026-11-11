@@ -143,7 +143,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
         let firstAlert = try firstPresenter.find(ViewType.Alert.self)
         XCTAssertNoThrow(try firstAlert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."))
 
-        await fixture.inventory.setProcesses([queued])
+        fixture.inventory.setProcesses([queued])
         await store.evaluateNow()
         XCTAssertEqual(store.currentPrompt?.process.pid, 42)
         let nextPresenter = try view.inspect().find(AutoStopPromptAlert.self)
@@ -169,7 +169,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
     /// action run on the MainActor, mirroring SwiftUI's deferred execution of that Task.
 
     private func process(pid: Int32, name: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: getuid(),
@@ -186,13 +186,13 @@ final class AutoStopPromptAlertTests: XCTestCase {
     }
 
     private func makeFixture(processes: [AppProcess]) async -> PromptFixture {
-        let inventory = PromptInventory(processes: processes)
-        let signaler = PromptSignaler()
+        let inventory = ScriptedInventory(processes: processes)
+        let signaler = FakeSignaler()
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
             processSignaler: signaler,
-            lifecycle: PromptLifecycle(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -222,7 +222,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
         )
     }
 
-    private func makeStores(inventory: PromptInventory) -> PromptStores {
+    private func makeStores(inventory: ScriptedInventory) -> PromptStores {
         let suiteName = "TaskScope.AutoStopPromptAlertTests.\(UUID().uuidString)"
         let defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
@@ -253,48 +253,6 @@ private final class StopRecorder {
     }
 }
 
-private actor PromptInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    init(processes: [AppProcess]) { self.processes = processes }
-
-    func setProcesses(_ processes: [AppProcess]) { self.processes = processes }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
-private final class PromptSignaler: ProcessSignaling {
-    private(set) var sent: [Int32] = []
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        sent.append(pid)
-        return true
-    }
-
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct PromptLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
-}
-
 private struct PromptLoginItemService: LoginItemServicing {
     var state: LoginItemState = .notRegistered
     func register() throws {}
@@ -312,9 +270,9 @@ private struct PromptActivityMonitor: ActivityMonitorCoordinating {
 @MainActor
 private struct PromptFixture {
     var manager: ProcessManager
-    var signaler: PromptSignaler
+    var signaler: FakeSignaler
     var stores: PromptStores
-    var inventory: PromptInventory
+    var inventory: ScriptedInventory
 }
 
 @MainActor

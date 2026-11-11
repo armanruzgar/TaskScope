@@ -204,7 +204,7 @@ final class WatchedSnapshotBuilderTests: XCTestCase {
     }
 
     private func process(pid: Int32, name: String, path: String, uid: uid_t? = 501) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: uid,

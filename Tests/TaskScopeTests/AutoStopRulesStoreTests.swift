@@ -35,7 +35,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
 
     func testRealRuntimeImmediatelyQualifiesAfterColdStart() async {
         let process = appProcess(pid: 42, elapsed: "10:00")
-        let store = makeStore(inventory: StubInventory(processes: [process]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [process]))
         let rule = AutoStopRule(
             processName: "Example",
             executablePath: "/Applications/Example.app/Example",
@@ -54,19 +54,19 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testOccurrenceUsesStableIdentityAndOnlyTriggersOnce() async {
-        let inventory = Batch08Inventory()
+        let inventory = ScriptedInventory(processes: [])
         let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt))
         let first = appProcess(pid: 42, elapsed: "02:00", startTime: "first")
         let replacement = appProcess(pid: 42, elapsed: "02:00", startTime: "second")
         var identities: [ProcessIdentity] = []
 
-        await inventory.set([first])
+        inventory.setProcesses([first])
         await store.evaluateNow()
         identities.append(contentsOf: store.pendingPrompts.map(\.process.identity))
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.count, 1)
-        await inventory.set([replacement])
+        inventory.setProcesses([replacement])
         await store.evaluateNow()
         identities.append(contentsOf: store.pendingPrompts.map(\.process.identity))
 
@@ -74,7 +74,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testTwoPromptRulesQueueSeriallyAndDismissIsRecorded() async {
-        let inventory = StubInventory(processes: [
+        let inventory = ScriptedInventory(processes: [
             appProcess(pid: 41, command: "/Example", elapsed: "03:00", startTime: "one"),
             appProcess(pid: 42, command: "/Other", elapsed: "03:00", startTime: "two")
         ])
@@ -94,7 +94,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testTwoAutomaticActionsExecuteSeriallyAndReportOutcomes() async {
-        let inventory = StubInventory(processes: [
+        let inventory = ScriptedInventory(processes: [
             appProcess(pid: 41, command: "/Example", elapsed: "03:00", startTime: "one"),
             appProcess(pid: 42, command: "/Other", elapsed: "03:00", startTime: "two")
         ])
@@ -125,7 +125,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testLogOnlyPersistsBoundedVisibleEvents() async {
-        let inventory = StubInventory(processes: [
+        let inventory = ScriptedInventory(processes: [
             appProcess(pid: 41, elapsed: "03:00", startTime: "one"),
             appProcess(pid: 42, elapsed: "03:00", startTime: "two")
         ])
@@ -191,7 +191,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testAutomaticStopMatchesTheTrustedExecutablePath() async {
-        let inventory = Batch08Inventory()
+        let inventory = ScriptedInventory(processes: [])
         let store = makeStore(inventory: inventory)
         let rule = AutoStopRule(
             processName: "Example",
@@ -214,7 +214,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
         )
         var matchedPIDs: [Int32] = []
 
-        await inventory.set([impostor, trusted])
+        inventory.setProcesses([impostor, trusted])
         store.start { _, process in matchedPIDs.append(process.pid); return .stopped }
         store.stop()
         await store.evaluateNow()
@@ -260,7 +260,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     func testEngineDoesNotPollUntilThereIsAnEnabledRule() async {
-        let inventory = CountingAutoStopInventory()
+        let inventory = ScriptedInventory(processes: [])
         let sleeper = ControlledAutoStopSleeper()
         let pollingController = ProcessPollingController { interval in
             await sleeper.sleep(interval: interval)
@@ -276,7 +276,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
 
         store.start(cadence: 60) { _, _ in .rejected }
         for _ in 0..<10 { await Task.yield() }
-        let initialInventoryCount = await inventory.loadCount()
+        let initialInventoryCount = inventory.readCount
         let initialSleepCount = await sleeper.requestCount()
         XCTAssertEqual(initialInventoryCount, 0)
         XCTAssertEqual(initialSleepCount, 0)
@@ -286,9 +286,9 @@ final class AutoStopRulesStoreTests: XCTestCase {
             runtimeMinutes: 1,
             action: .prompt
         )))
-        await inventory.waitForLoad()
+        await inventory.waitForRead(1)
         await sleeper.waitForRequest()
-        let enabledInventoryCount = await inventory.loadCount()
+        let enabledInventoryCount = inventory.readCount
         let enabledSleepCount = await sleeper.requestCount()
         XCTAssertEqual(enabledInventoryCount, 1)
         XCTAssertEqual(enabledSleepCount, 1)
@@ -310,7 +310,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
         let link = directory.appendingPathComponent("linked-tool")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
-        let inventory = Batch08Inventory()
+        let inventory = ScriptedInventory(processes: [])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(AutoStopRule(
             processName: "RealTool",
@@ -329,7 +329,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
             executablePath: kernelPath
         )
         var matched: [Int32] = []
-        await inventory.set([running])
+        inventory.setProcesses([running])
         store.start { _, process in matched.append(process.pid); return .stopped }
         store.stop()
         await store.evaluateNow()
@@ -346,7 +346,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: upgraded)
         try FileManager.default.removeItem(at: real)
         let upgradedPath = AutoStopRuleValidation.canonicalPath(upgraded.path)
-        let reloaded = makeStore(inventory: StubInventory(processes: [appProcess(
+        let reloaded = makeStore(inventory: ScriptedInventory(processes: [appProcess(
             pid: 42, command: upgradedPath, elapsed: "10:00", executablePath: upgradedPath
         )]))
         reloaded.start { _, process in matched.append(process.pid); return .stopped }
@@ -363,7 +363,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
             runtimeMinutes: 1, action: .kill
         )
         userDefaults.set(try JSONEncoder().encode([rule]), forKey: key)
-        let store = makeStore(inventory: StubInventory(processes: [appProcess(
+        let store = makeStore(inventory: ScriptedInventory(processes: [appProcess(
             pid: 41, command: try XCTUnwrap(rule.executablePath), elapsed: "10:00"
         )]))
         var matched: [Int32] = []
@@ -389,7 +389,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
          {"processName":42}, \(otherJSON), \(validJSON)]
         """.utf8)
         userDefaults.set(original, forKey: key)
-        let store = makeStore(inventory: StubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")]))
 
         XCTAssertEqual(store.rules, [valid, other])
         XCTAssertTrue(store.rulesRecoveryMessage?.contains("Rejected 4") == true)
@@ -503,7 +503,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
     }
 
     private func makeStore(
-        inventory: any ProcessInventoryProviding = StubInventory(processes: []),
+        inventory: any ProcessInventoryProviding = ScriptedInventory(processes: []),
         eventLimit: Int = 200
     ) -> AutoStopRulesStore {
         AutoStopRulesStore(
@@ -523,7 +523,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
         startTime: String = "start",
         executablePath: String? = nil
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 0,
             uid: getuid(),
@@ -549,33 +549,6 @@ final class AutoStopRulesStoreTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTAssertTrue(condition())
-    }
-}
-
-private struct StubInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
-private actor CountingAutoStopInventory: ProcessInventoryProviding {
-    private var count = 0
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        count += 1
-        waiters.forEach { $0.resume() }
-        waiters.removeAll()
-        return .success([])
-    }
-
-    func loadCount() -> Int { count }
-
-    func waitForLoad() async {
-        guard count == 0 else { return }
-        await withCheckedContinuation { waiters.append($0) }
     }
 }
 

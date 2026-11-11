@@ -15,7 +15,7 @@ final class ProcessControlActionsTests: XCTestCase {
         pid: Int32, parent: Int32 = 1, path: String = "/Applications/Example.app/Contents/MacOS/Example",
         uid: uid_t? = getuid(), start: String? = nil, zombie: Bool? = nil, stopped: Bool? = nil
     ) -> AppProcess {
-        var process = AppProcess(
+        var process = AppProcess.fixture(
             pid: pid, parentPID: parent, uid: uid, cpu: 0, memoryMB: 1, command: path, executablePath: path,
             elapsedTime: "00:10", startTime: start ?? self.start, isZombie: zombie,
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -25,9 +25,9 @@ final class ProcessControlActionsTests: XCTestCase {
     }
 
     private func manager(
-        _ inventory: ControlTestInventory,
-        signaler: ControlTestSignaler = ControlTestSignaler(),
-        lifecycle: any ProcessLifecycleServicing = ControlTestLifecycle()
+        _ inventory: ScriptedInventory,
+        signaler: FakeSignaler = FakeSignaler(),
+        lifecycle: any ProcessLifecycleServicing = controlLifecycle()
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory, processSignaler: signaler, lifecycle: lifecycle,
@@ -84,14 +84,14 @@ final class ProcessControlActionsTests: XCTestCase {
     func testSignalsGoOnlyToTheVerifiedPID() async {
         for action in ProcessSignalAction.allCases {
             let target = row(pid: 700)
-            let inventory = ControlTestInventory([.success([target])])
-            let signaler = ControlTestSignaler()
+            let inventory = ScriptedInventory([.success([target])], repeatsLast: true)
+            let signaler = FakeSignaler()
             let manager = manager(inventory, signaler: signaler)
 
             let outcome = await manager.sendSignal(action, to: target)
 
             XCTAssertEqual(outcome, .delivered, "\(action)")
-            XCTAssertEqual(signaler.sent, [ControlTestSignaler.Sent(signal: action.signal, pid: 700)])
+            XCTAssertEqual(signaler.sent, [FakeSignaler.Sent(signal: action.signal, pid: 700)])
             XCTAssertEqual(manager.message, action.deliveredMessage(for: target))
         }
     }
@@ -105,8 +105,8 @@ final class ProcessControlActionsTests: XCTestCase {
             (.failure(.commandFailed("ps failed")), .rejected, "Could not verify Example; nothing was sent.")
         ]
         for (read, expected, message) in cases {
-            let signaler = ControlTestSignaler()
-            let manager = manager(ControlTestInventory([read]), signaler: signaler)
+            let signaler = FakeSignaler()
+            let manager = manager(ScriptedInventory([read], repeatsLast: true), signaler: signaler)
             let outcome = await manager.sendSignal(.pause, to: target)
             XCTAssertEqual(outcome, expected)
             XCTAssertEqual(manager.message, message)
@@ -115,8 +115,8 @@ final class ProcessControlActionsTests: XCTestCase {
     }
 
     func testIneligibleProcessIsRefusedBeforeAnyRead() async {
-        let inventory = ControlTestInventory([])
-        let signaler = ControlTestSignaler()
+        let inventory = ScriptedInventory([], repeatsLast: true)
+        let signaler = FakeSignaler()
         let manager = manager(inventory, signaler: signaler)
 
         let outcome = await manager.sendSignal(.hangup, to: row(pid: 701, path: "/usr/sbin/cfprefsd"))
@@ -124,14 +124,14 @@ final class ProcessControlActionsTests: XCTestCase {
         XCTAssertEqual(outcome, .refused)
         XCTAssertEqual(manager.message, "Hangup is not available for cfprefsd. It is part of macOS; pausing or signalling it can leave your session unresponsive.")
         XCTAssertTrue(signaler.sent.isEmpty)
-        XCTAssertEqual(inventory.loads, 0)
+        XCTAssertEqual(inventory.readCount, 0)
     }
 
     func testAKernelRefusalIsReported() async {
         let target = row(pid: 702)
-        let signaler = ControlTestSignaler()
+        let signaler = FakeSignaler()
         signaler.answer = .rejected(errno: EPERM)
-        let manager = manager(ControlTestInventory([.success([target])]), signaler: signaler)
+        let manager = manager(ScriptedInventory([.success([target])], repeatsLast: true), signaler: signaler)
 
         let outcome = await manager.sendSignal(.interrupt, to: target)
 
@@ -156,9 +156,9 @@ final class ProcessControlActionsTests: XCTestCase {
         }
         let target = row(pid: pid, parent: getpid(), path: "/bin/sleep", start: "test-child-\(pid)")
         let manager = ProcessManager(
-            processInventory: ControlTestInventory(repeating: .success([target])),
+            processInventory: ScriptedInventory([.success([target])], repeatsLast: true),
             processSignaler: DarwinProcessSignaler(),
-            lifecycle: ControlTestLifecycle(),
+            lifecycle: controlLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -230,7 +230,7 @@ final class ProcessControlActionsTests: XCTestCase {
         let target = row(pid: 720, stopped: true)
         let state = ProcessConfirmationState()
         let view = Batch10.popover(fixture, manager: manager(
-            ControlTestInventory(repeating: .success([target])), signaler: ControlTestSignaler()
+            ScriptedInventory([.success([target])], repeatsLast: true), signaler: FakeSignaler()
         ), state: state)
 
         view.requestSignal(.pause, for: target)
@@ -289,12 +289,12 @@ final class ProcessControlActionsTests: XCTestCase {
         XCTAssertTrue(pending.summary.hasPrefix("Stop Example and its 2 child processes, one at a time."), pending.summary)
 
         // The grandchild's PID now runs something else: it is not signalled.
-        let verification = ControlTestInventory([.success([
+        let verification = ScriptedInventory([.success([
             parent, child, row(pid: 802, parent: 801, path: "/opt/homebrew/bin/node", start: "Sun Jul 27 09:00:00 2026")
-        ])])
-        let signaler = ControlTestSignaler()
+        ])], repeatsLast: true)
+        let signaler = FakeSignaler()
         let batchManager = ProcessManager(
-            processInventory: verification, processSignaler: signaler, lifecycle: ControlTestLifecycle(),
+            processInventory: verification, processSignaler: signaler, lifecycle: controlLifecycle(),
             settleAfterProcessChange: {}, currentPID: 99_999, dependencies: .inert
         )
         batchManager.enableNotifications = false
@@ -305,10 +305,10 @@ final class ProcessControlActionsTests: XCTestCase {
 
     func testChildLookupFollowsEachInventoryRead() async {
         let parent = row(pid: 820)
-        let inventory = ControlTestInventory([
+        let inventory = ScriptedInventory([
             .success([parent, row(pid: 821, parent: 820), row(pid: 99_999, parent: 822), row(pid: 822)]),
             .success([parent])
-        ])
+        ], repeatsLast: true)
         let manager = manager(inventory)
         await manager.loadProcessList(showMessage: false)
         XCTAssertTrue(manager.hasChildProcesses(parent))
@@ -419,16 +419,16 @@ final class ProcessControlActionsTests: XCTestCase {
             appPath: "/Applications/Example.app",
             userLaunchAgentJobs: [UserLaunchAgentJob(label: "com.example.agent", plistPath: "/Users/Shared/com.example.agent.plist")]
         )
-        let lifecycle = ControlTestLifecycle()
-        lifecycle.unloadResult = LifecycleBatchResult(jobs: [LifecycleJobResult(label: "com.example.agent", state: .changed, detail: "Unloaded and verified.")])
-        lifecycle.bootstrapResult = LifecycleBatchResult(jobs: [LifecycleJobResult(label: "com.example.agent", state: .changed, detail: "Loaded and verified.")])
+        let lifecycle = controlLifecycle()
+        lifecycle.unloadAgentsResult = LifecycleBatchResult(jobs: [LifecycleJobResult(label: "com.example.agent", state: .changed, detail: "Unloaded and verified.")])
+        lifecycle.bootstrapAgentsResult = LifecycleBatchResult(jobs: [LifecycleJobResult(label: "com.example.agent", state: .changed, detail: "Loaded and verified.")])
         let running = row(pid: 900)
         // Quit: before and after.
-        let inventory = ControlTestInventory([
+        let inventory = ScriptedInventory([
             .success([running]), .success([]),
             // Open: before restoring services, after them, after launching.
             .success([]), .success([]), .success([running])
-        ])
+        ], repeatsLast: true)
         let manager = manager(inventory, lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [preset] }
 
@@ -436,7 +436,7 @@ final class ProcessControlActionsTests: XCTestCase {
 
         XCTAssertEqual(result, TaskScopeCommandResult(status: .completed, message: "Restarted Example."))
         XCTAssertEqual(manager.message, "Restarted Example.")
-        XCTAssertEqual(lifecycle.calls, ["unload", "terminate:all", "settle", "daemon.ensure", "bootstrap", "open", "wait"])
+        XCTAssertEqual(lifecycle.calls, ["agents.unload", "terminate.scope:all", "settle", "exists", "daemon", "agents.load", "open", "wait"])
         XCTAssertEqual(manager.lifecycleReport?.title, "Example Restart")
         XCTAssertEqual(manager.lifecycleReport?.jobs.map(\.detail), ["Unloaded and verified.", "Loaded and verified."])
     }
@@ -446,8 +446,8 @@ final class ProcessControlActionsTests: XCTestCase {
             displayName: "Example", mainProcessName: "Example", helperProcessNames: [], protectedProcessNames: [],
             appPath: "/Applications/Example.app"
         )
-        let lifecycle = ControlTestLifecycle()
-        let manager = manager(ControlTestInventory([.failure(.commandFailed("ps failed"))]), lifecycle: lifecycle)
+        let lifecycle = controlLifecycle()
+        let manager = manager(ScriptedInventory([.failure(.commandFailed("ps failed"))], repeatsLast: true), lifecycle: lifecycle)
 
         let result = await manager.restart(preset)
 
@@ -464,8 +464,8 @@ final class ProcessControlActionsTests: XCTestCase {
             displayName: "Example", mainProcessName: "Example", helperProcessNames: [], protectedProcessNames: [],
             appPath: "/Applications/Example.app"
         )
-        let lifecycle = ControlTestLifecycle()
-        let manager = manager(ControlTestInventory(repeating: .success([])), lifecycle: lifecycle)
+        let lifecycle = controlLifecycle()
+        let manager = manager(ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [preset] }
         manager.dependencies.isPresetKeptOff = { _ in true }
         var intentWrites: [Bool] = []
@@ -498,8 +498,8 @@ final class ProcessControlActionsTests: XCTestCase {
     }
 
     func testRestartIsNotOfferedForGlobalProtect() async throws {
-        let lifecycle = ControlTestLifecycle()
-        let manager = manager(ControlTestInventory([]), lifecycle: lifecycle)
+        let lifecycle = controlLifecycle()
+        let manager = manager(ScriptedInventory([], repeatsLast: true), lifecycle: lifecycle)
         let result = await manager.restart(.globalProtect)
         XCTAssertEqual(result.status, .rejected)
         XCTAssertEqual(result.message, "Restart is not offered for the built-in GlobalProtect preset. Use Quit All, then Open.")
@@ -530,90 +530,14 @@ final class ProcessControlActionsTests: XCTestCase {
 
 // MARK: - Fakes
 
-private final class ControlTestInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-    private let repeating: Result<[AppProcess], ProcessInventoryError>?
-    private var count = 0
-
-    init(_ results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-        repeating = nil
-    }
-
-    init(repeating result: Result<[AppProcess], ProcessInventoryError>) {
-        results = []
-        repeating = result
-    }
-
-    var loads: Int { lock.withLock { count } }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            count += 1
-            if let repeating { return repeating }
-            guard !results.isEmpty else {
-                XCTFail("Unscripted inventory read")
-                return .failure(.commandFailed("unscripted"))
-            }
-            return results.count == 1 ? results[0] : results.removeFirst()
-        }
-    }
-}
-
-private final class ControlTestSignaler: ProcessSignaling, @unchecked Sendable {
-    struct Sent: Equatable {
-        var signal: Int32
-        var pid: Int32
-    }
-
-    var answer: ProcessSignalDelivery = .delivered
-    private(set) var sent: [Sent] = []
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        deliver(signal, to: pid) == .delivered
-    }
-
-    func deliver(_ signal: Int32, to pid: Int32) -> ProcessSignalDelivery {
-        sent.append(Sent(signal: signal, pid: pid))
-        return answer
-    }
-
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private final class ControlTestLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [String] = []
-    var unloadResult = LifecycleBatchResult.notNeeded
-    var bootstrapResult = LifecycleBatchResult.notNeeded
-
-    var calls: [String] { lock.withLock { recorded } }
-    private func record(_ call: String) { lock.withLock { recorded.append(call) } }
-
-    func appBundleExists(at path: String) -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { record("open"); return .opened }
-    func settleAfterProcessChange() async { record("settle") }
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { record("terminate:main"); return .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        record("terminate.helper"); return .signalled
-    }
-    func terminateProcesses(for preset: WatchedAppPreset, scope: PresetStopScope) async -> [ProcessTerminationOutcome] {
-        record("terminate:\(scope)"); return [.signalled]
-    }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { record("wait"); return true }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("unload"); return unloadResult }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult {
-        record("unload.preserving"); return unloadResult
-    }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("bootstrap"); return bootstrapResult }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult {
-        record("disable"); return .notNeeded
-    }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enable"); return .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("daemon.ensure"); return .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult {
-        XCTFail("No administrator step"); return .notNeeded
-    }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("daemon.enable"); return .notNeeded }
+/// launchd changes are not needed, a preset stop answers in one
+/// `terminate.scope` call that signalled, the app exists and opens, and waits
+/// for it succeed. Disabling a system daemon would need an administrator, so
+/// it fails the test, as does the GlobalProtect disconnect.
+private func controlLifecycle() -> FakeLifecycle {
+    let lifecycle = FakeLifecycle.allSucceeding()
+    lifecycle.terminateScope = { _, _ in [.signalled] }
+    lifecycle.disableDaemons = nil
+    lifecycle.disconnect = nil
+    return lifecycle
 }

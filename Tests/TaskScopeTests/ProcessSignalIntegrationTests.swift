@@ -34,7 +34,7 @@ final class ProcessSignalIntegrationTests: XCTestCase {
             return
         }
 
-        let target = AppProcess(
+        let target = AppProcess.fixture(
             pid: pid,
             parentPID: ProcessInfo.processInfo.processIdentifier,
             cpu: 0,
@@ -49,7 +49,7 @@ final class ProcessSignalIntegrationTests: XCTestCase {
         )
         let signaler = RecordingDarwinSignaler()
         let manager = ProcessManager(
-            processInventory: FixedProcessInventory(processes: [target]),
+            processInventory: ScriptedInventory(processes: [target]),
             processSignaler: signaler,
             settleAfterProcessChange: {
                 try? await Task.sleep(nanoseconds: 1_400_000_000)
@@ -150,14 +150,6 @@ final class ProcessSignalIntegrationTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(5))
         }
         return FileManager.default.fileExists(atPath: marker.path)
-    }
-}
-
-private struct FixedProcessInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }
 

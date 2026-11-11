@@ -290,7 +290,7 @@ final class ProcessListReaderTests: XCTestCase {
     // MARK: - AppProcess derived fields
 
     func testNameIsPrecomputedAndFollowsCommandEdits() {
-        var process = AppProcess(
+        var process = AppProcess.fixture(
             pid: 1_000,
             parentPID: 1,
             cpu: 0,
@@ -346,7 +346,7 @@ final class ProcessListReaderTests: XCTestCase {
     func testDisplayCommandOnlyAbbreviatesTheHomeDirectoryItself() {
         let home = NSHomeDirectory()
         func process(path: String) -> AppProcess {
-            AppProcess(
+            AppProcess.fixture(
                 pid: 1_000,
                 parentPID: 1,
                 cpu: 0,

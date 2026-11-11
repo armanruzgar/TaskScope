@@ -11,7 +11,7 @@ final class ProcessDetailExtrasTests: XCTestCase {
     private let startSeconds = 1_791_392_687
 
     private func row(pid: Int32 = 42, path: String? = "/usr/bin/python3") -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 7, uid: getuid(), cpu: 0, memoryMB: 1,
             command: "python3", executablePath: path, elapsedTime: "00:01", startTime: start,
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil

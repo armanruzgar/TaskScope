@@ -208,7 +208,7 @@ final class MonotonicRuntimeTests: XCTestCase {
     private func makeStore(processes: [AppProcess] = []) -> AutoStopRulesStore {
         AutoStopRulesStore(
             userDefaults: defaults, key: "rules", eventsKey: "events",
-            inventory: MonotonicInventory(processes: processes),
+            inventory: ScriptedInventory(processes: processes),
             now: { Date(timeIntervalSince1970: 1_000) },
             uptimeClock: { self.clock }
         )
@@ -219,19 +219,14 @@ final class MonotonicRuntimeTests: XCTestCase {
     }
 
     private func process(elapsed: String, start: MonotonicStart) -> AppProcess {
-        AppProcess(pid: 41, parentPID: 1, uid: getuid(), cpu: 1, memoryMB: 1, command: path,
+        AppProcess.fixture(pid: 41, parentPID: 1, uid: getuid(), cpu: 1, memoryMB: 1, command: path,
             executablePath: path, elapsedTime: elapsed, startTime: "start-41", monotonicStart: start,
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
 
     private func row(pid: Int32, uid: uid_t, start: String) -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: "Example",
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: "Example",
             elapsedTime: "00:01", startTime: start, netInKB: nil, netOutKB: nil,
             diskReadBytes: nil, diskWriteBytes: nil)
     }
-}
-
-private struct MonotonicInventory: ProcessInventoryProviding {
-    let processes: [AppProcess]
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> { .success(processes) }
 }

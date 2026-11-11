@@ -62,7 +62,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
         moved.executablePath = "/Applications/Moved.app/Contents/MacOS/Example"
         for replacement in [try zombie(), moved] {
             let inventory = Inventory([replacement])
-            let signaler = Signaler()
+            let signaler = FakeSignaler(everyPIDAlive: true)
             let manager = manager(inventory, signaler: signaler)
             let isZombie = replacement.command == "<defunct>"
             for force in [false, true] {
@@ -71,7 +71,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
                 await manager.batchTerminate([captured.identity], forceKill: force)
                 XCTAssertEqual(manager.batchActionReport?.targets.first?.state, isZombie ? .stale : .identityChanged)
             }
-            XCTAssertTrue(signaler.sent.isEmpty)
+            XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         }
     }
 
@@ -95,7 +95,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
         for action in [AutoStopRule.Action.kill, .prompt] {
             let inventory = Inventory([row()])
             let verification = Inventory([try zombie()])
-            let signaler = Signaler()
+            let signaler = FakeSignaler(everyPIDAlive: true)
             let manager = manager(inventory, verification: verification, signaler: signaler)
             let store = store(inventory)
             store.start(perform: AutoStopActionHandlerFactory.make(processManager: manager, rules: store))
@@ -105,14 +105,14 @@ final class ReviewCoreRegressionTests: XCTestCase {
             if action == .prompt { await store.stopCurrentPrompt() }
             XCTAssertEqual(store.events.first?.outcome, .processEnded)
             XCTAssertFalse(store.events.contains { $0.outcome == .failed })
-            XCTAssertTrue(signaler.sent.isEmpty)
+            XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         }
     }
 
     func testStillMatchingEditCancelsUnsignalledAutomaticStopWithoutFailure() async {
         let inventory = Inventory([row()])
         let verification = BlockingInventory(row())
-        let signaler = Signaler()
+        let signaler = FakeSignaler(everyPIDAlive: true)
         let manager = manager(inventory, verification: verification, signaler: signaler)
         let store = store(inventory)
         store.start(perform: AutoStopActionHandlerFactory.make(processManager: manager, rules: store))
@@ -125,10 +125,10 @@ final class ReviewCoreRegressionTests: XCTestCase {
         XCTAssertTrue(store.update(rule))
         await verification.release()
         await evaluation.value
-        XCTAssertTrue(signaler.sent.isEmpty)
+        XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         XCTAssertTrue(store.events.isEmpty, "An edited, never-signalled stop is not a failure")
         await store.evaluateNow()
-        XCTAssertEqual(signaler.sent, [row().pid])
+        XCTAssertEqual(signaler.sent.map(\.pid), [row().pid])
         XCTAssertEqual(store.events.map(\.outcome), [.stopRequested])
     }
 
@@ -245,18 +245,28 @@ final class ReviewCoreRegressionTests: XCTestCase {
         AutoStopRule(processName: "Example", executablePath: row().executablePath, runtimeMinutes: 1, action: action)
     }
 
+    /// launchd changes are not needed and the VPN disconnects, stops find no
+    /// matching process, waits for the app fail, and nothing is opened.
+    private func reviewLifecycle() -> FakeLifecycle {
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.terminationOutcome = .noMatchingProcesses
+        lifecycle.waitResult = false
+        lifecycle.openResult = .failed("Fake launch failed.")
+        return lifecycle
+    }
+
     private func manager(_ inventory: any ProcessInventoryProviding,
                          verification: (any ProcessInventoryProviding)? = nil,
-                         signaler: Signaler = Signaler(), now: @escaping () -> Date = Date.init) -> ProcessManager {
+                         signaler: FakeSignaler = FakeSignaler(everyPIDAlive: true), now: @escaping () -> Date = Date.init) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: verification ?? inventory,
-                                     processSignaler: signaler, lifecycle: Lifecycle(), settleAfterProcessChange: {},
+                                     processSignaler: signaler, lifecycle: reviewLifecycle(), settleAfterProcessChange: {},
                                      currentPID: 99999, now: now, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }
 
     private func row(pid: Int32 = 42) -> AppProcess {
-        AppProcess(pid: pid, parentPID: 2, uid: getuid(), cpu: 0, memoryMB: 1, command: "Example",
+        AppProcess.fixture(pid: pid, parentPID: 2, uid: getuid(), cpu: 0, memoryMB: 1, command: "Example",
                    executablePath: "/Applications/Example.app/Contents/MacOS/Example", elapsedTime: "10:00",
                    startTime: "Sat Oct 17 05:26:42 2026", netInKB: 12, netOutKB: 13, diskReadBytes: 14, diskWriteBytes: 15)
     }
@@ -304,32 +314,6 @@ private actor BlockingInventory: ProcessInventoryProviding {
     }
 }
 
-private final class Signaler: ProcessSignaling {
-    var sent: [Int32] = []
-    func send(_ signal: Int32, to pid: Int32) -> Bool { sent.append(pid); return true }
-    func isAlive(_ pid: Int32) -> Bool { true }
-}
-
-private struct Lifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
-    func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult { .disconnected }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
-}
-
 private struct LoginService: LoginItemServicing {
     var state: LoginItemState { .notRegistered }
     func register() throws { XCTFail("Unexpected registration") }
@@ -346,7 +330,7 @@ private actor Commands {
         self.bootoutCode = bootoutCode; self.output = output
     }
     nonisolated var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(userID: 501, fileExists: { _ in true }, launchAgentLabel: { _ in "example.agent" },
+        ProcessLifecycleRuntime.fake(userID: 501, fileExists: { _ in true }, launchAgentLabel: { _ in "example.agent" },
                                 runCommand: { await self.run($0, $1) }, loadProcessInventory: { .success([]) },
                                 executablePathForPID: { _ in nil },
                                 sendSignal: { _, _ in XCTFail("Unexpected signal"); return false },

@@ -9,8 +9,8 @@ import XCTest
 final class MenuBarPollingTests: XCTestCase {
     private func makeManager(_ polling: Batch02PollingRecorder) -> ProcessManager {
         let manager = ProcessManager(
-            processInventory: MenuBarPollingInventory(),
-            processSignaler: MenuBarPollingSignaler(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler(rejectingAll: true),
             settleAfterProcessChange: {},
             pollingController: polling.controller(),
             dependencies: .inert
@@ -106,8 +106,8 @@ final class MenuBarPollingTests: XCTestCase {
     func testAFresherReadIsNotRequiredToStayCurrent() async {
         var clock = Date(timeIntervalSince1970: 1_000)
         let manager = ProcessManager(
-            processInventory: MenuBarPollingInventory(),
-            processSignaler: MenuBarPollingSignaler(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler(rejectingAll: true),
             settleAfterProcessChange: {},
             pollingController: Batch02PollingRecorder().controller(),
             now: { clock },
@@ -131,15 +131,4 @@ final class MenuBarPollingTests: XCTestCase {
             .normal
         )
     }
-}
-
-private struct MenuBarPollingInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success([])
-    }
-}
-
-private struct MenuBarPollingSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { false }
-    func isAlive(_ pid: Int32) -> Bool { false }
 }

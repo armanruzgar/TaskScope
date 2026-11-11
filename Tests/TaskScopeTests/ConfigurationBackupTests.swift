@@ -27,7 +27,7 @@ final class ConfigurationBackupTests: XCTestCase {
             watchedApps: WatchedAppsStore(userDefaults: defaults, key: "\(prefix).presets"),
             autoStopRules: AutoStopRulesStore(
                 userDefaults: defaults, key: "\(prefix).rules", eventsKey: "\(prefix).events",
-                inventory: BackupInventory()
+                inventory: ScriptedInventory(processes: [])
             ),
             savedSelections: SavedSelectionsStore(userDefaults: defaults, key: "\(prefix).selections"),
             settings: SettingsStore(userDefaults: defaults, key: "\(prefix).settings"),
@@ -41,7 +41,7 @@ final class ConfigurationBackupTests: XCTestCase {
     )
 
     private func process(_ pid: Int32, _ path: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: path, executablePath: path,
             elapsedTime: "00:01", startTime: "Sat Jul 26 11:20:17 2026", netInKB: nil, netOutKB: nil,
             diskReadBytes: nil, diskWriteBytes: nil
@@ -195,7 +195,7 @@ final class ConfigurationBackupTests: XCTestCase {
 
         defaults.set(Data("not json".utf8), forKey: "broken.rules")
         let broken = AutoStopRulesStore(userDefaults: defaults, key: "broken.rules", eventsKey: "broken.events",
-                                        inventory: BackupInventory())
+                                        inventory: ScriptedInventory(processes: []))
         let refused = broken.previewImport([AutoStopRule(processName: "ok", runtimeMinutes: 5, action: .prompt)])
         XCTAssertEqual(refused.first?.rejectionReason, "Auto-Stop rules are in recovery mode; reset them first.")
         XCTAssertNil(try broken.exportedRulesJSON(), "a recovering store exports nothing")
@@ -347,12 +347,6 @@ final class ConfigurationBackupTests: XCTestCase {
     }
 }
 
-private struct BackupInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success([])
-    }
-}
-
 /// Records nothing and registers nothing with the system.
 private final class BackupHotkeyBackend: HotkeyRegistrationBackend {
     private var nextReference = 1
@@ -366,35 +360,4 @@ private final class BackupHotkeyBackend: HotkeyRegistrationBackend {
     }
 
     func unregister(_ reference: EventHotKeyRef) {}
-}
-
-@MainActor
-final class ConfigurationBackupSectionTests: XCTestCase {
-    func testTheGeneralTabOffersExportAndImportAndShowsTheOutcome() throws {
-        let defaults = try XCTUnwrap(InMemoryUserDefaults(suiteName: "TaskScope.ConfigurationBackupSectionTests.\(UUID().uuidString)"))
-        let settings = SettingsStore(userDefaults: defaults, key: "settings")
-        let actions = ConfigurationBackupActions()
-        var calls: [String] = []
-        let tab = GeneralSettingsTab(
-            settings: settings, notificationService: .shared,
-            backupSection: ConfigurationBackupSection(
-                actions: actions,
-                exportConfiguration: { calls.append("export") },
-                importConfiguration: { calls.append("import") }
-            )
-        )
-        try tab.inspect().find(button: "Export Configuration…").tap()
-        try tab.inspect().find(button: "Import Configuration…").tap()
-        XCTAssertEqual(calls, ["export", "import"])
-
-        actions.importSummary = "Imported settings."
-        actions.exportNote = "The backup leaves out settings."
-        XCTAssertNoThrow(try tab.inspect().find(text: "Imported settings."))
-        XCTAssertNoThrow(try tab.inspect().find(text: "The backup leaves out settings."))
-        XCTAssertThrowsError(
-            try GeneralSettingsTab(settings: settings, notificationService: .shared).inspect()
-                .find(button: "Export Configuration…"),
-            "Without the stores a backup needs, the section is not shown"
-        )
-    }
 }

@@ -28,8 +28,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     /// logged as failed. A confirmed prompt needs only an enabled rule.
     func testStopNowOnAPromptRuleIsAuthorizedThroughTheProductionHandler() async throws {
         let target = appProcess(pid: 41, elapsed: "10:00")
-        let inventory = StubInventory(processes: [target])
-        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let inventory = ScriptedInventory(processes: [target])
+        let signaler = FakeSignaler(alive: [41], exitsOnTerminate: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
         let store = makeStore(inventory: inventory)
         store.start(
@@ -50,8 +50,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
 
     func testAutomaticStopStillRequiresAnEnabledAutoStopRule() async throws {
         let target = appProcess(pid: 41, elapsed: "10:00")
-        let inventory = StubInventory(processes: [target])
-        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let inventory = ScriptedInventory(processes: [target])
+        let signaler = FakeSignaler(alive: [41], exitsOnTerminate: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt)))
@@ -75,8 +75,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
 
     func testAutomaticStopIsAuthorizedForAnEnabledAutoStopRuleThroughTheProductionHandler() async throws {
         let target = appProcess(pid: 41, elapsed: "10:00")
-        let inventory = StubInventory(processes: [target])
-        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let inventory = ScriptedInventory(processes: [target])
+        let signaler = FakeSignaler(alive: [41], exitsOnTerminate: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(AutoStopRule(
@@ -103,17 +103,17 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     func testRetargetingTheRuleWhileAStopIsInFlightCancelsItBeforeTheSignal() async throws {
         let target = appProcess(pid: 41, elapsed: "10:00")
         let verification = BlockingVerificationInventory(processes: [target])
-        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let signaler = FakeSignaler(alive: [41], exitsOnTerminate: true)
         let manager = ProcessManager(
-            processInventory: StubInventory(processes: [target]),
+            processInventory: ScriptedInventory(processes: [target]),
             verificationInventory: verification,
             processSignaler: signaler,
-            lifecycle: AuthorizationLifecycle(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
         manager.enableNotifications = false
-        let store = makeStore(inventory: StubInventory(processes: [target]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [target]))
         XCTAssertTrue(store.add(AutoStopRule(
             processName: "Example",
             executablePath: examplePath,
@@ -143,8 +143,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     }
 
     func testProductionHandlerDoesNotRetainStoreOrManagerAfterStop() async {
-        let inventory = StubInventory(processes: [])
-        let signaler = RecordingSignaler(alivePids: [], exitsOnTerminate: true)
+        let inventory = ScriptedInventory(processes: [])
+        let signaler = FakeSignaler(alive: [], exitsOnTerminate: true)
         var manager: ProcessManager? = makeManager(inventory: inventory, signaler: signaler)
         var store: AutoStopRulesStore? = makeStore(inventory: inventory)
         weak let weakManager = manager
@@ -159,8 +159,8 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     }
 
     func testRetainedProductionHandlerFailsClosedAfterStoreIsReleased() async {
-        let inventory = StubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
-        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let inventory = ScriptedInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let signaler = FakeSignaler(alive: [41], exitsOnTerminate: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
         var store: AutoStopRulesStore? = makeStore(inventory: inventory)
         let rule = AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt)
@@ -178,13 +178,13 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
 
     private func makeManager(
         inventory: any ProcessInventoryProviding,
-        signaler: RecordingSignaler
+        signaler: FakeSignaler
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
             processSignaler: signaler,
-            lifecycle: AuthorizationLifecycle(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -203,7 +203,7 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     }
 
     private func appProcess(pid: Int32, elapsed: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: getuid(),
@@ -239,14 +239,6 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
     }
 }
 
-private struct StubInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
 /// Blocks the first read (the manager's pre-signal verification) until released.
 private actor BlockingVerificationInventory: ProcessInventoryProviding {
     private let processes: [AppProcess]
@@ -277,51 +269,4 @@ private actor BlockingVerificationInventory: ProcessInventoryProviding {
         firstCallContinuation?.resume()
         firstCallContinuation = nil
     }
-}
-
-private final class RecordingSignaler: ProcessSignaling {
-    struct SentSignal: Equatable {
-        var signal: Int32
-        var pid: Int32
-    }
-
-    private var alivePids: Set<Int32>
-    private let exitsOnTerminate: Bool
-    private(set) var sent: [SentSignal] = []
-
-    init(alivePids: Set<Int32>, exitsOnTerminate: Bool) {
-        self.alivePids = alivePids
-        self.exitsOnTerminate = exitsOnTerminate
-    }
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        sent.append(SentSignal(signal: signal, pid: pid))
-        if signal == SIGTERM, exitsOnTerminate {
-            alivePids.remove(pid)
-        }
-        return true
-    }
-
-    func isAlive(_ pid: Int32) -> Bool {
-        alivePids.contains(pid)
-    }
-}
-
-private struct AuthorizationLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { false }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

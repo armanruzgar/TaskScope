@@ -98,7 +98,7 @@ final class AppShellRegressionTests: XCTestCase {
             }
         )
         defer { session.cleanUp() }
-        let stores = TaskScopeLaunchStores(session: session, inventory: AppShellInventory())
+        let stores = TaskScopeLaunchStores(session: session, inventory: ScriptedInventory(processes: []))
         var events: [String] = []
         let bus = AppCommandBus()
         let delegate = makeDelegate(session: session, bus: bus, arguments: ["TaskScope", "--verify-startup"],
@@ -259,7 +259,7 @@ final class AppShellRegressionTests: XCTestCase {
 
     @MainActor
     func testCadenceChangesDoNotFloodVisibleHistory() async throws {
-        let inventory = AppShellInventory()
+        let inventory = ScriptedInventory(processes: [])
         let history = ProcessHistory(inventory: inventory)
         history.beginSampling(cadence: 10)
         defer { history.endSampling() }
@@ -272,13 +272,13 @@ final class AppShellRegressionTests: XCTestCase {
             try await Task.sleep(nanoseconds: 30_000_000)
         }
         XCTAssertEqual(history.samples.count, 1, "Changing cadence must reschedule without sampling")
-        let loads = await inventory.loadCount
+        let loads = inventory.readCount
         XCTAssertEqual(loads, 1, "Cadence changes must not trigger extra inventory reads")
     }
 
     @MainActor
     func testCadenceRescheduleStillSamplesAndPausesWithoutConsumers() async throws {
-        let inventory = AppShellInventory()
+        let inventory = ScriptedInventory(processes: [])
         let history = ProcessHistory(inventory: inventory)
         history.beginSampling(cadence: 60)
         defer { history.stop() }
@@ -383,15 +383,6 @@ final class AppShellRegressionTests: XCTestCase {
         pid: pid_t, uid: uid_t = 501, bundleIdentifier: String = "example.TaskScope"
     ) -> TaskScopeLaunchSession.Instance {
         .init(processID: pid, userID: uid, bundleIdentifier: bundleIdentifier)
-    }
-}
-
-private actor AppShellInventory: ProcessInventoryProviding {
-    private(set) var loadCount = 0
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        loadCount += 1
-        return .success([])
     }
 }
 

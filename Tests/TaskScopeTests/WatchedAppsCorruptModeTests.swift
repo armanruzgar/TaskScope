@@ -1,13 +1,13 @@
 import XCTest
 @testable import TaskScope
 
-/// P10 — in corrupt mode `WatchedAppsStore` sets `allowsPersistence = false` but every
+/// (Audit item P10.) In corrupt mode `WatchedAppsStore` sets `allowsPersistence = false` but every
 /// mutating API still succeeds and still mutates `@Published presets`. Callers
 /// (`SettingsView.savePresetEditor()`, `SettingsView.importPresets(from:)`) only inspect the
 /// return value, so recovery work is accepted, reported as saved, and silently dropped.
 @MainActor
-final class P10CorruptModeSilentDiscardTests: XCTestCase {
-    private let suiteName = "TaskScope.P10CorruptModeSilentDiscardTests.\(UUID().uuidString)"
+final class WatchedAppsCorruptModeTests: XCTestCase {
+    private let suiteName = "TaskScope.WatchedAppsCorruptModeTests.\(UUID().uuidString)"
     private let key = "watched-presets-p10-tests"
     private let corruptBytes = Data([0xFE, 0xED])
     nonisolated(unsafe) private var defaults: UserDefaults!

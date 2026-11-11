@@ -208,7 +208,7 @@ enum ReadmeScreenshotData {
                 (($0.readMB - diskRate.readMB * secondsEarlier) * 1_048_576,
                  ($0.writtenMB - diskRate.writtenMB * secondsEarlier) * 1_048_576)
             }
-            return AppProcess(
+            return AppProcess.fixture(
                 pid: pid, parentPID: parent, uid: account.uid, ownerName: account.name, cpu: cpu, memoryMB: memoryMB,
                 command: path, executablePath: path, elapsedTime: "01:12:40", startTime: startTime,
                 netInKB: net?.0, netOutKB: net?.1, diskReadBytes: disk?.0, diskWriteBytes: disk?.1
@@ -355,13 +355,13 @@ struct ReadmeScreenshotFixture {
     init(rows: [ReadmeScreenshotData.Row]) async {
         let earlier = rows.map { $0.process(secondsEarlier: ReadmeScreenshotData.rateInterval) }
         let current = rows.map { $0.process() }
-        let inventory = UIScriptedInventory(results: [.success(earlier), .success(current)])
+        let inventory = ScriptedInventory([.success(earlier), .success(current)], repeatsLast: true)
         let defaults = InMemoryUserDefaults(suiteName: "TaskScope.ReadmeScreenshotTests.\(UUID().uuidString)")!
         settings = SettingsStore(userDefaults: defaults, key: "settings")
         watchedApps = WatchedAppsStore(userDefaults: defaults, key: "presets")
         savedSelections = SavedSelectionsStore(userDefaults: defaults, key: "selections")
         autoStopRules = AutoStopRulesStore(
-            userDefaults: defaults, key: "rules", eventsKey: "events", inventory: UIInventory(processes: current)
+            userDefaults: defaults, key: "rules", eventsKey: "events", inventory: ScriptedInventory(processes: current)
         )
         let series = ReadmeScreenshotData.history
         let historyClock = ReadmeScreenshotClock(
@@ -371,7 +371,7 @@ struct ReadmeScreenshotFixture {
         // adds the rest once the view is sampling. Its sleep never waits, so
         // no timer adds samples while the image settles.
         history = ProcessHistory(
-            inventory: UIInventory(processes: [Self.historySample(series[0])]),
+            inventory: ScriptedInventory(processes: [Self.historySample(series[0])]),
             maxSamples: series.count,
             now: { historyClock.next() },
             sleep: { _ in false }
@@ -381,7 +381,7 @@ struct ReadmeScreenshotFixture {
         )
         manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
-            processSignaler: UIRecordingSignaler(), lifecycle: UILifecycle(), settleAfterProcessChange: {},
+            processSignaler: FakeSignaler(), lifecycle: FakeLifecycle.forViewTests(), settleAfterProcessChange: {},
             currentPID: ReadmeScreenshotData.rendererPID,
             now: { listClock.next() },
             dependencies: .inert
@@ -426,7 +426,7 @@ struct ReadmeScreenshotFixture {
     }
 
     private static func historySample(_ sample: (cpu: Double, memoryMB: Double)) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: 2, parentPID: 1, cpu: sample.cpu, memoryMB: sample.memoryMB, command: "/usr/libexec/sample",
             elapsedTime: "00:00", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
         )

@@ -161,11 +161,11 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
     }
 
     private var process: AppProcess {
-        AppProcess(pid: 42, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: "Example", executablePath: "/test/Example", elapsedTime: "10:00", startTime: "start-42", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
+        AppProcess.fixture(pid: 42, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: "Example", executablePath: "/test/Example", elapsedTime: "10:00", startTime: "start-42", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
 
     private func makeRulesStore(eventLimit: Int = 200) -> AutoStopRulesStore {
-        AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: ForwardCompatibilityInventory(processes: [process]), eventLimit: eventLimit)
+        AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: ScriptedInventory(processes: [process]), eventLimit: eventLimit)
     }
 
     private func object<Value: Encodable>(_ value: Value) throws -> [String: Any] {
@@ -178,13 +178,5 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
 
     private func rows(_ key: String) throws -> [[String: Any]] {
         try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(defaults.data(forKey: key))) as? [[String: Any]])
-    }
-}
-
-private struct ForwardCompatibilityInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }

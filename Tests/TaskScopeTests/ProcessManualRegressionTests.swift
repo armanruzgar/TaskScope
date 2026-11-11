@@ -22,7 +22,7 @@ final class ProcessManualRegressionTests: XCTestCase {
     }
 
     func testAppPathOnlyEditRebaselinesNotificationsInBothDirections() async {
-        let inventory = ManualInventory([row(path: "/Users/test/Applications/Example.app/Contents/MacOS/Example")])
+        let inventory = ScriptedInventory(processes: [row(path: "/Users/test/Applications/Example.app/Contents/MacOS/Example")])
         let manager = manager(inventory)
         manager.enableNotifications = true
         var preset = examplePreset()
@@ -41,7 +41,7 @@ final class ProcessManualRegressionTests: XCTestCase {
     }
 
     func testMovingHelperBetweenPresetsRebaselinesEvenWithSameFlatNames() async {
-        let manager = manager(ManualInventory([]))
+        let manager = manager(ScriptedInventory(processes: []))
         manager.enableNotifications = true
         var first = examplePreset()
         var second = examplePreset()
@@ -65,26 +65,26 @@ final class ProcessManualRegressionTests: XCTestCase {
         var missingPath = captured
         missingPath.executablePath = nil
         for replacement in [row(path: "/Applications/Moved.app/Contents/MacOS/Example"), reused, missingPath] {
-            let inventory = ManualInventory([replacement])
-            let signaler = ManualSignaler()
+            let inventory = ScriptedInventory(processes: [replacement])
+            let signaler = FakeSignaler(everyPIDAlive: true)
             let manager = manager(inventory, signaler: signaler)
             let result = await manager.terminate(captured)
             XCTAssertEqual(result, .identityChanged, "A present PID with a changed identity is not absent")
             XCTAssertTrue(manager.message.contains("identity changed"))
-            XCTAssertTrue(signaler.sent.isEmpty)
+            XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
             await manager.batchTerminate([captured.identity])
             XCTAssertEqual(manager.batchActionReport?.targets.first?.state.label, "Identity changed")
-            XCTAssertTrue(signaler.sent.isEmpty)
+            XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         }
     }
 
     func testAbsentSingleStopPublishesVerifiedInventory() async {
         let captured = row()
-        let inventory = ManualInventory([captured])
+        let inventory = ScriptedInventory(processes: [captured])
         let manager = manager(inventory)
         await manager.loadProcessList()
         manager.toggleSelection(captured.pid)
-        inventory.result = .success([])
+        inventory.script([.success([])], repeatsLast: true)
         let result = await manager.terminate(captured)
         XCTAssertEqual(result, .stale)
         XCTAssertTrue(manager.displayProcesses().isEmpty, "A proven absent row must leave the displayed list")
@@ -92,14 +92,14 @@ final class ProcessManualRegressionTests: XCTestCase {
     }
 
     func testStaleListTimestampTracksDisplayedRowsNotWatchedPolls() async {
-        let inventory = ManualInventory([row()])
+        let inventory = ScriptedInventory(processes: [row()])
         var clock = Date(timeIntervalSince1970: 100)
         let manager = manager(inventory, now: { clock })
         await manager.loadProcessList()
         let listTime = clock
         clock = Date(timeIntervalSince1970: 200)
         await manager.refreshWatchedStatus()
-        inventory.result = .failure(.commandFailed("read failed"))
+        inventory.script([.failure(.commandFailed("read failed"))], repeatsLast: true)
         await manager.loadProcessList()
         XCTAssertEqual(manager.lastSuccessfulInventoryAt, listTime)
         XCTAssertNotNil(manager.processLoadError)
@@ -131,7 +131,7 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testExplicitListRefreshJoiningQueuedSilentReadPublishesResult() async {
         let verification = ManualBlockingInventory(result: .success([]))
-        let manager = manager(ManualInventory([row()]), verification: verification)
+        let manager = manager(ScriptedInventory(processes: [row()]), verification: verification)
         let mutation = Task { await manager.terminate(self.row()) }
         await verification.waitUntilEntered()
         let silent = Task { await manager.loadProcessList(showMessage: false) }
@@ -147,7 +147,7 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testCancelledBusRefreshWaitingBehindMutationIsRejectedWithoutFailureMessage() async {
         let verification = ManualBlockingInventory(result: .success([]))
-        let manager = manager(ManualInventory([]), verification: verification)
+        let manager = manager(ScriptedInventory(processes: []), verification: verification)
         manager.setMessage("existing status")
         let coordinator = AppCommandCoordinator(processManager: manager, presets: { [] })
         let bus = AppCommandBus()
@@ -168,8 +168,8 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testCancelledManualVerificationIsNotAnInventoryFailure() async {
         let verification = ManualBlockingInventory(result: .success([row()]), honorsCancellation: true)
-        let signaler = ManualSignaler()
-        let manager = manager(ManualInventory([]), verification: verification, signaler: signaler)
+        let signaler = FakeSignaler(everyPIDAlive: true)
+        let manager = manager(ScriptedInventory(processes: []), verification: verification, signaler: signaler)
         let stop = Task { await manager.terminate(self.row()) }
         await verification.waitUntilEntered()
         stop.cancel()
@@ -177,7 +177,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let result = await stop.value
         XCTAssertEqual(result, .rejected)
         XCTAssertEqual(manager.message, "Stop for Example was cancelled.")
-        XCTAssertTrue(signaler.sent.isEmpty)
+        XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         XCTAssertNil(manager.processLoadError)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: nil).isEmpty)
     }
@@ -185,8 +185,8 @@ final class ProcessManualRegressionTests: XCTestCase {
     func testCancelledBatchVerificationDoesNotPublishInventoryFailure() async {
         let captured = row()
         let verification = ManualBlockingInventory(result: .success([captured]), honorsCancellation: true)
-        let signaler = ManualSignaler()
-        let manager = manager(ManualInventory([]), verification: verification, signaler: signaler)
+        let signaler = FakeSignaler(everyPIDAlive: true)
+        let manager = manager(ScriptedInventory(processes: []), verification: verification, signaler: signaler)
         manager.setMessage("existing status")
         let stop = Task { await manager.batchTerminate([captured.identity]) }
         await verification.waitUntilEntered()
@@ -194,14 +194,14 @@ final class ProcessManualRegressionTests: XCTestCase {
         await verification.release()
         await stop.value
         XCTAssertEqual(manager.message, "existing status")
-        XCTAssertTrue(signaler.sent.isEmpty)
+        XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
         XCTAssertNil(manager.processLoadError)
         XCTAssertNil(manager.batchActionReport)
     }
 
     func testCancelledOpenVerificationIsRejectedWithoutDiagnostics() async {
         let verification = ManualBlockingInventory(result: .success([]), honorsCancellation: true)
-        let manager = manager(ManualInventory([]), verification: verification)
+        let manager = manager(ScriptedInventory(processes: []), verification: verification)
         manager.setMessage("existing status")
         let preset = examplePreset()
         let open = Task { await manager.openApp(preset) }
@@ -226,7 +226,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let signals = ManualSignalLog()
         // The production service on a fake runtime: every signal it sends
         // records whether the stop had inherited the caller's cancellation.
-        let lifecycle = SystemProcessLifecycleService(runtime: ProcessLifecycleRuntime(
+        let lifecycle = SystemProcessLifecycleService(runtime: ProcessLifecycleRuntime.fake(
             userID: getuid(), fileExists: { _ in false }, launchAgentLabel: { _ in nil },
             runCommand: { _, _ in XCTFail("Unexpected command"); return ShellCommandResult(command: "fake", stdout: "", stderr: "", exitCode: 1) },
             loadProcessInventory: { Task.isCancelled ? .failure(.cancelled) : .success(rows) },
@@ -240,7 +240,7 @@ final class ProcessManualRegressionTests: XCTestCase {
             sleep: { _ in _ = await blocked.load(fetchExtendedStats: false) }, systemUptime: { 0 },
             isAppBundle: { _ in false }
         ))
-        let inventory = ManualInventory(rows)
+        let inventory = ScriptedInventory(processes: rows)
         let manager = manager(inventory, lifecycle: lifecycle)
         var preset = examplePreset()
         preset.helperProcessNames = ["Helper"]
@@ -251,7 +251,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let stop = Task { await bus.submit(.stopPresetEntity(.init(id: preset.id, displayName: preset.displayName))) }
         await blocked.waitUntilEntered()
         stop.cancel()
-        inventory.result = .success([])
+        inventory.script([.success([])], repeatsLast: true)
         await blocked.release()
         let result = await stop.value
         XCTAssertEqual(result.status, .completed)
@@ -264,8 +264,8 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testCancelledBusStopWaitingForGateDoesNotStartLifecycleWork() async {
         let verification = ManualBlockingInventory(result: .success([]))
-        let lifecycle = ManualLifecycle()
-        let manager = manager(ManualInventory([]), verification: verification, lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        let manager = manager(ScriptedInventory(processes: []), verification: verification, lifecycle: lifecycle)
         let preset = examplePreset()
         let coordinator = AppCommandCoordinator(processManager: manager, presets: { [preset] })
         let bus = AppCommandBus()
@@ -278,15 +278,15 @@ final class ProcessManualRegressionTests: XCTestCase {
         let result = await stop.value
         XCTAssertEqual(result.status, .rejected)
         XCTAssertTrue(result.message.contains("cancelled"))
-        XCTAssertTrue(lifecycle.terminatedNames.isEmpty)
+        XCTAssertFalse(lifecycle.calls.contains { $0.hasPrefix("terminate") })
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
         await verification.release()
         _ = await mutation.value
     }
 
     func testCancelledStopVerificationDoesNotRecordInventoryFailure() async {
-        let inventory = ManualInventory([])
-        inventory.result = .failure(.cancelled)
+        let inventory = ScriptedInventory(processes: [])
+        inventory.script([.failure(.cancelled)], repeatsLast: true)
         let manager = manager(inventory)
         let preset = examplePreset()
         manager.setMessage("existing status")
@@ -299,12 +299,12 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testOpenReadinessRemainsCancellableWithoutFailureDiagnostics() async {
         let blocked = ManualBlockingInventory(result: .success([]), honorsCancellation: true)
-        let lifecycle = ManualLifecycle()
-        lifecycle.onWait = {
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.waitForMain = { _, _ in
             _ = await blocked.load(fetchExtendedStats: false)
             return !Task.isCancelled
         }
-        let manager = manager(ManualInventory([]), lifecycle: lifecycle)
+        let manager = manager(ScriptedInventory(processes: []), lifecycle: lifecycle)
         let preset = examplePreset()
         let open = Task { await manager.openApp(preset) }
         await blocked.waitUntilEntered()
@@ -314,14 +314,14 @@ final class ProcessManualRegressionTests: XCTestCase {
         XCTAssertEqual(result.status, .rejected)
         XCTAssertTrue(result.message.contains("was cancelled"))
         XCTAssertTrue(result.message.contains("may already have changed"))
-        XCTAssertEqual(lifecycle.openRequests, 1)
+        XCTAssertEqual(lifecycle.openedPaths.count, 1)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
     }
 
     func testSelfPIDRefusedForStopForceStopAndAutoStopHandler() async {
         let own = row(pid: 4242)
-        let inventory = ManualInventory([own])
-        let signaler = ManualSignaler()
+        let inventory = ScriptedInventory(processes: [own])
+        let signaler = FakeSignaler(everyPIDAlive: true)
         let manager = manager(inventory, signaler: signaler, currentPID: own.pid)
         for force in [false, true] {
             let result = await manager.terminate(own, forceKill: force)
@@ -336,8 +336,8 @@ final class ProcessManualRegressionTests: XCTestCase {
             let result = await handler(rule, own, kind)
             XCTAssertEqual(result, .refused)
         }
-        XCTAssertTrue(signaler.sent.isEmpty)
-        XCTAssertEqual(inventory.count, 0)
+        XCTAssertTrue(signaler.sent.map(\.pid).isEmpty)
+        XCTAssertEqual(inventory.readCount, 0)
     }
 
     func testLifecycleControllerExcludesSelfForBothPoliciesAndEscalation() async {
@@ -345,7 +345,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let other = row(pid: 4243)
         for rows in [[own], [own, other]] {
             let signals = ManualSignalLog()
-            let runtime = ProcessLifecycleRuntime(
+            let runtime = ProcessLifecycleRuntime.fake(
                 userID: getuid(), fileExists: { _ in false }, launchAgentLabel: { _ in nil },
                 runCommand: { _, _ in XCTFail("Unexpected command"); return ShellCommandResult(command: "fake", stdout: "", stderr: "", exitCode: 1) },
                 loadProcessInventory: { .success(rows) },
@@ -377,8 +377,8 @@ final class ProcessManualRegressionTests: XCTestCase {
     func testChangedIdentityFromStopHandlerIsNeverRecordedAsEnded() async {
         for action in [AutoStopRule.Action.prompt, .kill] {
             let captured = row()
-            let inventory = ManualInventory([captured])
-            let verification = ManualInventory([row(path: "/Applications/Moved.app/Contents/MacOS/Example")])
+            let inventory = ScriptedInventory(processes: [captured])
+            let verification = ScriptedInventory(processes: [row(path: "/Applications/Moved.app/Contents/MacOS/Example")])
             let manager = manager(inventory, verification: verification)
             let defaults = makeDefaults()
             let store = AutoStopRulesStore(userDefaults: defaults, inventory: inventory,
@@ -396,7 +396,7 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testMovedExecutableDoesNotRecordPendingStopAsExited() async {
         let captured = row()
-        let inventory = ManualInventory([captured])
+        let inventory = ScriptedInventory(processes: [captured])
         let defaults = makeDefaults()
         let store = AutoStopRulesStore(userDefaults: defaults, inventory: inventory,
                                       pollingController: ProcessPollingController(sleep: { _ in false }))
@@ -405,7 +405,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         store.start { _, _ in .requestedStillRunning }
         await store.evaluateNow()
         store.stop()
-        inventory.result = .success([row(path: "/Applications/Moved.app/Contents/MacOS/Example")])
+        inventory.script([.success([row(path: "/Applications/Moved.app/Contents/MacOS/Example")])], repeatsLast: true)
         await store.evaluateNow()
         XCTAssertFalse(store.events.contains { $0.outcome == .stopped || $0.outcome == .processEnded },
                        "The same PID and start time still run after the bundle moves")
@@ -414,7 +414,7 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testMovedExecutableRetiresPromptWithoutClaimingItEnded() async {
         let captured = row()
-        let inventory = ManualInventory([captured])
+        let inventory = ScriptedInventory(processes: [captured])
         let defaults = makeDefaults()
         let store = AutoStopRulesStore(userDefaults: defaults, inventory: inventory)
         store.add(AutoStopRule(processName: captured.name, executablePath: captured.executablePath,
@@ -423,7 +423,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         XCTAssertEqual(store.pendingPrompts.count, 1)
         var changed = captured
         changed.executablePath = nil
-        inventory.result = .success([changed])
+        inventory.script([.success([changed])], repeatsLast: true)
         await store.evaluateNow()
         XCTAssertTrue(store.pendingPrompts.isEmpty)
         XCTAssertFalse(store.events.contains { $0.outcome == .processEnded })
@@ -431,13 +431,13 @@ final class ProcessManualRegressionTests: XCTestCase {
     }
 
     func testDismissedNameOnlyPromptDoesNotReturnAfterExecutableMoves() async {
-        let inventory = ManualInventory([row()])
+        let inventory = ScriptedInventory(processes: [row()])
         let defaults = makeDefaults()
         let store = AutoStopRulesStore(userDefaults: defaults, inventory: inventory)
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt))
         await store.evaluateNow()
         store.dismissCurrentPrompt()
-        inventory.result = .success([row(path: "/Applications/Moved.app/Contents/MacOS/Example")])
+        inventory.script([.success([row(path: "/Applications/Moved.app/Contents/MacOS/Example")])], repeatsLast: true)
         await store.evaluateNow()
         XCTAssertTrue(store.pendingPrompts.isEmpty, "Moving a still-running executable must not undo Dismiss")
         await store.evaluateNow()
@@ -447,8 +447,8 @@ final class ProcessManualRegressionTests: XCTestCase {
     private func manager(
         _ inventory: any ProcessInventoryProviding,
         verification: (any ProcessInventoryProviding)? = nil,
-        signaler: ManualSignaler = ManualSignaler(),
-        lifecycle: any ProcessLifecycleServicing = ManualLifecycle(),
+        signaler: FakeSignaler = FakeSignaler(everyPIDAlive: true),
+        lifecycle: any ProcessLifecycleServicing = FakeLifecycle.allSucceeding(),
         currentPID: Int32 = 99999,
         now: @escaping () -> Date = Date.init
     ) -> ProcessManager {
@@ -467,7 +467,7 @@ final class ProcessManualRegressionTests: XCTestCase {
     }
 
     private func row(pid: Int32 = 42, path: String = "/Applications/Example.app/Contents/MacOS/Example") -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 1,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 1,
                    command: "/Applications/Example.app/Contents/MacOS/Example", executablePath: path,
                    elapsedTime: "10:00", startTime: "same-start", netInKB: nil, netOutKB: nil,
                    diskReadBytes: nil, diskWriteBytes: nil)
@@ -477,16 +477,6 @@ final class ProcessManualRegressionTests: XCTestCase {
         let deadline = Date().addingTimeInterval(3)
         while !condition(), Date() < deadline { await Task.yield() }
         XCTAssertTrue(condition(), "Condition did not become true")
-    }
-}
-
-private final class ManualInventory: ProcessInventoryProviding, @unchecked Sendable {
-    var result: Result<[AppProcess], ProcessInventoryError>
-    private(set) var count = 0
-    init(_ rows: [AppProcess]) { result = .success(rows) }
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        count += 1
-        return result
     }
 }
 
@@ -523,12 +513,6 @@ private actor ManualBlockingInventory: ProcessInventoryProviding {
     }
 }
 
-private final class ManualSignaler: ProcessSignaling {
-    var sent: [Int32] = []
-    func send(_ signal: Int32, to pid: Int32) -> Bool { sent.append(pid); return true }
-    func isAlive(_ pid: Int32) -> Bool { true }
-}
-
 private final class ManualSignalLog: @unchecked Sendable {
     private let lock = NSLock()
     private var entries: [(Int32, Int32)] = []
@@ -542,33 +526,4 @@ private final class ManualCancellationLog: @unchecked Sendable {
     private var cancelled = false
     var sawCancellation: Bool { lock.withLock { cancelled } }
     func record() { lock.withLock { cancelled = true } }
-}
-
-private final class ManualLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    var onWait: (@Sendable () async -> Bool)?
-    private(set) var openRequests = 0
-    private(set) var terminatedNames: [String] = []
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        terminatedNames.append(preset.mainProcessName)
-        return .signalled
-    }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        terminatedNames.append(name)
-        return .signalled
-    }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { await onWait?() ?? true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { openRequests += 1; return .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await onWait?() ?? true }
-
 }

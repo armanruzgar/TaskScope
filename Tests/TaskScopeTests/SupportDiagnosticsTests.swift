@@ -230,9 +230,9 @@ final class SupportDiagnosticsTests: XCTestCase {
     @MainActor
     func testAllLifecycleActionsRecordFailuresWithoutRawMessages() async throws {
         let preset = Self.privatePreset
-        let lifecycle = DiagnosticsLifecycleService()
-        let manager = ProcessManager(processInventory: DiagnosticsInventory(), verificationInventory: DiagnosticsInventory(),
-                                     processSignaler: DiagnosticsSignaler(), lifecycle: lifecycle,
+        let lifecycle = diagnosticsLifecycle()
+        let manager = ProcessManager(processInventory: ScriptedInventory(processes: []), verificationInventory: ScriptedInventory(processes: []),
+                                     processSignaler: FakeSignaler.forbidding("Diagnostics must not signal processes"), lifecycle: lifecycle,
                                      settleAfterProcessChange: {}, now: { self.date }, dependencies: .inert)
         manager.enableNotifications = false
         manager.dependencies.watchedPresets = { [preset] }
@@ -255,9 +255,9 @@ final class SupportDiagnosticsTests: XCTestCase {
     @MainActor
     func testEarlyInventoryFailureDoesNotReusePreviousJobReport() async {
         let preset = Self.privatePreset
-        let manager = ProcessManager(processInventory: DiagnosticsInventory(fails: true),
-                                     verificationInventory: DiagnosticsInventory(fails: true), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(appExists: false), settleAfterProcessChange: {}, dependencies: .inert)
+        let manager = ProcessManager(processInventory: ScriptedInventory(failing: .commandFailed(SupportDiagnosticsTests.secret)),
+                                     verificationInventory: ScriptedInventory(failing: .commandFailed(SupportDiagnosticsTests.secret)), processSignaler: FakeSignaler.forbidding("Diagnostics must not signal processes"),
+                                     lifecycle: diagnosticsLifecycle(appExists: false), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         // Missing-bundle Open restores overrides without reading inventory.
         manager.dependencies.isPresetKeptOff = { _ in true }
@@ -272,14 +272,14 @@ final class SupportDiagnosticsTests: XCTestCase {
     @MainActor
     func testEarlyOpenFailuresHaveUsefulCategoriesWithoutAnExistingReport() async {
         let preset = Self.privatePreset
-        let cases: [(DiagnosticsLifecycleService, LifecycleDiagnosticFailure.Reason)] = [
-            (.init(appExists: false), .appBundleMissing),
-            (.init(systemServiceFails: true), .systemServiceFailed),
-            (.init(fails: false), .launchFailed)
+        let cases: [(FakeLifecycle, LifecycleDiagnosticFailure.Reason)] = [
+            (diagnosticsLifecycle(appExists: false), .appBundleMissing),
+            (diagnosticsLifecycle(systemServiceFails: true), .systemServiceFailed),
+            (diagnosticsLifecycle(fails: false), .launchFailed)
         ]
         for (service, expected) in cases {
-            let manager = ProcessManager(processInventory: DiagnosticsInventory(), verificationInventory: DiagnosticsInventory(),
-                                         processSignaler: DiagnosticsSignaler(), lifecycle: service,
+            let manager = ProcessManager(processInventory: ScriptedInventory(processes: []), verificationInventory: ScriptedInventory(processes: []),
+                                         processSignaler: FakeSignaler.forbidding("Diagnostics must not signal processes"), lifecycle: service,
                                          settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             await manager.openApp(preset)
@@ -290,18 +290,18 @@ final class SupportDiagnosticsTests: XCTestCase {
     @MainActor
     func testSuccessfulAndSkippedActionsDoNotCreateFailuresAndBackgroundIsMarked() async {
         let preset = Self.privatePreset
-        let manager = ProcessManager(processInventory: DiagnosticsInventory(),
-                                     verificationInventory: DiagnosticsInventory(), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(fails: false), settleAfterProcessChange: {}, dependencies: .inert)
+        let manager = ProcessManager(processInventory: ScriptedInventory(processes: []),
+                                     verificationInventory: ScriptedInventory(processes: []), processSignaler: FakeSignaler.forbidding("Diagnostics must not signal processes"),
+                                     lifecycle: diagnosticsLifecycle(fails: false), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         manager.dependencies.watchedPresets = { [preset] }
         await manager.quitAllKillable(preset)
         await manager.keepOff(preset, recordIntent: false)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
 
-        let failing = ProcessManager(processInventory: DiagnosticsInventory(fails: true),
-                                     verificationInventory: DiagnosticsInventory(fails: true), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(), settleAfterProcessChange: {}, dependencies: .inert)
+        let failing = ProcessManager(processInventory: ScriptedInventory(failing: .commandFailed(SupportDiagnosticsTests.secret)),
+                                     verificationInventory: ScriptedInventory(failing: .commandFailed(SupportDiagnosticsTests.secret)), processSignaler: FakeSignaler.forbidding("Diagnostics must not signal processes"),
+                                     lifecycle: diagnosticsLifecycle(), settleAfterProcessChange: {}, dependencies: .inert)
         failing.dependencies.isPresetKeptOff = { _ in true }
         await failing.keepOff(preset, recordIntent: false)
         XCTAssertEqual(failing.lifecycleDiagnostics.failures(for: preset.id).first?.backgroundEnforcement, true)
@@ -368,45 +368,20 @@ private final class DiagnosticsInspectionHarness: @unchecked Sendable {
     }
 }
 
-private struct DiagnosticsInventory: ProcessInventoryProviding {
-    var fails = false
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        fails ? .failure(.commandFailed(SupportDiagnosticsTests.secret)) : .success([])
-    }
-}
-
-private struct DiagnosticsSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        XCTFail("Diagnostics must not signal processes")
-        return false
-    }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct DiagnosticsLifecycleService: ProcessLifecycleServicing {
-    var fails = true
-    var appExists = true
-    var systemServiceFails = false
-    private var batch: LifecycleBatchResult {
-        .init(jobs: [.init(label: SupportDiagnosticsTests.secret, state: fails ? .failed : .changed,
-                          detail: SupportDiagnosticsTests.secret)])
-    }
-    func appBundleExists(at path: String) -> Bool { appExists }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { batch }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { batch }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { batch }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { batch }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        systemServiceFails ? batch : .notNeeded
-    }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
+/// Every launchd change answers with one job whose label and detail are the
+/// secret diagnostics must not export: failed, unless `fails` is false. Daemon
+/// checks fail only with `systemServiceFails`. Stops find no process, waits fail,
+/// and opening fails.
+private func diagnosticsLifecycle(fails: Bool = true, appExists: Bool = true, systemServiceFails: Bool = false) -> FakeLifecycle {
+    let batch = LifecycleBatchResult(jobs: [.init(label: SupportDiagnosticsTests.secret, state: fails ? .failed : .changed,
+                                                  detail: SupportDiagnosticsTests.secret)])
+    let lifecycle = FakeLifecycle.allSucceeding()
+    lifecycle.agentsResult = batch
+    lifecycle.ensureDaemonsResult = systemServiceFails ? batch : .notNeeded
+    lifecycle.terminationOutcome = .noMatchingProcesses
+    lifecycle.waitResult = false
+    lifecycle.openResult = .failed("Fake launch failed.")
+    lifecycle.appExists = appExists
+    lifecycle.disconnect = nil
+    return lifecycle
 }

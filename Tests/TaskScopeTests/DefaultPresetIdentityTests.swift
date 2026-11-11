@@ -1,14 +1,14 @@
 import XCTest
 @testable import TaskScope
 
-/// P9 — `WatchedAppPreset.globalProtect` gets a fresh `UUID()` in every process
+/// (Audit item P9.) `WatchedAppPreset.globalProtect` gets a fresh `UUID()` in every process
 /// (`static let` is memoized per process, not persisted), and `WatchedAppsStore.init`
 /// assigns `presets = [.globalProtect]` *inside* `init`, which does not fire the
 /// `didSet { persistIfAllowed() }` observer. Nothing ever pins that identifier, so a
 /// Shortcut bound to the built-in watched app cannot resolve after a relaunch.
 @MainActor
-final class P9DefaultPresetIdentityTests: XCTestCase {
-    private let suiteName = "TaskScope.P9DefaultPresetIdentityTests.\(UUID().uuidString)"
+final class DefaultPresetIdentityTests: XCTestCase {
+    private let suiteName = "TaskScope.DefaultPresetIdentityTests.\(UUID().uuidString)"
     private let key = "watched-presets-p9-tests"
     nonisolated(unsafe) private var defaults: InMemoryUserDefaults!
 

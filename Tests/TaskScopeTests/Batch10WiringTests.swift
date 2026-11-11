@@ -13,7 +13,7 @@ final class Batch10WiringTests: XCTestCase {
     func testPromptsAreAskedWithoutAnyOpenViewAndAnswersReachTheStore() async throws {
         let example = Batch10.process(41, name: "Example")
         let other = Batch10.process(42, name: "Other")
-        let inventory = Batch10MutableInventory(processes: [example, other])
+        let inventory = ScriptedInventory(processes: [example, other])
         let stores = Batch10.stores(inventory: inventory)
         defer { stores.cleanup() }
         let store = stores.autoStopRules
@@ -52,7 +52,7 @@ final class Batch10WiringTests: XCTestCase {
 
     func testPromptAnsweredAfterItsProcessExitedStopsNothing() async throws {
         let example = Batch10.process(41, name: "Example")
-        let inventory = Batch10MutableInventory(processes: [example])
+        let inventory = ScriptedInventory(processes: [example])
         let stores = Batch10.stores(inventory: inventory)
         defer { stores.cleanup() }
         let store = stores.autoStopRules
@@ -66,7 +66,7 @@ final class Batch10WiringTests: XCTestCase {
         await presenter.waitUntilPresented()
 
         // The process exits while the alert is open; the next pass drops it.
-        await inventory.setProcesses([])
+        inventory.setProcesses([])
         await store.evaluateNow()
         XCTAssertTrue(store.pendingPrompts.isEmpty)
         let task = coordinator.task
@@ -99,7 +99,7 @@ final class Batch10WiringTests: XCTestCase {
     func testQueuedPromptShowsTheCurrentRuntimeAsADuration() async throws {
         var example = Batch10.process(41, name: "Example")
         example.elapsedTime = "07:31"
-        let inventory = Batch10MutableInventory(processes: [example])
+        let inventory = ScriptedInventory(processes: [example])
         let stores = Batch10.stores(inventory: inventory)
         defer { stores.cleanup() }
         let store = stores.autoStopRules
@@ -112,7 +112,7 @@ final class Batch10WiringTests: XCTestCase {
         XCTAssertTrue(AutoStopPromptAlert.message(for: queued).contains("has run for 7m 31s"), AutoStopPromptAlert.message(for: queued))
 
         example.elapsedTime = "02:00:05"
-        await inventory.setProcesses([example])
+        inventory.setProcesses([example])
         await store.evaluateNow()
         let refreshed = try XCTUnwrap(store.currentPrompt)
         XCTAssertEqual(refreshed.id, queued.id, "Still the same occurrence")
@@ -134,21 +134,21 @@ final class Batch10WiringTests: XCTestCase {
         _ = await fixture.manager.keepOff(.globalProtect)
         let failureID = try XCTUnwrap(fixture.manager.globalProtectDisconnectFailureID)
         XCTAssertFalse(settings.keepGlobalProtectOff, "A failed disconnect records nothing")
-        let eventsBefore = fixture.lifecycle.events
+        let callsBefore = fixture.lifecycle.calls
 
         let state = ProcessConfirmationState()
         let view = Batch10.popover(fixture, state: state)
         try view.inspect().find(button: "Stop Services Anyway…").tap()
         XCTAssertEqual(state.pendingPresetAction?.disconnectFailureID, failureID)
-        XCTAssertEqual(fixture.lifecycle.events, eventsBefore, "The card only asks")
+        XCTAssertEqual(fixture.lifecycle.calls, callsBefore, "The card only asks")
         try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: "Stop Services Anyway").tap()
         await state.waitForActions()
 
         XCTAssertNil(fixture.manager.globalProtectDisconnectFailureID, "The confirmed failure is consumed")
         XCTAssertTrue(settings.keepGlobalProtectOff, "The confirmed stop records Keep Off")
-        let ran = Array(fixture.lifecycle.events.dropFirst(eventsBefore.count))
-        XCTAssertTrue(ran.contains("disableAgents:GlobalProtect"), "\(ran)")
-        XCTAssertTrue(ran.contains("disableDaemons:GlobalProtect:admin=true"), "The confirmed stop may ask for administrator approval: \(ran)")
+        let ran = Array(fixture.lifecycle.calls.dropFirst(callsBefore.count))
+        XCTAssertTrue(ran.contains("agents.disable"), "\(ran)")
+        XCTAssertTrue(ran.contains("daemon.disable:true"), "The confirmed stop may ask for administrator approval: \(ran)")
     }
 
     // MARK: Controls while another action holds the operation gate
@@ -521,8 +521,8 @@ final class Batch10WiringTests: XCTestCase {
     // MARK: Helpers
 
     private func heldFixture(gate: Batch10Gate) async -> UIFixture {
-        let inventory = UIInventory(processes: [])
-        let signaler = UIRecordingSignaler()
+        let inventory = ScriptedInventory(processes: [])
+        let signaler = FakeSignaler()
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: signaler, lifecycle: Batch10HeldOpenLifecycle(gate: gate),
@@ -533,19 +533,6 @@ final class Batch10WiringTests: XCTestCase {
         let stores = Batch10.stores(inventory: inventory)
         manager.dependencies.watchedPresets = { stores.watchedApps.presets }
         await manager.loadProcessList(showMessage: false)
-        return UIFixture(manager: manager, signaler: signaler, stores: stores, lifecycle: UILifecycle())
-    }
-}
-
-/// An inventory a test can change between Auto Stop passes.
-actor Batch10MutableInventory: ProcessInventoryProviding {
-    private var processes: [AppProcess]
-
-    init(processes: [AppProcess]) { self.processes = processes }
-
-    func setProcesses(_ processes: [AppProcess]) { self.processes = processes }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
+        return UIFixture(manager: manager, signaler: signaler, stores: stores, lifecycle: FakeLifecycle.forViewTests())
     }
 }

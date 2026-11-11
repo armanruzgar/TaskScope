@@ -12,7 +12,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
         let harness = P8LifecycleRuntimeHarness(inventoryResult: .failure(.commandFailed("ps timed out")))
         let preset = presetWithoutLaunchAgentJobs()
         let manager = makeManager(
-            inventory: P8QueuedInventory(results: [.failure(.commandFailed("ps timed out"))]),
+            inventory: ScriptedInventory([.failure(.commandFailed("ps timed out"))], repeatsLast: true),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -40,12 +40,12 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
         let harness = P8LifecycleRuntimeHarness(inventoryResult: .failure(.commandFailed("ps timed out")))
         let preset = presetWithoutLaunchAgentJobs()
         let manager = makeManager(
-            inventory: P8QueuedInventory(results: [
+            inventory: ScriptedInventory([
                 // Last successful watched refresh: the app was not running yet.
                 .success([]),
                 // Everything afterwards fails, while the app has since been launched.
                 .failure(.commandFailed("ps timed out"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -66,10 +66,10 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
         let harness = P8LifecycleRuntimeHarness(inventoryResult: .failure(.commandFailed("ps timed out")))
         let preset = presetWithoutLaunchAgentJobs()
         let manager = makeManager(
-            inventory: P8QueuedInventory(results: [
+            inventory: ScriptedInventory([
                 .success([process(pid: 42, name: "Example")]),
                 .failure(.commandFailed("ps timed out"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -94,7 +94,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: P8NoopSignaler(),
+            processSignaler: FakeSignaler(),
             lifecycle: lifecycle,
             settleAfterProcessChange: {},
             dependencies: .inert
@@ -114,7 +114,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
     }
 
     private func process(pid: Int32, name: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: getuid(),
@@ -150,7 +150,7 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
     }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: 501,
             fileExists: { _ in false },
             launchAgentLabel: { _ in nil },
@@ -194,27 +194,4 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
     var inventoryLoadCount: Int {
         lock.withLock { recordedInventoryLoads }
     }
-}
-
-private final class P8QueuedInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            guard results.count > 1 else {
-                return results.first ?? .failure(.commandFailed("No fake result configured."))
-            }
-            return results.removeFirst()
-        }
-    }
-}
-
-private final class P8NoopSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { true }
-    func isAlive(_ pid: Int32) -> Bool { false }
 }

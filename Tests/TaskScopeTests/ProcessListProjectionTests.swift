@@ -52,7 +52,7 @@ final class ProcessListProjectionTests: XCTestCase {
     private func process(
         pid: Int32, parentPID: Int32 = 1, cpu: Double = 0, memory: Double = 0, name: String
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: parentPID, cpu: cpu, memoryMB: memory,
             command: name, elapsedTime: "00:10", startTime: "start",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil

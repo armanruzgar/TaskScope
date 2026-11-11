@@ -59,7 +59,7 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
         )
         let preset = WatchedAppPreset.globalProtect
         let manager = makeManager(
-            inventory: P7QueuedInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -98,12 +98,12 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
         )
         let preset = WatchedAppPreset.globalProtect
         let manager = makeManager(
-            inventory: P7QueuedInventory(results: [
+            inventory: ScriptedInventory([
                 // `currentSnapshot(for:)` — GlobalProtect and its helper are running.
                 .success(running),
                 // `refreshAfterMutation()` — both are gone: the stop fully succeeded.
                 .success([])
-            ]),
+            ], repeatsLast: true),
             lifecycle: SystemProcessLifecycleService(runtime: harness.runtime)
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -130,7 +130,7 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
-            processSignaler: P7NoopSignaler(),
+            processSignaler: FakeSignaler(),
             lifecycle: lifecycle,
             settleAfterProcessChange: {},
             dependencies: .inert
@@ -152,7 +152,7 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
         let path = name == "PanGPS"
             ? "/Library/Application Support/PaloAltoNetworks/GlobalProtect/PanGPS"
             : "/Applications/GlobalProtect.app/Contents/MacOS/\(name)"
-        return AppProcess(
+        return AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: getuid(),
@@ -195,7 +195,7 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
     }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: getuid(),
             fileExists: { [self] path in
                 existingPaths.contains(path)
@@ -271,27 +271,4 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
             exitCode: 113
         )
     }
-}
-
-final class P7QueuedInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            guard results.count > 1 else {
-                return results.first ?? .failure(.commandFailed("No fake result configured."))
-            }
-            return results.removeFirst()
-        }
-    }
-}
-
-final class P7NoopSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { true }
-    func isAlive(_ pid: Int32) -> Bool { false }
 }

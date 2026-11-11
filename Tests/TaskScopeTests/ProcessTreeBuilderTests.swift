@@ -89,7 +89,7 @@ final class ProcessTreeBuilderTests: XCTestCase {
     }
 
     private func process(pid: Int32, command: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 0,
             cpu: 0,

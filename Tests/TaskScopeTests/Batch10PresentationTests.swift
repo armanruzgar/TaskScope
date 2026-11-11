@@ -185,7 +185,7 @@ final class Batch10PresentationTests: XCTestCase {
 
     // L10-18: the first-load error keeps Retry as its own button.
     func testFirstLoadErrorKeepsRetrySeparateAndPunctuated() async throws {
-        let inventory = UIScriptedInventory(results: [.failure(.commandFailed("ps exited with status 1"))])
+        let inventory = ScriptedInventory([.failure(.commandFailed("ps exited with status 1"))], repeatsLast: true)
         let fixture = await Batch10.fixture(processes: [], inventory: inventory)
         defer { fixture.stores.cleanup() }
         let view = Batch10.popover(fixture)
@@ -207,11 +207,11 @@ final class Batch10PresentationTests: XCTestCase {
 
     // L10-17: the footer and stale banner end the error with one full stop.
     func testLoadFailureMessagesArePunctuatedOnce() async throws {
-        let inventory = UIScriptedInventory(results: [
+        let inventory = ScriptedInventory([
             .success([Batch10.process(51)]),
             .failure(.commandFailed("Resource temporarily unavailable")),
             .failure(.commandFailed("ps exited with status 1."))
-        ])
+        ], repeatsLast: true)
         let fixture = await Batch10.fixture(processes: [], inventory: inventory)
         defer { fixture.stores.cleanup() }
         await fixture.manager.loadProcessList()

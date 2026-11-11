@@ -60,9 +60,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     func testRecallReadFailureReportsErrorInsteadOfMissingProcesses() async throws {
         let target = process(pid: 71, parentPID: 1, name: "Example")
         for initial in [[], [target]] {
-            let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+            let fixture = await makeFixture(inventory: ScriptedInventory([
                 .success(initial), .failure(.commandFailed("ps timed out"))
-            ]))
+            ], repeatsLast: true))
             defer { fixture.stores.cleanup() }
             XCTAssertTrue(fixture.stores.savedSelections.save(name: "Saved", processes: [target]))
             let confirmation = ProcessConfirmationState()
@@ -76,7 +76,7 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testBackgroundReadFailureKeepsUnloadedProcessesTabIdle() async throws {
-        let inventory = UIScriptedInventory(results: [.failure(.commandFailed("ps timed out"))])
+        let inventory = ScriptedInventory([.failure(.commandFailed("ps timed out"))], repeatsLast: true)
         let fixture = await makeFixture(inventory: inventory, loadList: false)
         defer { fixture.stores.cleanup() }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
@@ -91,9 +91,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     /// stale-list banner; only a list load that succeeds does.
     func testSuccessfulWatchedReadKeepsStaleListBannerUntilTheListReloads() async throws {
         let target = process(pid: 71, parentPID: 1, name: "Example")
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .success([target]), .failure(.commandFailed("ps timed out")), .success([target]), .success([target])
-        ]))
+        ], repeatsLast: true))
         defer { fixture.stores.cleanup() }
         let loaded = await fixture.manager.loadProcessList(showMessage: false)
         XCTAssertFalse(loaded)
@@ -110,9 +110,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testSuccessfulWatchedReadKeepsFailedFirstLoadState() async throws {
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .failure(.commandFailed("ps timed out")), .success([])
-        ]))
+        ], repeatsLast: true))
         defer { fixture.stores.cleanup() }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         XCTAssertFalse(fixture.manager.hasLoadedProcessList)
@@ -147,7 +147,7 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testConfiguredPresetsAndUnknownHeaderAppearBeforeTheFirstRead() async throws {
-        let fixture = await makeFixture(inventory: UIInventory(processes: []), loadList: false)
+        let fixture = await makeFixture(inventory: ScriptedInventory(processes: []), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
@@ -162,9 +162,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testFirstWatchedReadFailureOffersRetryAndClearsUnknownAfterSuccess() async throws {
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .failure(.commandFailed("ps unavailable")), .success([])
-        ]), loadList: false)
+        ], repeatsLast: true), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
@@ -182,9 +182,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testVerificationFailureDoesNotShowAWatchedStatusBanner() async throws {
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .success([]), .failure(.commandFailed("verification failed"))
-        ]), loadList: false)
+        ], repeatsLast: true), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
@@ -197,9 +197,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testFailedWatchedRefreshMarksLastObservationStale() async throws {
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .success([]), .failure(.commandFailed("later read failed")), .success([])
-        ]), loadList: false)
+        ], repeatsLast: true), loadList: false)
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
@@ -218,9 +218,9 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testPresetCardsFollowEditsAndDeletionWhenRefreshFails() async throws {
-        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+        let fixture = await makeFixture(inventory: ScriptedInventory([
             .success([]), .failure(.commandFailed("ps unavailable"))
-        ]), loadList: false)
+        ], repeatsLast: true), loadList: false)
         defer { fixture.stores.cleanup() }
         let store = fixture.stores.watchedApps
         var preset = WatchedAppPreset(displayName: "Before", mainProcessName: "Before",
@@ -551,10 +551,10 @@ final class SwiftUIHarnessTests: XCTestCase {
     /// "Process List Unavailable".
     func testStaleListWithNoSearchMatchesShowsTheFilterEmptyState() async throws {
         let needle = process(pid: 71, parentPID: 1, name: "Needle")
-        let inventory = UIScriptedInventory(results: [
+        let inventory = ScriptedInventory([
             .success([needle]),
             .failure(.commandFailed("ps timed out"))
-        ])
+        ], repeatsLast: true)
         let fixture = await makeFixture(inventory: inventory)
         defer { fixture.stores.cleanup() }
         await fixture.manager.loadProcessList(showMessage: false)
@@ -570,7 +570,7 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testFailedFirstLoadShowsTheErrorAndRetryInsteadOfIdle() async throws {
-        let inventory = UIScriptedInventory(results: [.failure(.commandFailed("ps timed out"))])
+        let inventory = ScriptedInventory([.failure(.commandFailed("ps timed out"))], repeatsLast: true)
         let fixture = await makeFixture(inventory: inventory)
         defer { fixture.stores.cleanup() }
         XCTAssertFalse(fixture.manager.hasLoadedProcessList)
@@ -1268,7 +1268,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         // waiting in the command bus behind actions confirmed after it.
 
         XCTAssertTrue(recorder.commands.isEmpty)
-        XCTAssertEqual(fixture.lifecycle.events.filter { $0.hasPrefix("open:") }, ["open:/Applications/Beta.app"])
+        XCTAssertEqual(fixture.lifecycle.openedPaths, ["/Applications/Beta.app"])
     }
 
     func testManualProcessSnapshotDisplaysItsSuccessfulUpdateTime() async throws {
@@ -1301,8 +1301,8 @@ final class SwiftUIHarnessTests: XCTestCase {
         card.onKeepOffChanged(false)
         await confirmation.waitForActions()
         XCTAssertTrue(recorder.commands.isEmpty)
-        XCTAssertTrue(fixture.lifecycle.events.contains("restore:GlobalProtect"))
-        XCTAssertTrue(fixture.lifecycle.events.contains("open:/Applications/GlobalProtect.app"))
+        XCTAssertEqual(fixture.lifecycle.presetsByCall["daemon.enable"]?.map(\.displayName), ["GlobalProtect"])
+        XCTAssertTrue(fixture.lifecycle.openedPaths.contains("/Applications/GlobalProtect.app"))
     }
 
     /// A row can be on screen purely because the search filter surfaced it, even
@@ -1686,13 +1686,13 @@ final class SwiftUIHarnessTests: XCTestCase {
                 userDefaults: defaults,
                 key: "rules",
                 eventsKey: "events",
-                inventory: UIInventory(processes: [])
+                inventory: ScriptedInventory(processes: [])
             ),
             processManager: ProcessManager(
-                processInventory: UIInventory(processes: []),
-                verificationInventory: UIInventory(processes: []),
-                processSignaler: UIRecordingSignaler(),
-                lifecycle: UILifecycle(),
+                processInventory: ScriptedInventory(processes: []),
+                verificationInventory: ScriptedInventory(processes: []),
+                processSignaler: FakeSignaler(),
+                lifecycle: FakeLifecycle.forViewTests(),
                 settleAfterProcessChange: {},
                 dependencies: .inert
             ),
@@ -1716,7 +1716,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         cpu: Double = 1,
         memoryMB: Double = 128
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: parentPID,
             cpu: cpu,
@@ -1733,12 +1733,12 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     private func makeFixture(processes: [AppProcess]) async -> UIFixture {
-        await makeFixture(inventory: UIInventory(processes: processes))
+        await makeFixture(inventory: ScriptedInventory(processes: processes))
     }
 
     private func makeFixture(inventory: any ProcessInventoryProviding, loadList: Bool = true) async -> UIFixture {
-        let signaler = UIRecordingSignaler()
-        let lifecycle = UILifecycle()
+        let signaler = FakeSignaler()
+        let lifecycle = FakeLifecycle.forViewTests()
         let manager = ProcessManager(
             processInventory: inventory,
             verificationInventory: inventory,
@@ -1860,30 +1860,6 @@ private final class TreeDisclosureModel: ObservableObject {
     @Published var expandedPIDs: Set<Int32> = []
 }
 
-final class UIScriptedInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            guard !results.isEmpty else { return .failure(.commandFailed("exhausted")) }
-            return results.count == 1 ? results[0] : results.removeFirst()
-        }
-    }
-}
-
-struct UIInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
 @MainActor
 final class UIMenuBarConfirmation: MenuBarConfirming {
     var answer: Bool
@@ -1897,47 +1873,6 @@ final class UIMenuBarConfirmation: MenuBarConfirming {
         requests.append(request)
         return answer
     }
-}
-
-final class UIRecordingSignaler: ProcessSignaling {
-    struct Signal: Equatable {
-        var signal: Int32
-        var pid: Int32
-    }
-
-    private(set) var sent: [Signal] = []
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        sent.append(Signal(signal: signal, pid: pid))
-        return true
-    }
-
-    func isAlive(_ pid: Int32) -> Bool {
-        false
-    }
-}
-
-final class UILifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [String] = []
-    var events: [String] { lock.withLock { recorded } }
-    private func record(_ event: String) { lock.withLock { recorded.append(event) } }
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { record("main:\(preset.displayName)"); return .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { record("helper:\(name)"); return .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("unload:\(preset.displayName)"); return .notNeeded }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { record("preserve:\(preset.displayName)"); return .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enable:\(preset.displayName)"); return .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("restore:\(preset.displayName)"); return .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { record("open:\(path)"); return .opened }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { record("disableAgents:\(preset.displayName)"); return .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { record("disableDaemons:\(preset.displayName):admin=\(allowAdministratorPrompt)"); return .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
 struct UILoginItemService: LoginItemServicing {
@@ -1957,9 +1892,9 @@ struct UIActivityMonitor: ActivityMonitorCoordinating {
 @MainActor
 struct UIFixture {
     var manager: ProcessManager
-    var signaler: UIRecordingSignaler
+    var signaler: FakeSignaler
     var stores: UIStores
-    var lifecycle: UILifecycle
+    var lifecycle: FakeLifecycle
 }
 
 @MainActor

@@ -28,7 +28,7 @@ final class StorePersistenceGateTests: XCTestCase {
     /// reset they would be locked out of editing rules for good.
     func testExplicitResetRestoresRuleWritingAfterCorruption() throws {
         defaults.set(Data([0xFE, 0x03]), forKey: rulesKey)
-        let store = makeRulesStore(inventory: P11StubInventory(processes: []))
+        let store = makeRulesStore(inventory: ScriptedInventory(processes: []))
         XCTAssertTrue(store.hasUnreadableData, "precondition: writing is disabled")
         XCTAssertTrue(store.rules.isEmpty)
 
@@ -36,7 +36,7 @@ final class StorePersistenceGateTests: XCTestCase {
         XCTAssertFalse(store.hasUnreadableData)
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .silent))
 
-        let reloaded = makeRulesStore(inventory: P11StubInventory(processes: []))
+        let reloaded = makeRulesStore(inventory: ScriptedInventory(processes: []))
         XCTAssertEqual(reloaded.rules.map(\.processName), ["Example"])
     }
 
@@ -66,7 +66,7 @@ final class StorePersistenceGateTests: XCTestCase {
         )
         defaults.set(corruptEvents, forKey: eventsKey)
 
-        let store = makeRulesStore(inventory: P11StubInventory(processes: [appProcess(pid: 42, elapsed: "10:00")]))
+        let store = makeRulesStore(inventory: ScriptedInventory(processes: [appProcess(pid: 42, elapsed: "10:00")]))
         XCTAssertTrue(store.events.isEmpty, "precondition: events failed to decode")
         XCTAssertEqual(defaults.data(forKey: "\(eventsKey).corruptBackup"), corruptEvents, "precondition: backup taken")
 
@@ -181,7 +181,7 @@ final class StorePersistenceGateTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeRulesStore(
-        inventory: any ProcessInventoryProviding = P11StubInventory(processes: [])
+        inventory: any ProcessInventoryProviding = ScriptedInventory(processes: [])
     ) -> AutoStopRulesStore {
         AutoStopRulesStore(
             userDefaults: defaults,
@@ -202,7 +202,7 @@ final class StorePersistenceGateTests: XCTestCase {
         command: String = "/Applications/Example.app/Example",
         elapsed: String
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 0,
             uid: getuid(),
@@ -217,13 +217,5 @@ final class StorePersistenceGateTests: XCTestCase {
             diskReadBytes: 0,
             diskWriteBytes: 0
         )
-    }
-}
-
-private struct P11StubInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }

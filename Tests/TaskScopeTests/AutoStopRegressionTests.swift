@@ -199,7 +199,7 @@ final class AutoStopRegressionTests: XCTestCase {
 
     func testInjectedOwnerAndSelfScopeAreUsed() async {
         let store = AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events",
-            inventory: RegressionInventory(processes: [process(pid: 41, uid: 1234), process(pid: 42, uid: 1234), process(pid: 43, uid: 5678)]),
+            inventory: ScriptedInventory(processes: [process(pid: 41, uid: 1234), process(pid: 42, uid: 1234), process(pid: 43, uid: 5678)]),
             currentUID: 1234, currentPID: 42)
         XCTAssertTrue(store.add(rule(action: .prompt)))
         await store.evaluateNow()
@@ -224,7 +224,7 @@ final class AutoStopRegressionTests: XCTestCase {
     }
 
     private func makeStore(processes: [AppProcess] = []) -> AutoStopRulesStore {
-        AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: RegressionInventory(processes: processes),
+        AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: ScriptedInventory(processes: processes),
             now: { self.wallDate }, monotonicNow: { self.monotonicInstant })
     }
 
@@ -234,7 +234,7 @@ final class AutoStopRegressionTests: XCTestCase {
 
     private func process(pid: Int32, uid: uid_t? = getuid(), path: String? = nil) -> AppProcess {
         let executable = path ?? self.path
-        return AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 1, command: executable,
+        return AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 1, command: executable,
             executablePath: executable, elapsedTime: "10:00", startTime: "start-\(pid)", netInKB: nil,
             netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
@@ -247,9 +247,4 @@ final class AutoStopRegressionTests: XCTestCase {
     private func drainTasks() async {
         for _ in 0..<100 { await Task.yield() }
     }
-}
-
-private struct RegressionInventory: ProcessInventoryProviding {
-    let processes: [AppProcess]
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> { .success(processes) }
 }

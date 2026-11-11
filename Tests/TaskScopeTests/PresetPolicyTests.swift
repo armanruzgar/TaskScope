@@ -50,7 +50,7 @@ final class PresetPolicyTests: XCTestCase {
         let defaults = makeDefaults()
         let session = makeBatch02Session(.interactive, standardDefaults: { defaults })
         defer { session.cleanUp() }
-        let stores = TaskScopeLaunchStores(session: session, inventory: Batch02FixedInventory(result: .success([])))
+        let stores = TaskScopeLaunchStores(session: session, inventory: ScriptedInventory(processes: []))
         XCTAssertEqual(stores.watchedApps.presets, [.globalProtect])
 
         stores.settings.keepGlobalProtectOff = true

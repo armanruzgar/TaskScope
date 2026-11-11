@@ -140,7 +140,7 @@ final class AuditLeadListTests: XCTestCase {
     // MARK: - Helpers
 
     private func listProcess(pid: Int32, command: String, path: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 1, uid: getuid(), cpu: 1, memoryMB: 128,
             command: command, executablePath: path, elapsedTime: "03:00", startTime: "one",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil

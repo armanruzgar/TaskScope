@@ -120,7 +120,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
             return .failed("unexpected")
         })
         let manager = ProcessManager(
-            processInventory: world.inventory, processSignaler: KeepOffNoSignaler(), lifecycle: service,
+            processInventory: world.inventory, processSignaler: FakeSignaler.forbidding("Preset Keep Off signals through the lifecycle runtime only"), lifecycle: service,
             settleAfterProcessChange: {}, dependencies: .inert
         )
         manager.enableNotifications = false
@@ -157,7 +157,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         let preset = custom(agents: false)
         let world = KeepOffWorld(rows: [row(pid: 501, path: "/Applications/Example.app/Contents/MacOS/Example")])
         let manager = ProcessManager(
-            processInventory: world.inventory, processSignaler: KeepOffNoSignaler(),
+            processInventory: world.inventory, processSignaler: FakeSignaler.forbidding("Preset Keep Off signals through the lifecycle runtime only"),
             lifecycle: SystemProcessLifecycleService(runtime: world.runtime),
             settleAfterProcessChange: {}, dependencies: .inert
         )
@@ -173,9 +173,9 @@ final class KeepOffForAnyPresetTests: XCTestCase {
     }
 
     func testKeepOffIsRefusedForAPresetThatChangedOrWasRemoved() async {
-        let lifecycle = UILifecycle()
+        let lifecycle = FakeLifecycle.forViewTests()
         let manager = ProcessManager(
-            processInventory: UIInventory(processes: []), processSignaler: UIRecordingSignaler(),
+            processInventory: ScriptedInventory(processes: []), processSignaler: FakeSignaler(),
             lifecycle: lifecycle, settleAfterProcessChange: {}, dependencies: .inert
         )
         var edited = custom()
@@ -190,16 +190,16 @@ final class KeepOffForAnyPresetTests: XCTestCase {
             XCTAssertEqual(result.message, "Example was changed or removed. Keep Off was not recorded and nothing was stopped.")
         }
         XCTAssertEqual(writes, 0)
-        XCTAssertTrue(lifecycle.events.isEmpty, "\(lifecycle.events)")
+        XCTAssertTrue(lifecycle.calls.isEmpty, "\(lifecycle.calls)")
     }
 
     func testPresetFromANewerBuildCannotBeKeptOffOrAllowedToRun() async throws {
         let json = #"{"id":"\#(customID.uuidString)","displayName":"Example","mainProcessName":"Example","appPath":"/Applications/Example.app","futureRestriction":true}"#
         let newer = try JSONDecoder().decode(WatchedAppPreset.self, from: Data(json.utf8))
         XCTAssertTrue(newer.hasUnknownFields)
-        let lifecycle = UILifecycle()
+        let lifecycle = FakeLifecycle.forViewTests()
         let manager = ProcessManager(
-            processInventory: UIInventory(processes: []), processSignaler: UIRecordingSignaler(),
+            processInventory: ScriptedInventory(processes: []), processSignaler: FakeSignaler(),
             lifecycle: lifecycle, settleAfterProcessChange: {}, dependencies: .inert
         )
         manager.dependencies.watchedPresets = { [newer] }
@@ -209,7 +209,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
 
         XCTAssertEqual(keepOff, TaskScopeCommandResult(status: .rejected, message: WatchedAppsStore.newerBuildMessage))
         XCTAssertEqual(allow, TaskScopeCommandResult(status: .rejected, message: WatchedAppsStore.newerBuildMessage))
-        XCTAssertTrue(lifecycle.events.isEmpty)
+        XCTAssertTrue(lifecycle.calls.isEmpty)
     }
 
     // MARK: - Allow to Run
@@ -233,7 +233,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         await state.waitForActions()
 
         XCTAssertNil(state.pendingPresetAction, "Turning Keep Off off needs no confirmation")
-        XCTAssertEqual(fixture.lifecycle.events, ["enable:Example"])
+        XCTAssertEqual(fixture.lifecycle.calls, ["agents.enable"])
         XCTAssertFalse(settings.isKeptOff(preset.id))
         XCTAssertEqual(fixture.manager.message, "Example is allowed to run. Nothing was started.")
     }
@@ -244,7 +244,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         let defaults = makeDefaults()
         let session = makeBatch02Session(.interactive, standardDefaults: { defaults })
         defer { session.cleanUp() }
-        let stores = TaskScopeLaunchStores(session: session, inventory: Batch02FixedInventory(result: .success([])))
+        let stores = TaskScopeLaunchStores(session: session, inventory: ScriptedInventory(processes: []))
         let preset = custom()
         XCTAssertTrue(stores.watchedApps.add(preset))
 
@@ -268,7 +268,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         let defaults = makeDefaults()
         let session = makeBatch02Session(.interactive, standardDefaults: { defaults })
         defer { session.cleanUp() }
-        let stores = TaskScopeLaunchStores(session: session, inventory: Batch02FixedInventory(result: .success([])))
+        let stores = TaskScopeLaunchStores(session: session, inventory: ScriptedInventory(processes: []))
         let preset = custom()
         XCTAssertTrue(stores.watchedApps.add(preset))
         var edited = preset
@@ -349,7 +349,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
     func testAnExplicitCustomKeepOffIsPendingWhileItRuns() async {
         let lifecycle = PendingKeepOffLifecycle()
         let manager = ProcessManager(
-            processInventory: UIInventory(processes: []), processSignaler: UIRecordingSignaler(),
+            processInventory: ScriptedInventory(processes: []), processSignaler: FakeSignaler(),
             lifecycle: lifecycle, settleAfterProcessChange: {}, dependencies: .inert
         )
         let preset = custom()
@@ -422,7 +422,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
     // MARK: - Fixtures
 
     private func row(pid: Int32, path: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 1, command: path, executablePath: path,
             elapsedTime: "00:10", startTime: "Sat Jul 26 11:20:17 2026",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -465,7 +465,7 @@ private final class KeepOffWorld: @unchecked Sendable {
     func load() -> [AppProcess] { lock.withLock { rows } }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: getuid(),
             fileExists: { _ in true },
             launchAgentLabel: { _ in nil },
@@ -501,14 +501,6 @@ private struct KeepOffWorldInventory: ProcessInventoryProviding {
     func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
         .success(world.load())
     }
-}
-
-private struct KeepOffNoSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        XCTFail("Preset Keep Off signals through the lifecycle runtime only")
-        return false
-    }
-    func isAlive(_ pid: Int32) -> Bool { false }
 }
 
 private final class PendingKeepOffLifecycle: ProcessLifecycleServicing, @unchecked Sendable {

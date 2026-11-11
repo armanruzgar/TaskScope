@@ -3,24 +3,24 @@ import XCTest
 
 final class CoalescingProcessInventoryTests: XCTestCase {
     func testRecentBasicReadIsShared() async {
-        let upstream = CountingCoalescingInventory()
+        let upstream = ScriptedInventory(processes: [])
         let inventory = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
 
         _ = await inventory.load(fetchExtendedStats: false)
         _ = await inventory.load(fetchExtendedStats: false)
 
-        let modes = await upstream.requestedModes()
+        let modes = upstream.extendedStatsRequests
         XCTAssertEqual(modes, [false])
     }
 
     func testExtendedReadCanServeARecentBasicRequest() async {
-        let upstream = CountingCoalescingInventory()
+        let upstream = ScriptedInventory(processes: [])
         let inventory = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
 
         _ = await inventory.load(fetchExtendedStats: true)
         _ = await inventory.load(fetchExtendedStats: false)
 
-        let modes = await upstream.requestedModes()
+        let modes = upstream.extendedStatsRequests
         XCTAssertEqual(modes, [true])
     }
 
@@ -54,10 +54,10 @@ final class CoalescingProcessInventoryTests: XCTestCase {
     /// After a mutation the shared cache is invalidated, so the next observer
     /// reads fresh state instead of a list taken before the process stopped.
     func testInvalidationDiscardsTheCachedRead() async {
-        let upstream = ScriptedCoalescingInventory(results: [
+        let upstream = ScriptedInventory([
             .success([process(pid: 1, name: "BeforeStop")]),
             .success([process(pid: 2, name: "AfterStop")])
-        ])
+        ], repeatsLast: true)
         let inventory = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
 
         _ = await inventory.load(fetchExtendedStats: false)
@@ -87,10 +87,10 @@ final class CoalescingProcessInventoryTests: XCTestCase {
     }
 
     func testFailuresAreNeverCached() async {
-        let upstream = ScriptedCoalescingInventory(results: [
+        let upstream = ScriptedInventory([
             .failure(.commandFailed("ps unavailable")),
             .success([process(pid: 1, name: "Recovered")])
-        ])
+        ], repeatsLast: true)
         let inventory = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
 
         let first = await inventory.load(fetchExtendedStats: false)
@@ -100,7 +100,7 @@ final class CoalescingProcessInventoryTests: XCTestCase {
         XCTAssertEqual(first, .failure(.commandFailed("ps unavailable")))
         XCTAssertEqual(try second.get().map(\.name), ["Recovered"])
         XCTAssertEqual(try third.get().map(\.name), ["Recovered"])
-        let calls = await upstream.callCount()
+        let calls = upstream.readCount
         XCTAssertEqual(calls, 2, "the failure must not be served from cache; the success must")
     }
 
@@ -123,7 +123,7 @@ final class CoalescingProcessInventoryTests: XCTestCase {
 }
 
 private func process(pid: Int32, name: String) -> AppProcess {
-    AppProcess(
+    AppProcess.fixture(
         pid: pid,
         parentPID: 1,
         cpu: 0,
@@ -149,23 +149,6 @@ private final class TestClock: @unchecked Sendable {
     func advance(_ seconds: TimeInterval) {
         lock.withLock { current += seconds }
     }
-}
-
-private actor ScriptedCoalescingInventory: ProcessInventoryProviding {
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-    private var calls = 0
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        calls += 1
-        guard !results.isEmpty else { return .failure(.commandFailed("exhausted")) }
-        return results.count == 1 ? results[0] : results.removeFirst()
-    }
-
-    func callCount() -> Int { calls }
 }
 
 /// Blocks basic reads until released while extended reads complete at once.
@@ -201,17 +184,6 @@ private actor ModeBlockingCoalescingInventory: ProcessInventoryProviding {
         basicContinuation?.resume()
         basicContinuation = nil
     }
-}
-
-private actor CountingCoalescingInventory: ProcessInventoryProviding {
-    private var modes: [Bool] = []
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        modes.append(fetchExtendedStats)
-        return .success([])
-    }
-
-    func requestedModes() -> [Bool] { modes }
 }
 
 private actor BlockingCoalescingInventory: ProcessInventoryProviding {

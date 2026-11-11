@@ -17,13 +17,13 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
         let target = process(pid: 40, name: "Target")
         let bystanderA = process(pid: 41, name: "BystanderA")
         let bystanderB = process(pid: 42, name: "BystanderB")
-        let inventory = FakeProcessInventory(
-            results: [
+        let inventory = ScriptedInventory(
+            [
                 .success([target, bystanderA, bystanderB]),
                 .failure(.commandFailed("ps timed out"))
             ]
-        )
-        let signaler = FakeProcessSignaler(alivePids: [40, 41, 42])
+        , repeatsLast: true)
+        let signaler = FakeSignaler(alive: [40, 41, 42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.loadProcessList()
@@ -76,13 +76,13 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
         let first = process(pid: 40, name: "First")
         let second = process(pid: 41, name: "Second")
         let third = process(pid: 42, name: "Third")
-        let inventory = FakeProcessInventory(
-            results: [
+        let inventory = ScriptedInventory(
+            [
                 .success([first, second, third]),
                 .failure(.commandFailed("ps timed out"))
             ]
-        )
-        let signaler = FakeProcessSignaler(alivePids: [40, 41, 42])
+        , repeatsLast: true)
+        let signaler = FakeSignaler(alive: [40, 41, 42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.loadProcessList()
@@ -116,8 +116,8 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
 
     private func makeManager(
         inventory: any ProcessInventoryProviding,
-        signaler: FakeProcessSignaler = FakeProcessSignaler(),
-        lifecycle: any ProcessLifecycleServicing = NoopLifecycleService()
+        signaler: FakeSignaler = FakeSignaler(),
+        lifecycle: any ProcessLifecycleServicing = FakeLifecycle()
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory,
@@ -138,7 +138,7 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
         memory: Double = 0,
         name: String
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             cpu: cpu,
@@ -151,87 +151,5 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
             diskReadBytes: 0,
             diskWriteBytes: 0
         )
-    }
-}
-
-private final class NoopLifecycleService: ProcessLifecycleServicing, @unchecked Sendable {
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
-}
-
-private final class FakeProcessInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-    private(set) var fetchExtendedRequests: [Bool] = []
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        fetchExtendedRequests.append(fetchExtendedStats)
-        guard !results.isEmpty else {
-            return .failure(.commandFailed("No fake result configured."))
-        }
-        if results.count == 1 {
-            return results[0]
-        }
-        return results.removeFirst()
-    }
-}
-
-private final class FakeProcessSignaler: ProcessSignaling {
-    struct SentSignal: Equatable {
-        var signal: Int32
-        var pid: Int32
-    }
-
-    private var alivePids: Set<Int32>
-    private let exitsOnKill: Bool
-    private let exitsOnTerminate: Bool
-    private let rejectedPids: Set<Int32>
-    private(set) var sent: [SentSignal] = []
-
-    init(
-        alivePids: Set<Int32> = [],
-        exitsOnKill: Bool = false,
-        exitsOnTerminate: Bool = false,
-        rejectedPids: Set<Int32> = []
-    ) {
-        self.alivePids = alivePids
-        self.exitsOnKill = exitsOnKill
-        self.exitsOnTerminate = exitsOnTerminate
-        self.rejectedPids = rejectedPids
-    }
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        sent.append(SentSignal(signal: signal, pid: pid))
-        if rejectedPids.contains(pid) {
-            return false
-        }
-        if signal == SIGKILL, exitsOnKill {
-            alivePids.remove(pid)
-        }
-        if signal == SIGTERM, exitsOnTerminate {
-            alivePids.remove(pid)
-        }
-        return true
-    }
-
-    func isAlive(_ pid: Int32) -> Bool {
-        alivePids.contains(pid)
     }
 }

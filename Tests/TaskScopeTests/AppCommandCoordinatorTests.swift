@@ -104,9 +104,9 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
     func testCoordinatorReturnsMeaningfulMissingPresetResult() async {
         let manager = ProcessManager(
-            processInventory: EmptyInventory(),
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -122,11 +122,11 @@ final class AppCommandCoordinatorTests: XCTestCase {
     }
 
     func testExplicitRefreshPublishesJoinedSilentRefreshResult() async {
-        let inventory = CoordinatorBlockingInventory()
+        let inventory = ScriptedInventory([.success([])], holding: [1])
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -138,12 +138,12 @@ final class AppCommandCoordinatorTests: XCTestCase {
         let silentRefresh = Task {
             await manager.refreshWatchedStatus(showMessage: false)
         }
-        await inventory.waitForLoad()
+        await inventory.waitForRead(1)
         let explicitRefresh = Task { await coordinator.perform(.refresh) }
         await Task.yield()
 
         XCTAssertEqual(manager.message, "Idle.")
-        await inventory.finish()
+        inventory.release(read: 1)
         _ = await silentRefresh.value
         let result = await explicitRefresh.value
 
@@ -155,14 +155,14 @@ final class AppCommandCoordinatorTests: XCTestCase {
     /// A successful watched read reports its own outcome and clears the old
     /// inventory failure so the Processes tab does not keep showing an error.
     func testRefreshReportsSuccessAndClearsAStaleProcessListError() async {
-        let inventory = ScriptedInventory(results: [
+        let inventory = ScriptedInventory([
             .failure(.commandFailed("ps timed out")),
             .success([])
         ])
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -181,11 +181,11 @@ final class AppCommandCoordinatorTests: XCTestCase {
     }
 
     func testRefreshReportsFailureWhenItsOwnReadFails() async {
-        let inventory = ScriptedInventory(results: [.failure(.commandFailed("ps timed out"))])
+        let inventory = ScriptedInventory([.failure(.commandFailed("ps timed out"))])
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -209,9 +209,9 @@ final class AppCommandCoordinatorTests: XCTestCase {
             appPath: "/Applications/Replacement.app"
         )
         let manager = ProcessManager(
-            processInventory: EmptyInventory(),
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -233,9 +233,9 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
     func testStartupVerificationRejectsAllExplicitCommands() async {
         let manager = ProcessManager(
-            processInventory: EmptyInventory(),
-            processSignaler: NoopSignaler(),
-            lifecycle: NoopLifecycle(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -276,74 +276,4 @@ final class AppCommandCoordinatorTests: XCTestCase {
         XCTAssertEqual(result, TaskScopeCommandResult(status: .completed, message: "done"))
         XCTAssertEqual(events, ["prepare:refresh", "dispatch:refresh"])
     }
-}
-
-private final class ScriptedInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            guard !results.isEmpty else { return .failure(.commandFailed("exhausted")) }
-            return results.count == 1 ? results[0] : results.removeFirst()
-        }
-    }
-}
-
-private struct EmptyInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success([])
-    }
-}
-
-private actor CoordinatorBlockingInventory: ProcessInventoryProviding {
-    private var continuation: CheckedContinuation<Void, Never>?
-    private var waiters: [CheckedContinuation<Void, Never>] = []
-    private var didStart = false
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        didStart = true
-        waiters.forEach { $0.resume() }
-        waiters.removeAll()
-        await withCheckedContinuation { continuation = $0 }
-        return .success([])
-    }
-
-    func waitForLoad() async {
-        guard !didStart else { return }
-        await withCheckedContinuation { waiters.append($0) }
-    }
-
-    func finish() {
-        continuation?.resume()
-        continuation = nil
-    }
-}
-
-private struct NoopSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { true }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct NoopLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

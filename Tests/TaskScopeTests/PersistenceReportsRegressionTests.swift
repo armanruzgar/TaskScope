@@ -23,7 +23,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
 
     @MainActor
     func testSelectionsRecoverValidEntriesAndResetCommitsThemWithUnknownFields() throws {
-        let process = AppProcess(pid: 42, parentPID: 1, uid: 501, cpu: 0, memoryMB: 0,
+        let process = AppProcess.fixture(pid: 42, parentPID: 1, uid: 501, cpu: 0, memoryMB: 0,
                                  command: "Example", executablePath: "/Applications/Example.app/Contents/MacOS/Example",
                                  elapsedTime: "00:10", startTime: "fixture", netInKB: nil, netOutKB: nil,
                                  diskReadBytes: nil, diskWriteBytes: nil)
@@ -68,7 +68,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
             let presets = WatchedAppsStore(userDefaults: defaults, key: keys[1])
             let selections = SavedSelectionsStore(userDefaults: defaults, key: keys[2])
             let rules = AutoStopRulesStore(userDefaults: defaults, key: keys[3], eventsKey: keys[4],
-                                           inventory: ReportsInventory())
+                                           inventory: ScriptedInventory(processes: []))
             XCTAssertTrue(settings.isReadOnlyAfterCorruption, "Wrong-type settings must enter recovery")
             XCTAssertTrue(presets.isReadOnlyAfterCorruption, "Wrong-type presets must not seed defaults")
             XCTAssertTrue(selections.isReadOnlyAfterCorruption)
@@ -301,8 +301,11 @@ final class PersistenceReportsRegressionTests: XCTestCase {
 
     @MainActor
     private func makeManager() -> ProcessManager {
-        let manager = ProcessManager(processInventory: ReportsInventory(), verificationInventory: ReportsInventory(),
-                                     processSignaler: ReportsSignaler(), lifecycle: ReportsLifecycle(), settleAfterProcessChange: {}, dependencies: .inert)
+        // Only the GlobalProtect disconnect is expected; it fails with a private detail.
+        let lifecycle = FakeLifecycle()
+        lifecycle.disconnectResult = .failed("private-fixture disconnect detail")
+        let manager = ProcessManager(processInventory: ScriptedInventory(processes: []), verificationInventory: ScriptedInventory(processes: []),
+                                     processSignaler: FakeSignaler.forbidding("Unexpected signal"), lifecycle: lifecycle, settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         return manager
     }
@@ -343,33 +346,4 @@ final class PersistenceReportsRegressionTests: XCTestCase {
               loadInventory: { .success([]) }, versions: { ("1.0.0", build, "6.3.3", "1234567") },
               now: { Date(timeIntervalSince1970: 1_000) })
     }
-}
-
-private struct ReportsInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> { .success([]) }
-}
-
-private struct ReportsSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { XCTFail("Unexpected signal"); return false }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct ReportsLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { XCTFail("Unexpected app launch"); return .failed("Fake launch failed.") }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult { .failed("private-fixture disconnect detail") }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }

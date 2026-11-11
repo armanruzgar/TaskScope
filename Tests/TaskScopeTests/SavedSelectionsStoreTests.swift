@@ -217,7 +217,7 @@ final class SavedSelectionsStoreTests: XCTestCase {
         command: String,
         executablePath: String? = nil
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             cpu: 0,

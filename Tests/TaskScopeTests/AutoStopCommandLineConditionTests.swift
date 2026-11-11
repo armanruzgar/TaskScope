@@ -204,7 +204,7 @@ final class AutoStopCommandLineConditionTests: XCTestCase {
     private func makeStore(processes: [AppProcess], reader: FakeCommandLineReader) -> AutoStopRulesStore {
         AutoStopRulesStore(
             userDefaults: defaults, key: "rules", eventsKey: "rules.events",
-            inventory: CommandLineInventory(processes), commandLineReader: reader,
+            inventory: ScriptedInventory(processes: processes), commandLineReader: reader,
             now: { Date(timeIntervalSince1970: 1_000) }, currentUID: getuid(), currentPID: getpid()
         )
     }
@@ -214,19 +214,9 @@ final class AutoStopCommandLineConditionTests: XCTestCase {
     }
 
     private func process(pid: Int32, name: String = "Example") -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 64, command: name,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 64, command: name,
                    executablePath: "/cmdline/\(name)", elapsedTime: "10:00", startTime: "start-\(pid)",
                    netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
-    }
-}
-
-private struct CommandLineInventory: ProcessInventoryProviding {
-    let processes: [AppProcess]
-
-    init(_ processes: [AppProcess]) { self.processes = processes }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }
 

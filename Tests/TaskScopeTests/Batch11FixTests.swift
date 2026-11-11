@@ -20,14 +20,14 @@ final class Batch11FixTests: XCTestCase {
         path: String = "/opt/tools/Example",
         uid: uid_t? = getuid()
     ) -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 12, command: path,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 12, command: path,
                    executablePath: path, elapsedTime: "01:00", startTime: "start-\(pid)",
                    netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
 
     private func rules(_ defaults: UserDefaults) -> AutoStopRulesStore {
         AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events",
-                           inventory: Batch11Inventory())
+                           inventory: ScriptedInventory(processes: []))
     }
 
     private func settingsView(
@@ -43,10 +43,10 @@ final class Batch11FixTests: XCTestCase {
             watchedApps: watchedApps ?? WatchedAppsStore(userDefaults: defaults, key: "presets"),
             autoStopRules: autoStopRules ?? rules(defaults),
             processManager: ProcessManager(
-                processInventory: Batch11Inventory(),
-                verificationInventory: Batch11Inventory(),
-                processSignaler: Batch11Signaler(),
-                lifecycle: Batch11Lifecycle(),
+                processInventory: ScriptedInventory(processes: []),
+                verificationInventory: ScriptedInventory(processes: []),
+                processSignaler: FakeSignaler.forbidding("Settings tests must never signal a process"),
+                lifecycle: FakeLifecycle(),
                 settleAfterProcessChange: {},
                 dependencies: .inert
             ),
@@ -909,39 +909,6 @@ private final class Batch11HotkeyBackend: HotkeyRegistrationBackend {
         (noErr, OpaquePointer(bitPattern: 1))
     }
     func unregister(_ reference: EventHotKeyRef) {}
-}
-
-private struct Batch11Inventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success([])
-    }
-}
-
-private final class Batch11Signaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        XCTFail("Settings tests must never signal a process")
-        return false
-    }
-
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-/// Settings tests never run a lifecycle action; every call is inert.
-private struct Batch11Lifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { true }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
 }
 
 private extension SupportDiagnosticsReport {

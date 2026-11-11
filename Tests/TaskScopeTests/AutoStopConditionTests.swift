@@ -148,7 +148,7 @@ final class AutoStopConditionTests: XCTestCase {
     // MARK: - The engine
 
     func testACPURuleActsAfterItsChecksInARowWithoutARunTimeFloor() async {
-        let inventory = ConditionInventory([process(cpu: 160, elapsed: "00:30")])
+        let inventory = ScriptedInventory(processes: [process(cpu: 160, elapsed: "00:30")])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(cpuRule(.prompt)))
 
@@ -160,15 +160,15 @@ final class AutoStopConditionTests: XCTestCase {
     }
 
     func testACheckBelowTheThresholdStartsTheCountOver() async {
-        let inventory = ConditionInventory([process(cpu: 160)])
+        let inventory = ScriptedInventory(processes: [process(cpu: 160)])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(cpuRule(.prompt)))
 
         await check(store, at: 0)
         await check(store, at: 10)
-        await inventory.set([process(cpu: 149.9)])
+        inventory.setProcesses([process(cpu: 149.9)])
         await check(store, at: 20)
-        await inventory.set([process(cpu: 160)])
+        inventory.setProcesses([process(cpu: 160)])
         await check(store, at: 30)
         await check(store, at: 40)
         XCTAssertTrue(store.pendingPrompts.isEmpty)
@@ -179,7 +179,7 @@ final class AutoStopConditionTests: XCTestCase {
     /// The immediate pass a rule edit starts must not shorten the sustained
     /// window, and checks with a long gap between them are not in a row.
     func testChecksTooCloseTogetherOrTooFarApartDoNotCountAsInARow() async {
-        let inventory = ConditionInventory([process(cpu: 160)])
+        let inventory = ScriptedInventory(processes: [process(cpu: 160)])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(cpuRule(.prompt)))
 
@@ -195,7 +195,7 @@ final class AutoStopConditionTests: XCTestCase {
     }
 
     func testCPUAndMemoryMustBothHold() async {
-        let inventory = ConditionInventory([process(cpu: 160, memoryMB: 512)])
+        let inventory = ScriptedInventory(processes: [process(cpu: 160, memoryMB: 512)])
         let store = makeStore(inventory: inventory)
         var rule = cpuRule(.prompt)
         rule.memoryMBAtLeast = 1_024
@@ -204,7 +204,7 @@ final class AutoStopConditionTests: XCTestCase {
         for second in stride(from: 0, through: 40, by: 10) { await check(store, at: second) }
         XCTAssertTrue(store.pendingPrompts.isEmpty, "memory never held")
 
-        await inventory.set([process(cpu: 160, memoryMB: 2_048)])
+        inventory.setProcesses([process(cpu: 160, memoryMB: 2_048)])
         for second in stride(from: 50, through: 70, by: 10) { await check(store, at: second) }
         XCTAssertEqual(store.pendingPrompts.count, 1)
     }
@@ -212,7 +212,7 @@ final class AutoStopConditionTests: XCTestCase {
     /// Run time is a floor beside the sustained conditions: CPU counted before
     /// the floor counts, and the rule acts once both hold.
     func testARunTimeFloorIsAFurtherCondition() async {
-        let inventory = ConditionInventory([process(cpu: 160, elapsed: "00:20")])
+        let inventory = ScriptedInventory(processes: [process(cpu: 160, elapsed: "00:20")])
         let store = makeStore(inventory: inventory)
         var rule = cpuRule(.prompt)
         rule.checksRuntime = true
@@ -222,13 +222,13 @@ final class AutoStopConditionTests: XCTestCase {
         for second in stride(from: 0, through: 30, by: 10) { await check(store, at: second) }
         XCTAssertTrue(store.pendingPrompts.isEmpty, "the one-minute floor is not reached")
 
-        await inventory.set([process(cpu: 160, elapsed: "01:05")])
+        inventory.setProcesses([process(cpu: 160, elapsed: "01:05")])
         await check(store, at: 40)
         XCTAssertEqual(store.pendingPrompts.count, 1, "the CPU checks before the floor counted")
     }
 
     func testLogOnlyAndHistorySayWhichConditionsMatched() async throws {
-        let inventory = ConditionInventory([process(memoryMB: 9_000)])
+        let inventory = ScriptedInventory(processes: [process(memoryMB: 9_000)])
         let store = makeStore(inventory: inventory)
         let rule = AutoStopRule(
             processName: "Example", runtimeMinutes: 5, checksRuntime: false, memoryMBAtLeast: 8_192, action: .silent
@@ -243,7 +243,7 @@ final class AutoStopConditionTests: XCTestCase {
         XCTAssertEqual(makeStore().events.first?.conditions, event.conditions, "the matched conditions are stored with the event")
 
         // A run-time rule's history is worded as before.
-        let runtimeStore = makeStore(inventory: ConditionInventory([process()]), key: "other")
+        let runtimeStore = makeStore(inventory: ScriptedInventory(processes: [process()]), key: "other")
         XCTAssertTrue(runtimeStore.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .silent)))
         await runtimeStore.evaluateNow()
         XCTAssertEqual(runtimeStore.events.first?.detail, "Runtime threshold reached.")
@@ -251,7 +251,7 @@ final class AutoStopConditionTests: XCTestCase {
     }
 
     func testAnAutoStopCPURuleStopsAndItsRetryDoesNotWaitForCPUAgain() async {
-        let inventory = ConditionInventory([process(cpu: 300)])
+        let inventory = ScriptedInventory(processes: [process(cpu: 300)])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(cpuRule(.kill)))
         var stops: [Double] = []
@@ -267,13 +267,13 @@ final class AutoStopConditionTests: XCTestCase {
 
         // Shutting down, the process uses little CPU; the one re-signal of the
         // accepted request still follows one cadence later.
-        await inventory.set([process(cpu: 2)])
+        inventory.setProcesses([process(cpu: 2)])
         await check(store, at: 30)
         XCTAssertEqual(stops, [300, 2])
     }
 
     func testChangingTheCPUConditionStartsTheCountOverButOtherEditsKeepIt() async {
-        let inventory = ConditionInventory([process(cpu: 300)])
+        let inventory = ScriptedInventory(processes: [process(cpu: 300)])
         let store = makeStore(inventory: inventory)
         var rule = cpuRule(.prompt)
         XCTAssertTrue(store.add(rule))
@@ -427,7 +427,7 @@ final class AutoStopConditionTests: XCTestCase {
 
     // MARK: - Support
 
-    private func makeStore(inventory: any ProcessInventoryProviding = ConditionInventory([]), key: String = "rules") -> AutoStopRulesStore {
+    private func makeStore(inventory: any ProcessInventoryProviding = ScriptedInventory(processes: []), key: String = "rules") -> AutoStopRulesStore {
         AutoStopRulesStore(
             userDefaults: defaults, key: key, eventsKey: "\(key).events", inventory: inventory,
             now: { Date(timeIntervalSince1970: 1_000) }, currentUID: getuid(), currentPID: getpid(),
@@ -449,7 +449,7 @@ final class AutoStopConditionTests: XCTestCase {
     }
 
     private func process(cpu: Double = 0, memoryMB: Double = 64, elapsed: String = "10:00") -> AppProcess {
-        AppProcess(pid: 4101, parentPID: 1, uid: getuid(), cpu: cpu, memoryMB: memoryMB, command: "Example",
+        AppProcess.fixture(pid: 4101, parentPID: 1, uid: getuid(), cpu: cpu, memoryMB: memoryMB, command: "Example",
                    executablePath: path, elapsedTime: elapsed, startTime: "start",
                    netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
@@ -461,18 +461,6 @@ final class AutoStopConditionTests: XCTestCase {
     private func keys(of rule: AutoStopRule) throws -> [String] {
         let object = try JSONSerialization.jsonObject(with: JSONEncoder().encode(rule)) as? [String: Any]
         return try XCTUnwrap(object).keys.sorted()
-    }
-}
-
-private actor ConditionInventory: ProcessInventoryProviding {
-    private var processes: [AppProcess]
-
-    init(_ processes: [AppProcess]) { self.processes = processes }
-
-    func set(_ processes: [AppProcess]) { self.processes = processes }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }
 

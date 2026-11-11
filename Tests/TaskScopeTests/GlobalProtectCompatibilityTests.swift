@@ -254,7 +254,7 @@ final class GlobalProtectCompatibilityTests: XCTestCase {
     }
 
     private func process(pid: Int32, uid: uid_t?, name: String, path: String? = "default") -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: name,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0, command: name,
                    executablePath: path == "default" ? "/Applications/GlobalProtect.app/Contents/MacOS/\(name)" : path,
                    elapsedTime: "00:10", startTime: "private start time", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }

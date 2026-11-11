@@ -127,16 +127,16 @@ final class MenuBarStatusTests: XCTestCase {
         let settings = SettingsStore(userDefaults: defaults, key: "menu-bar-settings")
         let rules = AutoStopRulesStore(
             userDefaults: defaults, key: "menu-bar-rules", eventsKey: "menu-bar-events",
-            inventory: MenuBarInventory(processes: [])
+            inventory: ScriptedInventory(processes: [])
         )
         let main = "/Applications/GlobalProtect.app/Contents/MacOS/GlobalProtect"
         let manager = ProcessManager(
-            processInventory: MenuBarInventory(processes: [AppProcess(
+            processInventory: ScriptedInventory(processes: [AppProcess.fixture(
                 pid: 4242, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: main,
                 executablePath: main, elapsedTime: "00:01", netInKB: nil, netOutKB: nil,
                 diskReadBytes: nil, diskWriteBytes: nil
             )]),
-            processSignaler: MenuBarInertSignaler(),
+            processSignaler: FakeSignaler(rejectingAll: true),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -174,16 +174,4 @@ final class MenuBarStatusTests: XCTestCase {
         let bytes = try XCTUnwrap(rep.bitmapData)
         return Data((0..<(36 * 36)).map { bytes[$0 * 4 + 3] })
     }
-}
-
-private struct MenuBarInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
-    }
-}
-
-private struct MenuBarInertSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { false }
-    func isAlive(_ pid: Int32) -> Bool { false }
 }

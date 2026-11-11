@@ -153,7 +153,7 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
     }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: 501,
             fileExists: { [self] path in
                 existingPaths.contains(path)

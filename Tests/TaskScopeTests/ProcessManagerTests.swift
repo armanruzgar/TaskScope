@@ -8,7 +8,7 @@ final class ProcessManagerTests: XCTestCase {
         let highCPU = process(pid: 1, cpu: 90, memory: 10, name: "HighCPU")
         let mediumCPU = process(pid: 2, cpu: 80, memory: 20, name: "MediumCPU")
         let highMemory = process(pid: 3, cpu: 0, memory: 2_000, name: "HighMemory")
-        let inventory = FakeProcessInventory(results: [.success([highCPU, mediumCPU, highMemory])])
+        let inventory = ScriptedInventory([.success([highCPU, mediumCPU, highMemory])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 2 }
         manager.sortKey = .memory
@@ -23,7 +23,7 @@ final class ProcessManagerTests: XCTestCase {
         let highCPU = process(pid: 1, cpu: 90, memory: 10, name: "HighCPU")
         let mediumCPU = process(pid: 2, cpu: 80, memory: 20, name: "MediumCPU")
         let highMemory = process(pid: 3, cpu: 0, memory: 2_000, name: "HighMemory")
-        let inventory = FakeProcessInventory(results: [.success([highCPU, mediumCPU, highMemory])])
+        let inventory = ScriptedInventory([.success([highCPU, mediumCPU, highMemory])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 2 }
 
@@ -38,7 +38,7 @@ final class ProcessManagerTests: XCTestCase {
     func testFilteringOccursBeforeLimitSoOffscreenWatchedTargetIsDiscoverable() async {
         let highCPU = process(pid: 1, cpu: 90, name: "HighCPU")
         let watched = process(pid: 2, cpu: 0, name: "Watched")
-        let inventory = FakeProcessInventory(results: [.success([highCPU, watched])])
+        let inventory = ScriptedInventory([.success([highCPU, watched])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 1 }
 
@@ -52,7 +52,7 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testFullInventoryRetainsAncestorOutsideDisplayLimitForTreeContext() async {
-        let parent = AppProcess(
+        let parent = AppProcess.fixture(
             pid: 10,
             parentPID: 1,
             cpu: 0,
@@ -65,7 +65,7 @@ final class ProcessManagerTests: XCTestCase {
             diskReadBytes: nil,
             diskWriteBytes: nil
         )
-        let child = AppProcess(
+        let child = AppProcess.fixture(
             pid: 11,
             parentPID: parent.pid,
             cpu: 90,
@@ -78,7 +78,7 @@ final class ProcessManagerTests: XCTestCase {
             diskReadBytes: nil,
             diskWriteBytes: nil
         )
-        let inventory = FakeProcessInventory(results: [.success([parent, child])])
+        let inventory = ScriptedInventory([.success([parent, child])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 1 }
 
@@ -98,7 +98,7 @@ final class ProcessManagerTests: XCTestCase {
         var watched = process(pid: 42, name: "Codex (Renderer)")
         watched.command = "/Applications/Renderer.app/Contents/MacOS/Codex (Renderer)"
         watched.executablePath = watched.command
-        let inventory = FakeProcessInventory(results: [.success([watched])])
+        let inventory = ScriptedInventory([.success([watched])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         let preset = WatchedAppPreset(
             displayName: "Renderer",
@@ -121,10 +121,10 @@ final class ProcessManagerTests: XCTestCase {
         basenameOnly.executablePath = nil
         var liveShaped = process(pid: 42, name: "Example")
         liveShaped.command = "/Applications/Example.app/Contents/MacOS/Example"
-        let inventory = FakeProcessInventory(results: [
+        let inventory = ScriptedInventory([
             .success([basenameOnly]),
             .success([liveShaped])
-        ])
+        ], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         let preset = WatchedAppPreset(
             displayName: "Example",
@@ -144,12 +144,12 @@ final class ProcessManagerTests: XCTestCase {
 
     func testLoadFailureRetainsLastGoodProcessList() async {
         let original = process(pid: 42, name: "Original")
-        let inventory = FakeProcessInventory(
-            results: [
+        let inventory = ScriptedInventory(
+            [
                 .success([original]),
                 .failure(.commandFailed("temporary failure"))
             ]
-        )
+        , repeatsLast: true)
         let manager = makeManager(inventory: inventory)
 
         await manager.loadProcessList()
@@ -187,7 +187,7 @@ final class ProcessManagerTests: XCTestCase {
     func testDisplayListsAreMemoizedPerInventoryGeneration() async {
         let first = process(pid: 10, cpu: 90, name: "First")
         let second = process(pid: 20, cpu: 10, name: "Second")
-        let inventory = FakeProcessInventory(results: [.success([first, second]), .success([second])])
+        let inventory = ScriptedInventory([.success([first, second]), .success([second])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         let query = ProcessListQuery(
             searchText: "",
@@ -216,7 +216,7 @@ final class ProcessManagerTests: XCTestCase {
     func testSelectionIsPrunedWhenPIDRepresentsNewProcessIdentity() async {
         let original = process(pid: 42, startTime: "start-a", name: "Original")
         let replacement = process(pid: 42, startTime: "start-b", name: "Replacement")
-        let inventory = FakeProcessInventory(results: [.success([original]), .success([replacement])])
+        let inventory = ScriptedInventory([.success([original]), .success([replacement])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
 
         await manager.loadProcessList()
@@ -236,12 +236,12 @@ final class ProcessManagerTests: XCTestCase {
         let target = process(pid: 42, cpu: 90, name: "Target")
         let other = process(pid: 43, cpu: 10, name: "Other")
         let promoted = process(pid: 44, cpu: 100, name: "Promoted")
-        let inventory = FakeProcessInventory(
-            results: [
+        let inventory = ScriptedInventory(
+            [
                 .success([target, other]),
                 .success([target, promoted])
             ]
-        )
+        , repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 1 }
 
@@ -262,7 +262,7 @@ final class ProcessManagerTests: XCTestCase {
         let hotA = process(pid: 91, cpu: 90, memory: 10, name: "HotA")
         let hotB = process(pid: 92, cpu: 80, memory: 20, name: "HotB")
         let needle = process(pid: 93, cpu: 1, memory: 5, name: "Needle")
-        let inventory = FakeProcessInventory(results: [.success([hotA, hotB, needle])])
+        let inventory = ScriptedInventory([.success([hotA, hotB, needle])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         manager.dependencies.processListLimit = { 2 }
 
@@ -284,7 +284,7 @@ final class ProcessManagerTests: XCTestCase {
     func testSelectUsesOnlyProvidedVisibleProcesses() async {
         let first = process(pid: 1, name: "First")
         let second = process(pid: 2, name: "Second")
-        let inventory = FakeProcessInventory(results: [.success([first, second])])
+        let inventory = ScriptedInventory([.success([first, second])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
 
         await manager.loadProcessList()
@@ -296,8 +296,8 @@ final class ProcessManagerTests: XCTestCase {
 
     func testNormalStopNeverEscalatesToSIGKILL() async {
         let target = process(pid: 42, name: "SlowExit")
-        let inventory = FakeProcessInventory(results: [.success([target]), .success([target])])
-        let signaler = FakeProcessSignaler(alivePids: [42])
+        let inventory = ScriptedInventory([.success([target]), .success([target])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.terminate(target)
@@ -308,8 +308,8 @@ final class ProcessManagerTests: XCTestCase {
 
     func testForceStopUsesSIGKILL() async {
         let target = process(pid: 42, name: "Frozen")
-        let inventory = FakeProcessInventory(results: [.success([target]), .success([])])
-        let signaler = FakeProcessSignaler(alivePids: [42], exitsOnKill: true)
+        let inventory = ScriptedInventory([.success([target]), .success([])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [42], exitsOnKill: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.terminate(target, forceKill: true)
@@ -323,8 +323,8 @@ final class ProcessManagerTests: XCTestCase {
     /// claims one as a target.
     func testTerminateRefusesPIDsThatMustNeverBeSignalled() async {
         let launchd = process(pid: 1, name: "launchd")
-        let inventory = FakeProcessInventory(results: [.success([launchd])])
-        let signaler = FakeProcessSignaler(alivePids: [1])
+        let inventory = ScriptedInventory([.success([launchd])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [1])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         let result = await manager.terminate(launchd)
@@ -338,8 +338,8 @@ final class ProcessManagerTests: XCTestCase {
     /// the requested outcome holds and must not be reported as a rejected signal.
     func testSignalToAProcessThatAlreadyExitedCountsAsStopped() async {
         let target = process(pid: 42, name: "Gone")
-        let inventory = FakeProcessInventory(results: [.success([target]), .success([])])
-        let signaler = FakeProcessSignaler(missingPids: [42])
+        let inventory = ScriptedInventory([.success([target]), .success([])], repeatsLast: true)
+        let signaler = FakeSignaler(missing: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         let result = await manager.terminate(target)
@@ -350,8 +350,8 @@ final class ProcessManagerTests: XCTestCase {
 
     func testBatchStopReportsAnAlreadyExitedTargetAsStoppedNotRejected() async {
         let gone = process(pid: 42, name: "Gone")
-        let inventory = FakeProcessInventory(results: [.success([gone]), .success([])])
-        let signaler = FakeProcessSignaler(missingPids: [42])
+        let inventory = ScriptedInventory([.success([gone]), .success([])], repeatsLast: true)
+        let signaler = FakeSignaler(missing: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.batchTerminate([gone.identity])
@@ -363,8 +363,8 @@ final class ProcessManagerTests: XCTestCase {
     func testTerminateRejectsReusedPIDBeforeSignaling() async {
         let original = process(pid: 42, startTime: "start-a", name: "Original")
         let replacement = process(pid: 42, startTime: "start-b", name: "Replacement")
-        let inventory = FakeProcessInventory(results: [.success([replacement])])
-        let signaler = FakeProcessSignaler(alivePids: [42])
+        let inventory = ScriptedInventory([.success([replacement])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.terminate(original)
@@ -377,8 +377,8 @@ final class ProcessManagerTests: XCTestCase {
         let original = process(pid: 42, startTime: "start-a", name: "Original")
         var replacement = original
         replacement.executablePath = "/tmp/Original"
-        let inventory = FakeProcessInventory(results: [.success([replacement])])
-        let signaler = FakeProcessSignaler(alivePids: [42])
+        let inventory = ScriptedInventory([.success([replacement])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.terminate(original)
@@ -395,8 +395,8 @@ final class ProcessManagerTests: XCTestCase {
         listed.command = "postgres: user db [local] idle"
         var verified = listed
         verified.command = "postgres: user db [local] SELECT"
-        let inventory = FakeProcessInventory(results: [.success([verified]), .success([])])
-        let signaler = FakeProcessSignaler(alivePids: [])
+        let inventory = ScriptedInventory([.success([verified]), .success([])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         let result = await manager.terminate(listed)
@@ -408,8 +408,8 @@ final class ProcessManagerTests: XCTestCase {
     func testBatchStopSignalsTheConfirmedIdentitySnapshotOnly() async {
         let confirmed = process(pid: 42, startTime: "start-a", name: "Confirmed")
         let replacement = process(pid: 42, startTime: "start-b", name: "Replacement")
-        let inventory = FakeProcessInventory(results: [.success([replacement]), .success([replacement])])
-        let signaler = FakeProcessSignaler(alivePids: [42])
+        let inventory = ScriptedInventory([.success([replacement]), .success([replacement])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [42])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.batchTerminate([confirmed.identity])
@@ -422,16 +422,16 @@ final class ProcessManagerTests: XCTestCase {
         let stopped = process(pid: 40, name: "Stopped")
         let rejected = process(pid: 41, name: "Rejected")
         let stale = process(pid: 42, name: "Stale")
-        let inventory = FakeProcessInventory(
-            results: [
+        let inventory = ScriptedInventory(
+            [
                 .success([stopped, rejected]),
                 .success([rejected])
             ]
-        )
-        let signaler = FakeProcessSignaler(
-            alivePids: [40, 41],
+        , repeatsLast: true)
+        let signaler = FakeSignaler(
+            alive: [40, 41],
             exitsOnTerminate: true,
-            rejectedPids: [41]
+            rejected: [41]
         )
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
@@ -455,8 +455,8 @@ final class ProcessManagerTests: XCTestCase {
             pid: ProcessInfo.processInfo.processIdentifier,
             name: "TaskScope"
         )
-        let inventory = FakeProcessInventory(results: [.success([taskScope])])
-        let signaler = FakeProcessSignaler(alivePids: [taskScope.pid])
+        let inventory = ScriptedInventory([.success([taskScope])], repeatsLast: true)
+        let signaler = FakeSignaler(alive: [taskScope.pid])
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.batchTerminate([taskScope.identity])
@@ -507,8 +507,8 @@ final class ProcessManagerTests: XCTestCase {
         let inventory = BlockingProcessInventory()
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: FakeProcessSignaler(),
-            lifecycle: FakeLifecycleService(),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle.allSucceeding(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -542,9 +542,9 @@ final class ProcessManagerTests: XCTestCase {
         let shared = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
         let manager = ProcessManager(
             processInventory: shared,
-            verificationInventory: FakeProcessInventory(results: [.success([target, survivor]), .success([survivor])]),
-            processSignaler: FakeProcessSignaler(alivePids: [target.pid], exitsOnTerminate: true),
-            lifecycle: FakeLifecycleService(),
+            verificationInventory: ScriptedInventory([.success([target, survivor]), .success([survivor])], repeatsLast: true),
+            processSignaler: FakeSignaler(alive: [target.pid], exitsOnTerminate: true),
+            lifecycle: FakeLifecycle.allSucceeding(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -572,7 +572,7 @@ final class ProcessManagerTests: XCTestCase {
     func testQueuedTerminationRechecksAuthorityImmediatelyBeforeSignal() async {
         let target = process(pid: 88, name: "Revoked")
         let inventory = OrderedBlockingProcessInventory(results: [.success([target])])
-        let signaler = FakeProcessSignaler(alivePids: [target.pid])
+        let signaler = FakeSignaler(alive: [target.pid])
         let manager = makeManager(inventory: inventory, signaler: signaler)
         var isAuthorized = true
 
@@ -593,8 +593,8 @@ final class ProcessManagerTests: XCTestCase {
         let inventory = BlockingProcessInventory()
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: FakeProcessSignaler(),
-            lifecycle: FakeLifecycleService(),
+            processSignaler: FakeSignaler(),
+            lifecycle: FakeLifecycle.allSucceeding(),
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -630,7 +630,7 @@ final class ProcessManagerTests: XCTestCase {
                 .success([])
             ]
         )
-        let signaler = FakeProcessSignaler(alivePids: [42], exitsOnTerminate: true)
+        let signaler = FakeSignaler(alive: [42], exitsOnTerminate: true)
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         let activeRefresh = Task { await manager.refreshWatchedStatus(showMessage: false) }
@@ -651,9 +651,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenLifecycleOrdersDependenciesBeforeAppAndVerification() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([]), .success([]), .success([process(pid: 42, name: "Example")])]),
+            inventory: ScriptedInventory([.success([]), .success([]), .success([process(pid: 42, name: "Example")])], repeatsLast: true),
             lifecycle: lifecycle
         )
         let preset = lifecyclePreset()
@@ -671,10 +671,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenRelaunchesWhenExistingAppExitsDuringServiceWork() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let running = process(pid: 42, name: "Example")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([running]), .success([]), .success([running])]),
+            inventory: ScriptedInventory([.success([running]), .success([]), .success([running])], repeatsLast: true),
             lifecycle: lifecycle
         )
         let result = await manager.openApp(lifecyclePreset())
@@ -684,14 +684,14 @@ final class ProcessManagerTests: XCTestCase {
 
     func testOpenDoesNotAcceptAnEarlierRunningObservationAfterAppExits() async {
         for initiallyRunning in [false, true] {
-            let lifecycle = FakeLifecycleService()
+            let lifecycle = FakeLifecycle.allSucceeding()
             let running = process(pid: 42, name: "Example")
             let manager = makeManager(
-                inventory: FakeProcessInventory(results: [
+                inventory: ScriptedInventory([
                     .success(initiallyRunning ? [running] : []),
                     .success(initiallyRunning ? [running] : []),
                     .success([])
-                ]),
+                ], repeatsLast: true),
                 lifecycle: lifecycle
             )
             let result = await manager.openApp(lifecyclePreset())
@@ -701,12 +701,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenRechecksInitiallyRunningAppWhenPostServiceInventoryFails() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([process(pid: 42, name: "Example")]),
                 .failure(.commandFailed("unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         let result = await manager.openApp(lifecyclePreset())
@@ -715,14 +715,14 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenFailsClosedWhenFreshInventoryIsUnavailable() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let running = process(pid: 42, name: "Example")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([running]),
                 .failure(.commandFailed("inventory unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -737,13 +737,13 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenReportsFailureWhenFinalInventoryCannotBeVerified() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([]),
                 .success([]),
                 .failure(.commandFailed("final inventory unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -765,14 +765,14 @@ final class ProcessManagerTests: XCTestCase {
     /// the agents can start the app by itself. Open must re-check before it
     /// launches, otherwise `open` produced a second instance.
     func testOpenSkipsLaunchWhenRestoredServicesAlreadyStartedTheMainProcess() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let running = process(pid: 42, name: "Example")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([]),
                 .success([running])
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -786,12 +786,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenFailsClosedWhenPostServiceInventoryIsUnavailable() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([]),
                 .failure(.commandFailed("inventory unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -803,10 +803,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testMissingAppBundleCausesNoLifecycleMutation() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.appExists = false
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -820,10 +820,10 @@ final class ProcessManagerTests: XCTestCase {
     /// uninstall or reinstall in progress) it must still clear the persistent
     /// overrides and the Keep Off intent, while reporting that nothing opened.
     func testMissingAppBundleStillClearsKeepOffOverrides() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.appExists = false
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
         var keptOff = true
@@ -839,12 +839,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testDaemonFailurePreventsAgentAndAppLaunch() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.daemonResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.ensureDaemonsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "daemon", state: .failed, detail: "approval cancelled")
         ])
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -865,9 +865,9 @@ final class ProcessManagerTests: XCTestCase {
             ["agents.unload", "terminate:Example", "terminate.helper:ExampleHelper", "terminate.helper:SecondHelper", "settle"]
         ]
         for (index, stop) in stopActions.enumerated() {
-            let lifecycle = FakeLifecycleService()
+            let lifecycle = FakeLifecycle.allSucceeding()
             let manager = makeManager(
-                inventory: FakeProcessInventory(results: [.success([main, protected]), .success([protected])]),
+                inventory: ScriptedInventory([.success([main, protected]), .success([protected])], repeatsLast: true),
                 lifecycle: lifecycle
             )
             manager.dependencies.watchedPresets = { [preset] }
@@ -892,15 +892,15 @@ final class ProcessManagerTests: XCTestCase {
         for stop in stopActions {
             for (termination, reason, messagePart) in cases {
                 let preset = lifecyclePreset()
-                let lifecycle = FakeLifecycleService()
+                let lifecycle = FakeLifecycle.allSucceeding()
                 lifecycle.terminationOutcome = termination
-                lifecycle.agentUnloadResult = LifecycleBatchResult(jobs: [
+                lifecycle.unloadAgentsResult = LifecycleBatchResult(jobs: [
                     LifecycleJobResult(label: "example.agent", state: .failed, detail: "rejected")
                 ])
                 let manager = makeManager(
-                    inventory: FakeProcessInventory(results: [
+                    inventory: ScriptedInventory([
                         .success([]), .failure(.commandFailed("final read unavailable"))
-                    ]),
+                    ], repeatsLast: true),
                     lifecycle: lifecycle
                 )
                 manager.dependencies.watchedPresets = { [preset] }
@@ -914,7 +914,7 @@ final class ProcessManagerTests: XCTestCase {
                 XCTAssertEqual(failure?.action, stop.action)
                 XCTAssertEqual(failure?.reason, reason)
                 XCTAssertEqual(failure?.failedJobCount, 1)
-                XCTAssertEqual(manager.lifecycleReport?.jobs, lifecycle.agentUnloadResult.jobs)
+                XCTAssertEqual(manager.lifecycleReport?.jobs, lifecycle.unloadAgentsResult.jobs)
             }
         }
     }
@@ -936,14 +936,14 @@ final class ProcessManagerTests: XCTestCase {
         ]
         for scenario in cases {
             for (index, stop) in stopActions.enumerated() {
-                let lifecycle = FakeLifecycleService()
+                let lifecycle = FakeLifecycle.allSucceeding()
                 if scenario.changed {
-                    lifecycle.agentUnloadResult = LifecycleBatchResult(jobs: [
+                    lifecycle.unloadAgentsResult = LifecycleBatchResult(jobs: [
                         LifecycleJobResult(label: "example.agent", state: .changed, detail: "unloaded")
                     ])
                 }
                 let manager = makeManager(
-                    inventory: FakeProcessInventory(results: [.success(scenario.before), .success(scenario.after)]),
+                    inventory: ScriptedInventory([.success(scenario.before), .success(scenario.after)], repeatsLast: true),
                     lifecycle: lifecycle
                 )
                 manager.dependencies.watchedPresets = { [preset] }
@@ -962,10 +962,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testCloseWithOnlyProtectedGlobalProtectServiceDoesNotClaimItQuit() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let daemon = process(pid: 42, uid: 0, name: "PanGPS")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([daemon])]), lifecycle: lifecycle
+            inventory: ScriptedInventory([.success([daemon])], repeatsLast: true), lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [.globalProtect] }
 
@@ -981,10 +981,10 @@ final class ProcessManagerTests: XCTestCase {
         let preset = lifecyclePreset()
         for stop in stopActions {
             for failInitialRead in [true, false] {
-                let lifecycle = FakeLifecycleService()
+                let lifecycle = FakeLifecycle.allSucceeding()
                 let failure: Result<[AppProcess], ProcessInventoryError> = .failure(.commandFailed("unavailable"))
                 let manager = makeManager(
-                    inventory: FakeProcessInventory(results: failInitialRead ? [failure] : [.success([]), failure]),
+                    inventory: ScriptedInventory(failInitialRead ? [failure] : [.success([]), failure]),
                     lifecycle: lifecycle
                 )
 
@@ -1013,9 +1013,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testManagedQuitUnloadsConfiguredAgentsEvenWhenHelpersAreAbsent() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -1028,15 +1028,15 @@ final class ProcessManagerTests: XCTestCase {
     /// Quit Helpers must leave a launch agent loaded when it is the one running
     /// the main process, otherwise booting it out quits the app.
     func testQuitHelpersPreservesLaunchAgentsRunningTheMainProcess() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let main = process(pid: 42, name: "Example")
         let helper = process(pid: 43, name: "ExampleHelper")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([main, helper]),
                 .success([main])
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [preset] }
@@ -1052,10 +1052,10 @@ final class ProcessManagerTests: XCTestCase {
         let running = process(pid: 42, name: "Example")
         let preset = lifecyclePreset()
         let manager = makeManager(
-            inventory: FakeProcessInventory(
-                results: [.success([running]), .success([running])]
-            ),
-            lifecycle: FakeLifecycleService()
+            inventory: ScriptedInventory(
+                [.success([running]), .success([running])]
+            , repeatsLast: true),
+            lifecycle: FakeLifecycle.allSucceeding()
         )
         manager.dependencies.watchedPresets = { [preset] }
 
@@ -1066,10 +1066,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testManagedQuitFailsWhenLifecycleSignalIsRejected() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.terminationOutcome = .signalRejected
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -1080,10 +1080,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testManagedHelperQuitFailsWhenEscalationCannotBeVerified() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.terminationOutcome = .escalationUnavailable
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -1094,10 +1094,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testManagedCloseFailsWhenAnyLifecycleSignalIsRejected() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.terminationOutcome = .signalRejected
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -1108,8 +1108,8 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectKeepOffStopsSystemServiceOnlyForExplicitAction() async {
-        let lifecycle = FakeLifecycleService()
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         manager.dependencies.isPresetKeptOff = { _ in true }
         let stopped = await manager.keepOff(.globalProtect)
@@ -1125,8 +1125,8 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectQuitAllDisconnectsBeforePersistingAndStoppingServices() async {
-        let lifecycle = FakeLifecycleService()
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = false
         manager.dependencies.setPresetKeptOff = { _, value in
@@ -1144,9 +1144,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testFailedDisconnectDoesNotPersistKeepOffOrStopAnything() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.disconnectResult = .failed("Disconnect could not be verified")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         var intentWrites = 0
         manager.dependencies.setPresetKeptOff = { _, _ in intentWrites += 1 }
@@ -1158,8 +1158,8 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testCustomQuitAllAndExistingCommandCloseDoNotGainPrivilegedStop() async {
-        let lifecycle = FakeLifecycleService()
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         _ = await manager.quitAll(lifecyclePreset())
         _ = await manager.quitAllKillable(.globalProtect)
         XCTAssertFalse(lifecycle.calls.contains("vpn.disconnect"))
@@ -1172,9 +1172,9 @@ final class ProcessManagerTests: XCTestCase {
     /// than drop a connected tunnel underneath the client.
     func testNonDisconnectingStopsLeaveTheGlobalProtectVPNServiceLoaded() async {
         for scope in ["app", "helpers", "all"] {
-            let lifecycle = FakeLifecycleService()
+            let lifecycle = FakeLifecycle.allSucceeding()
             let manager = makeManager(
-                inventory: FakeProcessInventory(results: [.success([]), .success([])]),
+                inventory: ScriptedInventory([.success([]), .success([])], repeatsLast: true),
                 lifecycle: lifecycle
             )
             switch scope {
@@ -1183,18 +1183,18 @@ final class ProcessManagerTests: XCTestCase {
             default: _ = await manager.quitAllKillable(.globalProtect)
             }
             XCTAssertEqual(
-                lifecycle.unloadedPresets.first?.lifecycleUserLaunchAgentJobs.map(\.label),
+                lifecycle.presetsByCall["agents.unload", default: []].first?.lifecycleUserLaunchAgentJobs.map(\.label),
                 ["com.paloaltonetworks.gp.pangpa"],
                 "scope \(scope) must not unload the VPN service job"
             )
-            XCTAssertEqual(lifecycle.unloadedPresets.first?.lifecycleSystemLaunchDaemonJobs, [])
+            XCTAssertEqual(lifecycle.presetsByCall["agents.unload", default: []].first?.lifecycleSystemLaunchDaemonJobs, [])
         }
     }
 
     func testConfirmedDisconnectRecoveryStopsServicesAndConsumesFailure() async throws {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.disconnectResult = .failed("Authentication timed out")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = false
         manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
@@ -1219,9 +1219,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testDisconnectRecoveryRejectsUnrequestedAndSupersededFailures() async throws {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.disconnectResult = .failed("Authentication timed out")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         let unsolicited = await manager.stopGlobalProtectAfterFailedDisconnect(failureID: UUID())
         XCTAssertEqual(unsolicited.status, .rejected)
@@ -1237,9 +1237,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpeningGlobalProtectInvalidatesPendingDisconnectRecovery() async throws {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.disconnectResult = .failed("Authentication timed out")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         _ = await manager.keepOff(.globalProtect)
         let failureID = try XCTUnwrap(manager.globalProtectDisconnectFailureID)
@@ -1252,11 +1252,11 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectSystemFailureCannotReportSuccessfulStop() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.systemDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableDaemonsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "Administrator cancelled")
         ])
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
@@ -1265,9 +1265,9 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectRemainingSystemProcessCannotBeReportedOff() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let daemon = process(pid: 42, uid: 0, name: "PanGPS")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([daemon])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([daemon])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         let result = await manager.keepOff(.globalProtect)
         XCTAssertEqual(result.status, .failed)
@@ -1275,10 +1275,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectRestoreEnsuresSystemBeforeEnablingOverridesAndUserAgents() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let running = process(pid: 42, name: "GlobalProtect")
         let daemon = process(pid: 43, uid: 0, name: "PanGPS")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([running, daemon])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([running, daemon])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         var keptOff = true
         manager.dependencies.isPresetKeptOff = { _ in keptOff }
@@ -1291,10 +1291,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectOpenClearsOverridesEvenWhenSavedIntentWasLost() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let running = process(pid: 42, name: "GlobalProtect")
         let daemon = process(pid: 43, uid: 0, name: "PanGPS")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([running, daemon])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([running, daemon])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
         manager.dependencies.isPresetKeptOff = { _ in false }
         let opened = await manager.openApp(.globalProtect)
@@ -1304,12 +1304,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenRecoversOrphanedGlobalProtectUIWithoutUnloadingVPNJob() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let ui = process(pid: 42, name: "GlobalProtect")
         let service = process(pid: 43, uid: 0, name: "PanGPS")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [
+        let manager = makeManager(inventory: ScriptedInventory([
             .success([ui]), .success([]), .success([ui, service])
-        ]), lifecycle: lifecycle)
+        ], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [.globalProtect] }
 
         let result = await manager.openApp(.globalProtect)
@@ -1319,16 +1319,16 @@ final class ProcessManagerTests: XCTestCase {
             "exists", "agents.unload", "terminate:GlobalProtect", "settle",
             "daemon", "daemon.enable", "agents.enable", "agents.load"
         ])
-        XCTAssertEqual(lifecycle.unloadedPresets.first?.lifecycleUserLaunchAgentJobs.map(\.label), [
+        XCTAssertEqual(lifecycle.presetsByCall["agents.unload", default: []].first?.lifecycleUserLaunchAgentJobs.map(\.label), [
             "com.paloaltonetworks.gp.pangpa"
         ])
-        XCTAssertEqual(lifecycle.unloadedPresets.first?.lifecycleSystemLaunchDaemonJobs, [])
+        XCTAssertEqual(lifecycle.presetsByCall["agents.unload", default: []].first?.lifecycleSystemLaunchDaemonJobs, [])
     }
 
     func testOpenDoesNotSpawnAgainIfOrphanedUIFailsToClose() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let ui = process(pid: 42, name: "GlobalProtect")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([ui])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([ui])], repeatsLast: true), lifecycle: lifecycle)
 
         let result = await manager.openApp(.globalProtect)
 
@@ -1338,12 +1338,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpenAbortsOrphanRecoveryWhenUIJobCannotUnload() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentUnloadResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.unloadAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpa", state: .failed, detail: "Denied")
         ])
         let ui = process(pid: 42, name: "GlobalProtect")
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([ui])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([ui])], repeatsLast: true), lifecycle: lifecycle)
 
         let result = await manager.openApp(.globalProtect)
 
@@ -1352,11 +1352,11 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testGlobalProtectCancelledRestorePreservesIntentAndDoesNotStartAgents() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.systemEnableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.enableDaemonsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "Administrator cancelled")
         ])
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         var keptOff = true
         manager.dependencies.isPresetKeptOff = { _ in keptOff }
         manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
@@ -1367,20 +1367,20 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testKeepOffPersistsIntentDisablesAgentsAndLeavesProtectedServiceAlone() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let preset = lifecyclePreset()
         let protected = process(pid: 44, uid: 0, name: "ExampleDaemon")
-        let inventory = FakeProcessInventory(results: [
+        let inventory = ScriptedInventory([
             .success([
                 process(pid: 42, name: "Example"),
                 process(pid: 43, name: "ExampleHelper"),
                 protected
             ]),
             .success([protected])
-        ])
+        ], repeatsLast: true)
         let manager = makeManager(inventory: inventory, lifecycle: lifecycle)
         manager.dependencies.watchedPresets = { [preset] }
         var keptOff = false
@@ -1401,14 +1401,14 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testKeepOffStillDisablesRelaunchJobsWhenInventoryIsUnavailable() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .failure(.commandFailed("ps unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         var keptOff = false
@@ -1427,15 +1427,15 @@ final class ProcessManagerTests: XCTestCase {
 
     func testOpenRetainsKeepOffUntilAgentBootstrapSucceeds() async {
         for cancelled in [false, true] {
-            let lifecycle = FakeLifecycleService()
-            lifecycle.agentLoadResult = LifecycleBatchResult(jobs: [
+            let lifecycle = FakeLifecycle.allSucceeding()
+            lifecycle.bootstrapAgentsResult = LifecycleBatchResult(jobs: [
                 LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpa", state: .failed,
                                    detail: cancelled ? "Command cancelled." : "Bootstrap failed.")
             ])
             if cancelled {
-                lifecycle.agentLoadAction = { withUnsafeCurrentTask { $0?.cancel() } }
+                lifecycle.onBootstrapAgents = { withUnsafeCurrentTask { $0?.cancel() } }
             }
-            let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+            let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
             var keptOff = true
             manager.dependencies.isPresetKeptOff = { _ in keptOff }
             manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
@@ -1453,12 +1453,12 @@ final class ProcessManagerTests: XCTestCase {
 
     func testPollingRestartSkipsCancelledEnforcementWithoutReportOrDiagnostic() async {
         let blocked = BlockingProcessInventory()
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableAction = { _ = await blocked.load(fetchExtendedStats: false) }
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.onDisableAgents = { _ = await blocked.load(fetchExtendedStats: false) }
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangps", state: .failed, detail: "Command cancelled.")
         ])
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         manager.dependencies.isPresetKeptOff = { _ in true }
         let controller = ProcessPollingController(sleep: { _ in false })
         let finished = expectation(description: "cancelled enforcement finished")
@@ -1483,8 +1483,8 @@ final class ProcessManagerTests: XCTestCase {
         for owner in [uid_t(0), getuid()] {
             var agent = process(pid: 42, uid: owner, name: "PanGPS")
             agent.executablePath = "/Applications/GlobalProtect.app/Contents/Resources/PanGPS"
-            let lifecycle = FakeLifecycleService()
-            let manager = makeManager(inventory: FakeProcessInventory(results: [.success([agent])]), lifecycle: lifecycle)
+            let lifecycle = FakeLifecycle.allSucceeding()
+            let manager = makeManager(inventory: ScriptedInventory([.success([agent])], repeatsLast: true), lifecycle: lifecycle)
             manager.dependencies.watchedPresets = { [.globalProtect] }
             manager.dependencies.keptOffPresets = { [.globalProtect] }
             manager.dependencies.isPresetKeptOff = { _ in true }
@@ -1496,12 +1496,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testOpeningKeptOffPresetReEnablesAgentsAndClearsIntent() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentEnableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.enableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "enabled")
         ])
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([]), .success([]), .success([process(pid: 42, name: "Example")])]),
+            inventory: ScriptedInventory([.success([]), .success([]), .success([process(pid: 42, name: "Example")])], repeatsLast: true),
             lifecycle: lifecycle
         )
         var keptOff = true
@@ -1523,15 +1523,15 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testStartupEnforcementDisablesAgentsEvenWhenNoRunningStateIsKnown() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let preset = lifecyclePreset()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .failure(.commandFailed("ps unavailable"))
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.keptOffPresets = { [preset] }
@@ -1545,13 +1545,13 @@ final class ProcessManagerTests: XCTestCase {
     /// Enforcement runs on every launch and poll tick; a successful run must not
     /// raise the Keep Off report sheet.
     func testEnforcementPublishesNoReportWhenEveryJobSucceeds() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let preset = lifecyclePreset()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.keptOffPresets = { [preset] }
@@ -1564,13 +1564,13 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testEnforcementPublishesAReportWhenAJobFails() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .failed, detail: "Operation not permitted")
         ])
         let preset = lifecyclePreset()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.keptOffPresets = { [preset] }
@@ -1582,12 +1582,12 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testUserKeepOffStillPublishesItsReport() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([])]),
+            inventory: ScriptedInventory([.success([])], repeatsLast: true),
             lifecycle: lifecycle
         )
 
@@ -1599,10 +1599,10 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testEnforcementIsSkippedOnceIntentHasBeenCleared() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([process(pid: 42, name: "Example")])]),
+            inventory: ScriptedInventory([.success([process(pid: 42, name: "Example")])], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.keptOffPresets = { [preset] }
@@ -1619,7 +1619,7 @@ final class ProcessManagerTests: XCTestCase {
     /// must abort inside the gate instead of re-disabling the agents the user
     /// just restored and quitting the app they just opened.
     func testEnforcementQueuedBehindOpenDoesNotReDisableAgentsAfterOpenClearsIntent() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let running = process(pid: 42, name: "Example")
         let inventory = SequencedBlockingProcessInventory(
@@ -1661,7 +1661,7 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testEnforcementSkipsWhileAMutationIsRunning() async {
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let preset = lifecyclePreset()
         let inventory = SequencedBlockingProcessInventory(
             results: [.success([process(pid: 42, name: "Example")])],
@@ -1684,18 +1684,18 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testRoutineKeepOffEnforcementChecksFreshProcessState() async {
-        let lifecycle = FakeLifecycleService()
-        lifecycle.agentDisableResult = LifecycleBatchResult(jobs: [
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.disableAgentsResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "example.agent", state: .changed, detail: "disabled")
         ])
         let preset = lifecyclePreset()
         let running = process(pid: 42, name: "Example")
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [
+            inventory: ScriptedInventory([
                 .success([running]),
                 .success([running]),
                 .success([])
-            ]),
+            ], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.keptOffPresets = { [preset] }
@@ -1715,9 +1715,9 @@ final class ProcessManagerTests: XCTestCase {
     func testBackgroundKeepOffPreservesExternallyRestoredPanGPS() async {
         var agent = process(pid: 42, uid: getuid(), name: "PanGPS")
         agent.executablePath = "/Applications/GlobalProtect.app/Contents/Resources/PanGPS"
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([agent])]),
+            inventory: ScriptedInventory([.success([agent])], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [.globalProtect] }
@@ -1740,9 +1740,9 @@ final class ProcessManagerTests: XCTestCase {
     func testKeepOffDoesNotClaimSuccessWhileCurrentUserAgentRemains() async {
         var agent = process(pid: 42, uid: getuid(), name: "PanGPS")
         agent.executablePath = "/Applications/GlobalProtect.app/Contents/Resources/PanGPS"
-        let lifecycle = FakeLifecycleService()
+        let lifecycle = FakeLifecycle.allSucceeding()
         let manager = makeManager(
-            inventory: FakeProcessInventory(results: [.success([agent])]),
+            inventory: ScriptedInventory([.success([agent])], repeatsLast: true),
             lifecycle: lifecycle
         )
         manager.dependencies.watchedPresets = { [.globalProtect] }
@@ -1760,8 +1760,8 @@ final class ProcessManagerTests: XCTestCase {
         ] {
             var agent = process(pid: 42, uid: uid, name: "PanGPS")
             agent.executablePath = path
-            let lifecycle = FakeLifecycleService()
-            let manager = makeManager(inventory: FakeProcessInventory(results: [.success([agent])]), lifecycle: lifecycle)
+            let lifecycle = FakeLifecycle.allSucceeding()
+            let manager = makeManager(inventory: ScriptedInventory([.success([agent])], repeatsLast: true), lifecycle: lifecycle)
             manager.dependencies.keptOffPresets = { [.globalProtect] }
             manager.dependencies.isPresetKeptOff = { _ in true }
             await manager.enforceKeptOffPresets()
@@ -1771,14 +1771,14 @@ final class ProcessManagerTests: XCTestCase {
 
     func testExpandedMetricConsumersEnableCollectionAndRefreshLoadedList() async {
         let target = process(pid: 42, name: "Example")
-        let inventory = FakeProcessInventory(results: [.success([target])])
+        let inventory = ScriptedInventory([.success([target])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
 
         await manager.loadProcessList()
         await manager.beginExtendedMetrics()
         await manager.beginExtendedMetrics()
 
-        XCTAssertEqual(inventory.fetchExtendedRequests, [false, true])
+        XCTAssertEqual(inventory.extendedStatsRequests, [false, true])
         XCTAssertTrue(manager.fetchExtendedStats)
 
         manager.endExtendedMetrics()
@@ -1793,7 +1793,7 @@ final class ProcessManagerTests: XCTestCase {
     /// enable collection with no consumer left able to disable it.
     func testReleaseDeliveredBeforeItsAcquireDoesNotLatchCollectionOn() async {
         let target = process(pid: 42, name: "Example")
-        let inventory = FakeProcessInventory(results: [.success([target])])
+        let inventory = ScriptedInventory([.success([target])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
 
         await manager.loadProcessList()
@@ -1815,8 +1815,8 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     func testMissingBundleOpenRestoresFullGlobalProtectJobScope() async {
-        let lifecycle = FakeLifecycleService()
-        let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        let manager = makeManager(inventory: ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
         lifecycle.appExists = false
         manager.dependencies.isPresetKeptOff = { _ in true }
         _ = await manager.openApp(.globalProtect)
@@ -1824,7 +1824,7 @@ final class ProcessManagerTests: XCTestCase {
     }
 
     private func assertFullGlobalProtectScope(
-        _ lifecycle: FakeLifecycleService, calls: [String],
+        _ lifecycle: FakeLifecycle, calls: [String],
         file: StaticString = #filePath, line: UInt = #line
     ) {
         for call in calls {
@@ -1843,8 +1843,8 @@ final class ProcessManagerTests: XCTestCase {
 
     private func makeManager(
         inventory: any ProcessInventoryProviding,
-        signaler: FakeProcessSignaler = FakeProcessSignaler(),
-        lifecycle: any ProcessLifecycleServicing = FakeLifecycleService()
+        signaler: FakeSignaler = FakeSignaler(),
+        lifecycle: any ProcessLifecycleServicing = FakeLifecycle.allSucceeding()
     ) -> ProcessManager {
         let manager = ProcessManager(
             processInventory: inventory,
@@ -1885,7 +1885,7 @@ final class ProcessManagerTests: XCTestCase {
         memory: Double = 0,
         name: String
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 1,
             uid: uid,
@@ -1900,131 +1900,6 @@ final class ProcessManagerTests: XCTestCase {
             diskReadBytes: 0,
             diskWriteBytes: 0
         )
-    }
-}
-
-final class ManagerTestLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    var disconnectResult = GlobalProtectDisconnectResult.disconnected
-    var appExists = true
-    var daemonResult = LifecycleBatchResult.notNeeded
-    var agentLoadResult = LifecycleBatchResult.notNeeded
-    var agentLoadAction: (@Sendable () async -> Void)?
-    var agentDisableAction: (@Sendable () async -> Void)?
-    private(set) var preservedVPNServices: [Bool] = []
-    var agentUnloadResult = LifecycleBatchResult.notNeeded
-    var agentDisableResult = LifecycleBatchResult.notNeeded
-    var agentEnableResult = LifecycleBatchResult.notNeeded
-    var systemDisableResult = LifecycleBatchResult.notNeeded
-    var systemEnableResult = LifecycleBatchResult.notNeeded
-    var openResult = true
-    var waitResult = true
-    var terminationOutcome = ProcessTerminationOutcome.signalled
-    private(set) var calls: [String] = []
-    private(set) var preservedPIDs: [Set<Int32>] = []
-    private(set) var unloadedPresets: [WatchedAppPreset] = []
-    private(set) var presetsByCall: [String: [WatchedAppPreset]] = [:]
-
-    func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult {
-        calls.append("vpn.disconnect")
-        return disconnectResult
-    }
-
-    func appBundleExists(at path: String) -> Bool {
-        calls.append("exists")
-        return appExists
-    }
-
-    func settleAfterProcessChange() async {
-        calls.append("settle")
-    }
-
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        presetsByCall["terminate", default: []].append(preset)
-        calls.append("terminate:\(preset.mainProcessName)")
-        return terminationOutcome
-    }
-
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        presetsByCall["helper", default: []].append(preset)
-        calls.append("terminate.helper:\(name)")
-        return terminationOutcome
-    }
-
-    func isProcessNamedRunning(_ name: String) async -> Bool {
-        calls.append("running:\(name)")
-        return false
-    }
-
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        presetsByCall["agents.unload", default: []].append(preset)
-        unloadedPresets.append(preset)
-        calls.append("agents.unload")
-        return agentUnloadResult
-    }
-
-    func unloadUserLaunchAgents(
-        for preset: WatchedAppPreset,
-        preservingPIDs: Set<Int32>
-    ) async -> LifecycleBatchResult {
-        presetsByCall["agents.unload", default: []].append(preset)
-        unloadedPresets.append(preset)
-        preservedPIDs.append(preservingPIDs)
-        calls.append("agents.unload")
-        return agentUnloadResult
-    }
-
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        presetsByCall["agents.load", default: []].append(preset)
-        calls.append("agents.load")
-        await agentLoadAction?()
-        return agentLoadResult
-    }
-
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult {
-        presetsByCall["agents.disable", default: []].append(preset)
-        calls.append("agents.disable")
-        preservedVPNServices.append(preservingVPNService)
-        await agentDisableAction?()
-        return agentDisableResult
-    }
-
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        presetsByCall["agents.enable", default: []].append(preset)
-        calls.append("agents.enable")
-        return agentEnableResult
-    }
-
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult {
-        presetsByCall["daemon.disable", default: []].append(preset)
-        calls.append("daemon.disable:\(allowAdministratorPrompt)")
-        return systemDisableResult
-    }
-
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        presetsByCall["daemon.enable", default: []].append(preset)
-        calls.append("daemon.enable")
-        return systemEnableResult
-    }
-
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        presetsByCall["daemon", default: []].append(preset)
-        calls.append("daemon")
-        return daemonResult
-    }
-
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool {
-        presetsByCall["wait.main", default: []].append(preset)
-        return await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds)
-    }
-
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool {
-        calls.append("wait")
-        return waitResult
-    }
-
-    func openAppBundle(at path: String) async -> AppBundleOpenResult {
-        calls.append("open")
-        return openResult ? .opened : .failed("Fake launch failed.")
     }
 }
 
@@ -2201,82 +2076,3 @@ private actor OrderedBlockingProcessInventory: ProcessInventoryProviding {
         requests
     }
 }
-
-final class ManagerTestInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-    private(set) var fetchExtendedRequests: [Bool] = []
-
-    init(results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        fetchExtendedRequests.append(fetchExtendedStats)
-        guard !results.isEmpty else {
-            return .failure(.commandFailed("No fake result configured."))
-        }
-        if results.count == 1 {
-            return results[0]
-        }
-        return results.removeFirst()
-    }
-}
-
-final class ManagerTestSignaler: ProcessSignaling {
-    struct SentSignal: Equatable {
-        var signal: Int32
-        var pid: Int32
-    }
-
-    private var alivePids: Set<Int32>
-    private let exitsOnKill: Bool
-    private let exitsOnTerminate: Bool
-    private let rejectedPids: Set<Int32>
-    private let missingPids: Set<Int32>
-    private(set) var sent: [SentSignal] = []
-
-    init(
-        alivePids: Set<Int32> = [],
-        exitsOnKill: Bool = false,
-        exitsOnTerminate: Bool = false,
-        rejectedPids: Set<Int32> = [],
-        missingPids: Set<Int32> = []
-    ) {
-        self.alivePids = alivePids
-        self.exitsOnKill = exitsOnKill
-        self.exitsOnTerminate = exitsOnTerminate
-        self.rejectedPids = rejectedPids
-        self.missingPids = missingPids
-    }
-
-    func deliver(_ signal: Int32, to pid: Int32) -> ProcessSignalDelivery {
-        if missingPids.contains(pid) {
-            sent.append(SentSignal(signal: signal, pid: pid))
-            return .noSuchProcess
-        }
-        return send(signal, to: pid) ? .delivered : .rejected(errno: EPERM)
-    }
-
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        sent.append(SentSignal(signal: signal, pid: pid))
-        if rejectedPids.contains(pid) {
-            return false
-        }
-        if signal == SIGKILL, exitsOnKill {
-            alivePids.remove(pid)
-        }
-        if signal == SIGTERM, exitsOnTerminate {
-            alivePids.remove(pid)
-        }
-        return true
-    }
-
-    func isAlive(_ pid: Int32) -> Bool {
-        alivePids.contains(pid)
-    }
-}
-
-// Share the existing fakes with the batch regression tests.
-private typealias FakeProcessInventory = ManagerTestInventory
-private typealias FakeProcessSignaler = ManagerTestSignaler
-private typealias FakeLifecycleService = ManagerTestLifecycle

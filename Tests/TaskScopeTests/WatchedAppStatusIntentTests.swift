@@ -58,7 +58,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
     // MARK: Get Watched App Status command
 
     func testStatusRefreshesAndReportsTheVerifiedSnapshotWithoutChangingTheStatusLine() async throws {
-        let inventory = StatusScriptedInventory([.success([main, helper])])
+        let inventory = ScriptedInventory([.success([main, helper])], repeatsLast: true)
         let (manager, coordinator) = makeCoordinator(inventory: inventory)
 
         let result = await coordinator.perform(.statusPresetEntity(target))
@@ -70,14 +70,14 @@ final class WatchedAppStatusIntentTests: XCTestCase {
             runningHelperCount: 1, isKeptOff: false
         ))
         XCTAssertEqual(result.message, status.sentence)
-        XCTAssertEqual(inventory.loads, 1, "one fresh read")
+        XCTAssertEqual(inventory.readCount, 1, "one fresh read")
         XCTAssertEqual(manager.message, "Idle.", "a status check leaves the status line alone")
         XCTAssertEqual(manager.snapshots.first?.isMainRunning, true, "the read updates the shown status too")
         XCTAssertNil(manager.lifecycleReport)
     }
 
     func testStatusReportsThePresetsKeepOffIntent() async throws {
-        let (manager, coordinator) = makeCoordinator(inventory: StatusScriptedInventory([.success([])]))
+        let (manager, coordinator) = makeCoordinator(inventory: ScriptedInventory([.success([])], repeatsLast: true))
         manager.dependencies.isPresetKeptOff = { [id = preset.id] in $0.id == id }
 
         let result = await coordinator.perform(.statusPresetEntity(target))
@@ -89,7 +89,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
     }
 
     func testStatusAfterAFailedReadIsStaleThenUnknownWithoutAnEarlierRead() async throws {
-        let inventory = StatusScriptedInventory([.success([main]), .failure(.commandFailed("ps timed out"))])
+        let inventory = ScriptedInventory([.success([main]), .failure(.commandFailed("ps timed out"))], repeatsLast: true)
         let (_, coordinator) = makeCoordinator(inventory: inventory)
 
         let first = await coordinator.perform(.statusPresetEntity(target))
@@ -101,7 +101,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
             runningHelperCount: 0, isKeptOff: false
         ))
 
-        let (_, cold) = makeCoordinator(inventory: StatusScriptedInventory([.failure(.commandFailed("ps timed out"))]))
+        let (_, cold) = makeCoordinator(inventory: ScriptedInventory([.failure(.commandFailed("ps timed out"))], repeatsLast: true))
         let unknown = await cold.perform(.statusPresetEntity(target))
         XCTAssertEqual(unknown.status, .completed)
         XCTAssertEqual(unknown.watchedStatus?.availability, .unknown)
@@ -110,7 +110,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
     }
 
     func testStatusRejectsAMissingPresetAndStartupVerification() async {
-        let inventory = StatusScriptedInventory([.success([main])])
+        let inventory = ScriptedInventory([.success([main])], repeatsLast: true)
         let manager = makeManager(inventory: inventory)
         let missing = await AppCommandCoordinator(processManager: manager, presets: { [] })
             .perform(.statusPresetEntity(target))
@@ -121,14 +121,14 @@ final class WatchedAppStatusIntentTests: XCTestCase {
             processManager: manager, presets: { [self.preset] }, allowsCommands: { false }
         ).perform(.statusPresetEntity(target))
         XCTAssertEqual(verifying, AppCommandCoordinator.startupVerificationRejection)
-        XCTAssertEqual(inventory.loads, 0, "a rejected status check reads nothing")
+        XCTAssertEqual(inventory.readCount, 0, "a rejected status check reads nothing")
     }
 
     // MARK: Open and Stop values
 
     func testOpenAndStopReturnTheStatusTheirFinalReadVerified() async throws {
         // Open: not running before, not started by its agents, running after.
-        let opening = StatusScriptedInventory([.success([]), .success([]), .success([main, helper])])
+        let opening = ScriptedInventory([.success([]), .success([]), .success([main, helper])], repeatsLast: true)
         let (_, openCoordinator) = makeCoordinator(inventory: opening)
         let opened = await openCoordinator.perform(.openPresetEntity(target))
         XCTAssertEqual(opened.status, .completed, opened.message)
@@ -137,7 +137,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
         XCTAssertEqual(opened.watchedStatus?.availability, .current)
 
         // Stop: running before, gone after.
-        let stopping = StatusScriptedInventory([.success([main, helper]), .success([])])
+        let stopping = ScriptedInventory([.success([main, helper]), .success([])], repeatsLast: true)
         let (_, stopCoordinator) = makeCoordinator(inventory: stopping)
         let stopped = await stopCoordinator.perform(.stopPresetEntity(target))
         XCTAssertEqual(stopped.status, .completed, stopped.message)
@@ -145,7 +145,7 @@ final class WatchedAppStatusIntentTests: XCTestCase {
         XCTAssertEqual(stopped.watchedStatus?.runningHelperCount, 0)
 
         // A failed Open carries no status: Shortcuts reports the failure instead.
-        let (_, failing) = makeCoordinator(inventory: StatusScriptedInventory([.success([])]), bundleExists: false)
+        let (_, failing) = makeCoordinator(inventory: ScriptedInventory([.success([])], repeatsLast: true), bundleExists: false)
         let failed = await failing.perform(.openPresetEntity(target))
         XCTAssertEqual(failed.status, .failed)
         XCTAssertNil(failed.watchedStatus)
@@ -240,18 +240,20 @@ final class WatchedAppStatusIntentTests: XCTestCase {
     }
 
     private func process(pid: Int32, path: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: path,
             executablePath: path, elapsedTime: "00:01", netInKB: nil, netOutKB: nil,
             diskReadBytes: nil, diskWriteBytes: nil
         )
     }
 
-    private func makeManager(inventory: StatusScriptedInventory, bundleExists: Bool = true) -> ProcessManager {
+    private func makeManager(inventory: ScriptedInventory, bundleExists: Bool = true) -> ProcessManager {
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.appExists = bundleExists
         let manager = ProcessManager(
             processInventory: inventory,
-            processSignaler: StatusNoopSignaler(),
-            lifecycle: StatusNoopLifecycle(bundleExists: bundleExists),
+            processSignaler: FakeSignaler(),
+            lifecycle: lifecycle,
             settleAfterProcessChange: {},
             dependencies: .inert
         )
@@ -261,56 +263,9 @@ final class WatchedAppStatusIntentTests: XCTestCase {
     }
 
     private func makeCoordinator(
-        inventory: StatusScriptedInventory, bundleExists: Bool = true
+        inventory: ScriptedInventory, bundleExists: Bool = true
     ) -> (ProcessManager, AppCommandCoordinator) {
         let manager = makeManager(inventory: inventory, bundleExists: bundleExists)
         return (manager, AppCommandCoordinator(processManager: manager, presets: { [preset] in [preset] }))
     }
-}
-
-/// Returns its results in order and then repeats the last one.
-private final class StatusScriptedInventory: ProcessInventoryProviding, @unchecked Sendable {
-    private let lock = NSLock()
-    private var results: [Result<[AppProcess], ProcessInventoryError>]
-    private var loadCount = 0
-
-    init(_ results: [Result<[AppProcess], ProcessInventoryError>]) {
-        self.results = results
-    }
-
-    var loads: Int { lock.withLock { loadCount } }
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        lock.withLock {
-            loadCount += 1
-            return results.count == 1 ? results[0] : results.removeFirst()
-        }
-    }
-}
-
-private struct StatusNoopSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { true }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-/// Lifecycle steps that need nothing and change nothing: no signal, launchd
-/// or open call leaves the test.
-private struct StatusNoopLifecycle: ProcessLifecycleServicing {
-    var bundleExists = true
-    func appBundleExists(at path: String) -> Bool { bundleExists }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .signalled }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .opened }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { .notNeeded }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { true }
 }

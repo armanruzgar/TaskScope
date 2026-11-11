@@ -41,7 +41,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testEngineMatchesNamesCaseInsensitively() async {
-        let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
         XCTAssertTrue(store.add(rule(name: "example")))
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [4101])
@@ -202,7 +202,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testClearEventsPersistsEmptyHistory() async throws {
-        let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
         XCTAssertTrue(store.add(rule(action: .silent)))
         await store.evaluateNow()
         XCTAssertFalse(store.events.isEmpty)
@@ -216,7 +216,7 @@ final class Batch08FixTests: XCTestCase {
         for offsets in [false, true] {
             for dismiss in [false, true] {
                 defaults.removePersistentDomain(forName: suite)
-                let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+                let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
                 let target = rule()
                 XCTAssertTrue(store.add(target))
                 await store.evaluateNow()
@@ -237,7 +237,7 @@ final class Batch08FixTests: XCTestCase {
     func testConfirmedAcceptedStopSurvivesEditsToggleAndDeletionUntilExit() async throws {
         for mutation in ["save", "edit", "disable", "toggle", "delete", "offsets"] {
             defaults.removePersistentDomain(forName: suite)
-            let inventory = Batch08Inventory(processes: [process()])
+            let inventory = ScriptedInventory(processes: [process()])
             let store = makeStore(inventory: inventory)
             let target = rule()
             XCTAssertTrue(store.add(target))
@@ -261,7 +261,7 @@ final class Batch08FixTests: XCTestCase {
             }
             await store.evaluateNow()
             XCTAssertNil(store.currentPrompt, mutation)
-            await inventory.set([])
+            inventory.setProcesses([])
             await store.evaluateNow()
             XCTAssertEqual(attempts, 1, mutation)
             XCTAssertEqual(store.events.map(\.outcome), [.stopped, .stopRequested], mutation)
@@ -270,7 +270,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testIgnoredConfirmedStopReportsOnceAfterCadenceWithoutSignallingAgain() async throws {
-        let inventory = Batch08Inventory(processes: [process()])
+        let inventory = ScriptedInventory(processes: [process()])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(rule()))
         var attempts = 0
@@ -289,21 +289,21 @@ final class Batch08FixTests: XCTestCase {
         XCTAssertEqual(store.events.count, 2)
         XCTAssertNil(store.currentPrompt)
         XCTAssertEqual(attempts, 1)
-        await inventory.set([])
+        inventory.setProcesses([])
         await store.evaluateNow()
         XCTAssertEqual(store.events.map(\.outcome), [.stopped, .failed, .stopRequested])
     }
 
     func testLogOnlyLogsAnOccurrenceOnceWhenItsExecutableMovesAndAgainAfterPIDReuse() async {
-        let inventory = Batch08Inventory(processes: [process()])
+        let inventory = ScriptedInventory(processes: [process()])
         let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(rule(action: .silent)))
         await store.evaluateNow()
-        await inventory.set([process(path: "/batch08/moved/Example")])
+        inventory.setProcesses([process(path: "/batch08/moved/Example")])
         await store.evaluateNow()
         await store.evaluateNow()
         XCTAssertEqual(store.events.map(\.outcome), [.logged], "a moved executable is the same lifetime")
-        await inventory.set([process(start: "replacement", path: "/batch08/moved/Example")])
+        inventory.setProcesses([process(start: "replacement", path: "/batch08/moved/Example")])
         await store.evaluateNow()
         XCTAssertEqual(store.events.map(\.outcome), [.logged, .logged], "a reused PID is a new lifetime")
     }
@@ -312,7 +312,7 @@ final class Batch08FixTests: XCTestCase {
         for mode in ["prompt", "confirmed", "automatic"] {
             for reused in [false, true] {
                 defaults.removePersistentDomain(forName: suite)
-                let inventory = Batch08Inventory(processes: [process()])
+                let inventory = ScriptedInventory(processes: [process()])
                 let store = makeStore(inventory: inventory)
                 XCTAssertTrue(store.add(rule(action: mode == "automatic" ? .kill : .prompt)))
                 store.start { _, _ in .requestedStillRunning }
@@ -321,7 +321,7 @@ final class Batch08FixTests: XCTestCase {
                 if mode == "confirmed" {
                     await store.finishStop(try XCTUnwrap(store.claimPrompt(XCTUnwrap(store.currentPrompt))))
                 }
-                await inventory.set([process(start: reused ? "new" : "start", path: "/batch08/other/Example", elapsed: "00:01")])
+                inventory.setProcesses([process(start: reused ? "new" : "start", path: "/batch08/other/Example", elapsed: "00:01")])
                 await store.evaluateNow()
                 // A10-3 (lead): an unanswered name-only prompt follows its moved
                 // executable, so nothing failed; a confirmed or automatic stop
@@ -342,7 +342,7 @@ final class Batch08FixTests: XCTestCase {
                 let seed = AutoStopEvent(timestamp: date, processName: "old", pid: 9, ruleID: UUID(), outcome: .logged, detail: "old")
                 let original = mixed ? Data("[\(String(decoding: try JSONEncoder().encode(seed), as: UTF8.self)),null]".utf8) : Data([0xFF])
                 defaults.set(original, forKey: "events")
-                let inventory = Batch08Inventory(processes: [process()])
+                let inventory = ScriptedInventory(processes: [process()])
                 let store = makeStore(inventory: inventory)
                 XCTAssertTrue(store.add(rule(action: scenario == "autoStop" ? .kill : .prompt)))
                 store.start { _, _ in scenario == "pendingExit" ? .requestedStillRunning : .stopped }
@@ -354,7 +354,7 @@ final class Batch08FixTests: XCTestCase {
                 default: break
                 }
                 if scenario == "endedPrompt" || scenario == "pendingExit" {
-                    await inventory.set([])
+                    inventory.setProcesses([])
                     await store.evaluateNow()
                 }
                 XCTAssertGreaterThan(store.events.count, mixed ? 1 : 0, scenario)
@@ -374,13 +374,13 @@ final class Batch08FixTests: XCTestCase {
             var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(seed)) as? [String: Any])
             raw["futureField"] = "preserve"
             defaults.set(try JSONSerialization.data(withJSONObject: [raw]), forKey: "events")
-            let inventory = Batch08Inventory(processes: (4101...4150).map { process(pid: Int32($0)) })
+            let inventory = ScriptedInventory(processes: (4101...4150).map { process(pid: Int32($0)) })
             let store = makeStore(inventory: inventory)
             XCTAssertTrue(store.add(rule(action: action)))
             defaults.resetEventWrites()
             await store.evaluateNow()
             if action == .prompt {
-                await inventory.set([])
+                inventory.setProcesses([])
                 await store.evaluateNow()
             }
             XCTAssertEqual(defaults.eventWrites, 1, action.rawValue)
@@ -388,9 +388,9 @@ final class Batch08FixTests: XCTestCase {
             XCTAssertEqual(try storedEvents(), store.events)
             let persisted = try XCTUnwrap(JSONSerialization.jsonObject(with: XCTUnwrap(defaults.data(forKey: "events"))) as? [[String: Any]])
             XCTAssertEqual(persisted.last?["futureField"] as? String, "preserve")
-            await inventory.set((4201...4401).map { process(pid: Int32($0)) })
+            inventory.setProcesses((4201...4401).map { process(pid: Int32($0)) })
             await store.evaluateNow()
-            if action == .prompt { await inventory.set([]); await store.evaluateNow() }
+            if action == .prompt { inventory.setProcesses([]); await store.evaluateNow() }
             XCTAssertEqual(store.events.count, 200)
         }
     }
@@ -399,7 +399,7 @@ final class Batch08FixTests: XCTestCase {
         let seed = AutoStopEvent(timestamp: date, processName: "old", pid: 9, ruleID: UUID(), outcome: .logged, detail: "old")
         let original = try JSONEncoder().encode([seed])
         defaults.set(original, forKey: "events")
-        let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
         XCTAssertTrue(store.add(rule(action: .silent)))
         date = Date(timeIntervalSince1970: .infinity) // JSONEncoder refuses a non-finite timestamp.
         await store.evaluateNow()
@@ -412,7 +412,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testWaitingAutomaticActionDoesNotDelayPromptsOrDurableLogOnlyEvents() async {
-        let inventory = Batch08Inventory(processes: [process(), process(pid: 4102, name: "Prompted"), process(pid: 4103, name: "Logged")])
+        let inventory = ScriptedInventory(processes: [process(), process(pid: 4102, name: "Prompted"), process(pid: 4103, name: "Logged")])
         let store = makeStore(inventory: inventory, polling: ProcessPollingController(sleep: { _ in false }))
         XCTAssertTrue(store.add(rule(action: .kill)))
         XCTAssertTrue(store.add(rule(name: "Prompted")))
@@ -434,7 +434,7 @@ final class Batch08FixTests: XCTestCase {
     func testAutomaticRetryRejectedKeepsBudgetAndStaleConfirmsExit() async {
         for second in [ProcessActionResult.rejected, .stale] {
             defaults.removePersistentDomain(forName: suite)
-            let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+            let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
             XCTAssertTrue(store.add(rule(action: .kill)))
             var attempts = 0
             store.start(cadence: 10) { _, _ in
@@ -458,7 +458,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testStillMatchingEditDuringRetryRetainsAcceptedStopBudget() async {
-        let store = makeStore(inventory: Batch08Inventory(processes: [process()]))
+        let store = makeStore(inventory: ScriptedInventory(processes: [process()]))
         let original = rule(action: .kill)
         XCTAssertTrue(store.add(original))
         var attempts = 0
@@ -487,12 +487,12 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testEngineErrorIsVisibleAndClearsOnSuccessfulObservation() async {
-        let inventory = Batch08Inventory()
-        await inventory.fail(.commandFailed("ps exploded"))
+        let inventory = ScriptedInventory(processes: [])
+        inventory.fail(.commandFailed("ps exploded"))
         let store = makeStore(inventory: inventory)
         await store.evaluateNow()
         XCTAssertEqual(store.engineError, ProcessInventoryError.commandFailed("ps exploded").localizedDescription)
-        await inventory.set([])
+        inventory.setProcesses([])
         await store.evaluateNow()
         XCTAssertNil(store.engineError)
     }
@@ -500,7 +500,7 @@ final class Batch08FixTests: XCTestCase {
     func testRemovingOrDisablingLastRuleStopsPollingBeforeExplicitStop() async {
         for remove in [false, true] {
             defaults.removePersistentDomain(forName: suite)
-            let inventory = Batch08Inventory()
+            let inventory = ScriptedInventory(processes: [])
             let sleeper = Batch08Sleeper()
             let store = makeStore(inventory: inventory, polling: ProcessPollingController { await sleeper.sleep($0) })
             let target = rule()
@@ -510,7 +510,7 @@ final class Batch08FixTests: XCTestCase {
             XCTAssertTrue(remove ? store.remove(target) : store.setEnabled(false, for: target))
             await sleeper.resume(true)
             await settle()
-            let loads = await inventory.count
+            let loads = inventory.readCount
             let sleeps = await sleeper.count
             XCTAssertEqual(loads, 1)
             XCTAssertEqual(sleeps, 1)
@@ -520,20 +520,20 @@ final class Batch08FixTests: XCTestCase {
     }
 
     func testRuleEditDuringCancelledPassTriggersImmediateFollowUpWithoutSleeperWake() async {
-        let inventory = Batch08Inventory(processes: [process()])
-        await inventory.blockNextLoad()
+        let inventory = ScriptedInventory(processes: [process()])
+        inventory.holdNextRead()
         let sleeper = Batch08Sleeper()
         let store = makeStore(inventory: inventory, polling: ProcessPollingController { await sleeper.sleep($0) })
         XCTAssertTrue(store.add(rule()))
         store.start { _, _ in .rejected }
-        await waitUntil { await inventory.count == 1 }
+        await waitUntil { inventory.readCount == 1 }
         XCTAssertTrue(store.add(rule(name: "Other")))
         await settle()
-        let before = await inventory.count
+        let before = inventory.readCount
         XCTAssertEqual(before, 1)
-        await inventory.releaseLoad()
+        inventory.releaseHeldReads()
         await waitUntil { store.pendingPrompts.count == 1 }
-        let after = await inventory.count
+        let after = inventory.readCount
         XCTAssertEqual(after, 2, "the refused evaluation runs once the cancelled pass ends")
         store.stop()
         await sleeper.resume(false)
@@ -544,7 +544,7 @@ final class Batch08FixTests: XCTestCase {
     /// left for the next pass, not marked handled and abandoned.
     func testCancelledPassLeavesUndispatchedAutomaticStopsForTheNextPass() async {
         let store = makeStore(
-            inventory: Batch08Inventory(processes: [process(), process(pid: 4102)]),
+            inventory: ScriptedInventory(processes: [process(), process(pid: 4102)]),
             polling: ProcessPollingController(sleep: { _ in false })
         )
         XCTAssertTrue(store.add(rule(action: .kill)))
@@ -565,7 +565,7 @@ final class Batch08FixTests: XCTestCase {
 
     func testCompletedAutomaticStopIsRecordedWhileTheNextStopWaits() async {
         let store = makeStore(
-            inventory: Batch08Inventory(processes: [process(), process(pid: 4102)]),
+            inventory: ScriptedInventory(processes: [process(), process(pid: 4102)]),
             polling: ProcessPollingController(sleep: { _ in false })
         )
         XCTAssertTrue(store.add(rule(action: .kill)))
@@ -591,7 +591,7 @@ final class Batch08FixTests: XCTestCase {
     func testRetiringAnAutoStopRuleAfterDeliveryClosesItsWaitingRecord() async throws {
         for retirement in ["disable", "delete", "offsets", "retarget"] {
             defaults.removePersistentDomain(forName: suite)
-            let inventory = Batch08Inventory(processes: [process()])
+            let inventory = ScriptedInventory(processes: [process()])
             let store = makeStore(inventory: inventory)
             let target = rule(action: .kill)
             XCTAssertTrue(store.add(target))
@@ -618,7 +618,7 @@ final class Batch08FixTests: XCTestCase {
             XCTAssertEqual(try storedEvents(), store.events, retirement)
             instant = instant.advanced(by: .seconds(10))
             await store.evaluateNow()
-            await inventory.set([])
+            inventory.setProcesses([])
             await store.evaluateNow()
             XCTAssertEqual(attempts, 1, retirement)
             XCTAssertEqual(store.events.count, 2, retirement)
@@ -631,7 +631,7 @@ final class Batch08FixTests: XCTestCase {
     func testRuleRetiredDuringAnUnsignalledRetryClosesTheWaitingRecord() async {
         for second in [ProcessActionResult.rejected, .stale] {
             defaults.removePersistentDomain(forName: suite)
-            let inventory = Batch08Inventory(processes: [process()])
+            let inventory = ScriptedInventory(processes: [process()])
             let store = makeStore(inventory: inventory)
             let target = rule(action: .kill)
             XCTAssertTrue(store.add(target))
@@ -654,7 +654,7 @@ final class Batch08FixTests: XCTestCase {
                     ? "Exited after the stop request."
                     : "The rule changed or was removed before the process exited; its exit will not be tracked."
             )
-            await inventory.set([])
+            inventory.setProcesses([])
             await store.evaluateNow()
             XCTAssertEqual(store.events.count, 2)
         }
@@ -664,7 +664,7 @@ final class Batch08FixTests: XCTestCase {
     /// stop still waiting for its process keeps it running until that exit
     /// is recorded, and no longer.
     func testConfirmedStopKeepsPollingUntilItsExitAfterTheLastRuleIsSwitchedOff() async throws {
-        let inventory = Batch08Inventory(processes: [process()])
+        let inventory = ScriptedInventory(processes: [process()])
         let sleeper = Batch08Sleeper()
         let store = makeStore(inventory: inventory, polling: ProcessPollingController { await sleeper.sleep($0) })
         let target = rule()
@@ -675,7 +675,7 @@ final class Batch08FixTests: XCTestCase {
         await waitUntil { await sleeper.count == 1 }
         XCTAssertTrue(store.setEnabled(false, for: target))
         await waitUntil { await sleeper.count == 2 }
-        await inventory.set([])
+        inventory.setProcesses([])
         await sleeper.resume(true)
         await waitUntil { store.events.first?.detail == "Exited after the stop request." }
         await settle()
@@ -686,7 +686,7 @@ final class Batch08FixTests: XCTestCase {
         await sleeper.resume(false)
     }
 
-    private func makeStore(inventory: any ProcessInventoryProviding = Batch08Inventory(), polling: ProcessPollingController? = nil) -> AutoStopRulesStore {
+    private func makeStore(inventory: any ProcessInventoryProviding = ScriptedInventory(processes: []), polling: ProcessPollingController? = nil) -> AutoStopRulesStore {
         AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: inventory,
                            now: { self.date }, pollingController: polling, currentUID: getuid(), currentPID: getpid(),
                            monotonicNow: { self.instant })
@@ -697,7 +697,7 @@ final class Batch08FixTests: XCTestCase {
     }
 
     private func process(pid: Int32 = 4101, name: String = "Example", start: String = "start", path: String? = nil, elapsed: String = "10:00") -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 1, command: name,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 1, command: name,
                    executablePath: path ?? self.path, elapsedTime: elapsed, startTime: start,
                    netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
     }
@@ -716,29 +716,6 @@ final class Batch08FixTests: XCTestCase {
         while !(await condition()), Date() < deadline { try? await Task.sleep(nanoseconds: 5_000_000) }
         let satisfied = await condition()
         XCTAssertTrue(satisfied)
-    }
-}
-
-/// Same actor-based fake inventory pattern as the lifecycle tests, with an optional
-/// read failure and first-load gate for engine scheduling tests.
-actor Batch08Inventory: ProcessInventoryProviding {
-    private var result: Result<[AppProcess], ProcessInventoryError>
-    private var blocks = false
-    private var continuation: CheckedContinuation<Void, Never>?
-    private(set) var count = 0
-
-    init(processes: [AppProcess] = []) { result = .success(processes) }
-    func set(_ processes: [AppProcess]) { result = .success(processes) }
-    func fail(_ error: ProcessInventoryError) { result = .failure(error) }
-    func blockNextLoad() { blocks = true }
-    func releaseLoad() { continuation?.resume(); continuation = nil }
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        count += 1
-        if blocks {
-            blocks = false
-            await withCheckedContinuation { continuation = $0 }
-        }
-        return result
     }
 }
 

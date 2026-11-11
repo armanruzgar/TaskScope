@@ -84,7 +84,7 @@ final class ProcessListQueryTests: XCTestCase {
         cpu: Double = 0,
         memory: Double = 0
     ) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: pid,
             parentPID: 0,
             uid: getuid(),

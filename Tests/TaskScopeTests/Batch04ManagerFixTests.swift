@@ -8,8 +8,8 @@ final class Batch04ManagerFixTests: XCTestCase {
             appPath: "/Applications/Batch04NeverInstalled.app", userLaunchAgentJobs: [.init(label: "batch04.agent", plistPath: "/fake/batch04.plist")])
         for preset in [example, .globalProtect] {
             let fake = LifecycleRuntimeHarness(existingPaths: [preset.appPath], commandResults: [])
-            let inventory = P7QueuedInventory(results: [.success([])])
-            let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: P7NoopSignaler(),
+            let inventory = ScriptedInventory(processes: [])
+            let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: FakeSignaler(),
                 lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             let result = await manager.openApp(preset)
@@ -23,8 +23,8 @@ final class Batch04ManagerFixTests: XCTestCase {
     func testOpenForwardsLaunchServicesFailureToUser() async {
         let preset = WatchedAppPreset(displayName: "Batch04", mainProcessName: "Batch04NeverRunning", helperProcessNames: [], protectedProcessNames: [], appPath: "/Applications/Batch04NeverInstalled.app")
         let fake = LifecycleRuntimeHarness(existingPaths: [preset.appPath], commandResults: [batch04Result(error: "Launch Services refused", code: 1)])
-        let inventory = P7QueuedInventory(results: [.success([])])
-        let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: P7NoopSignaler(),
+        let inventory = ScriptedInventory(processes: [])
+        let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: FakeSignaler(),
             lifecycle: SystemProcessLifecycleService(runtime: fake.runtime), settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         let result = await manager.openApp(preset)

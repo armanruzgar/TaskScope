@@ -145,7 +145,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
         let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        let process = AppProcess(
+        let process = AppProcess.fixture(
             pid: 42, parentPID: 1, cpu: 0, memoryMB: 1, command: "Original",
             executablePath: "/Applications/Original.app/Contents/MacOS/Original", elapsedTime: "00:01",
             startTime: "Fri Oct 16 10:00:00 2026", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -159,8 +159,8 @@ final class SystemIntegrationRegressionTests: XCTestCase {
                 settings: SettingsStore(userDefaults: defaults, key: "settings"),
                 watchedApps: WatchedAppsStore(userDefaults: defaults, key: "presets"),
                 savedSelections: SavedSelectionsStore(userDefaults: defaults, key: "selections"),
-                autoStopRules: AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: IntegrationInventory()),
-                history: ProcessHistory(inventory: IntegrationInventory()),
+                autoStopRules: AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: ScriptedInventory(processes: [])),
+                history: ProcessHistory(inventory: ScriptedInventory(processes: [])),
                 presentationStyle: style,
                 activityMonitor: activity,
                 commandBus: AppCommandBus(),
@@ -373,8 +373,8 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     private func processManager() -> ProcessManager {
         ProcessManager(
-            processInventory: IntegrationInventory(), verificationInventory: IntegrationInventory(),
-            processSignaler: IntegrationSignaler(), lifecycle: IntegrationLifecycle(), settleAfterProcessChange: {},
+            processInventory: ScriptedInventory(processes: []), verificationInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler.forbidding("Unexpected signal"), lifecycle: FakeLifecycle(), settleAfterProcessChange: {},
             dependencies: .inert
         )
     }
@@ -409,34 +409,6 @@ private final class IntegrationHotkeyBackend: HotkeyRegistrationBackend {
         refusesRegistration ? (OSStatus(eventHotKeyExistsErr), nil) : (noErr, OpaquePointer(bitPattern: 1))
     }
     func unregister(_ reference: EventHotKeyRef) {}
-}
-
-private struct IntegrationInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> { .success([]) }
-}
-
-private struct IntegrationSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { XCTFail("Unexpected signal"); return false }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
-private struct IntegrationLifecycle: ProcessLifecycleServicing {
-    func appBundleExists(at path: String) -> Bool { false }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome { .noMatchingProcesses }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { .failed("Fake launch failed.") }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
 }
 
 @MainActor

@@ -104,7 +104,7 @@ final class Batch10FixTests: XCTestCase {
                 try card.find(button: action.rawValue + "…").tap()
                 XCTAssertEqual(state.pendingPresetAction?.action, action)
                 XCTAssertEqual(state.pendingPresetAction?.preset.id, preset.id)
-                XCTAssertTrue(fixture.lifecycle.events.isEmpty)
+                XCTAssertTrue(fixture.lifecycle.calls.isEmpty)
                 let pending = try XCTUnwrap(state.pendingPresetAction)
                 XCTAssertTrue(pending.title.contains("Work App"))
                 if menuBar {
@@ -114,9 +114,12 @@ final class Batch10FixTests: XCTestCase {
                 }
                 await state.waitForActions()
                 if action == .quitApp {
-                    XCTAssertEqual(fixture.lifecycle.events, ["unload:Work App", "main:Work App"])
+                    XCTAssertEqual(fixture.lifecycle.calls.filter { $0 != "settle" }, ["agents.unload", "terminate:Example"])
+                    XCTAssertEqual(fixture.lifecycle.presetsByCall["terminate"]?.map(\.displayName), ["Work App"])
+                    XCTAssertEqual(fixture.lifecycle.preservedPIDs, [], "Quit App unloads every agent")
                 } else {
-                    XCTAssertEqual(fixture.lifecycle.events, ["preserve:Work App", "helper:Helper"])
+                    XCTAssertEqual(fixture.lifecycle.calls.filter { $0 != "settle" }, ["agents.unload", "terminate.helper:Helper"])
+                    XCTAssertEqual(fixture.lifecycle.preservedPIDs.count, 1, "Quit Helpers keeps the app's agents")
                 }
             }
         }
@@ -141,11 +144,11 @@ final class Batch10FixTests: XCTestCase {
         let gpCard = try gp.actualView()
         gpCard.onKeepOffChanged(true)
         XCTAssertEqual(state.pendingPresetAction?.action, .keepOff)
-        XCTAssertTrue(fixture.lifecycle.events.isEmpty)
+        XCTAssertTrue(fixture.lifecycle.calls.isEmpty)
         state.clearPresetAction()
         try gp.find(button: "Apply Keep Off…").tap()
         XCTAssertEqual(state.pendingPresetAction?.action, .keepOff)
-        XCTAssertTrue(fixture.lifecycle.events.isEmpty)
+        XCTAssertTrue(fixture.lifecycle.calls.isEmpty)
     }
 
     func testQuickPresetWithoutHelpersDisablesOnlyUselessHelperAction() throws {
@@ -269,7 +272,7 @@ final class Batch10FixTests: XCTestCase {
     }
 
     func testHistoryFailureIsVisibleAndRecoveryStartsANewSegment() async throws {
-        let inventory = UIScriptedInventory(results: [.success([Batch10.process(51)]), .failure(.commandFailed("read failed")), .success([Batch10.process(51)])])
+        let inventory = ScriptedInventory([.success([Batch10.process(51)]), .failure(.commandFailed("read failed")), .success([Batch10.process(51)])], repeatsLast: true)
         let history = ProcessHistory(inventory: inventory)
         await history.sampleNow(); await history.sampleNow()
         XCTAssertEqual(history.samples.count, 1)
@@ -319,10 +322,10 @@ final class Batch10FixTests: XCTestCase {
 
     func testRecallSuccessAndFailureHaveObservablePendingState() async throws {
         for success in [false, true] {
-            let fixture = await Batch10.fixture(processes: [Batch10.process(51)], inventory: UIInventory(processes: [Batch10.process(51)]))
+            let fixture = await Batch10.fixture(processes: [Batch10.process(51)], inventory: ScriptedInventory(processes: [Batch10.process(51)]))
             defer { fixture.stores.cleanup() }
             XCTAssertTrue(fixture.stores.savedSelections.save(name: "Example", processes: [Batch10.process(51)]))
-            let inventory = UIScriptedInventory(results: success ? [.success([Batch10.process(51)])] : [.failure(.commandFailed("ps timed out."))])
+            let inventory = ScriptedInventory(success ? [.success([Batch10.process(51)])] : [.failure(.commandFailed("ps timed out."))])
             let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory, processSignaler: fixture.signaler, lifecycle: fixture.lifecycle, settleAfterProcessChange: {}, dependencies: .inert)
             manager.enableNotifications = false
             var modified = fixture; modified.manager = manager

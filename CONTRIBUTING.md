@@ -83,9 +83,36 @@ security updates on, it also opens a pull request when an advisory affects one.
 Merge a Dependabot pull request only after its CI checks pass and the full gate
 passes locally on its branch.
 
+Each test file is named after its test class (or holds only classes whose
+names contain the file's name), so `swift test --filter <file or class name>`
+selects exactly those tests; `TestFileNamingTests` fails the suite when a file
+runs no tests or a class does not match its file. Code shared between tests
+lives in `Tests/TaskScopeTests/Support/` and declares no tests. Use its fakes
+instead of declaring new ones:
+
+- `ScriptedInventory` returns scripted process-list reads in order and fails
+  the test on a read past the script, unless the test passes `repeatsLast: true`
+  (or uses `ScriptedInventory(processes:)` for a fixed list). It counts reads,
+  records the extended-stats flag of each, and can hold numbered reads until
+  the test releases them.
+- `FakeSignaler` records every signal and answers per PID: delivered (the
+  default), refused, or no such process; targets can exit on SIGTERM or SIGKILL,
+  and `FakeSignaler.forbidding(_:)` fails the test on any signal.
+- `FakeLifecycle` records every lifecycle call and fails the test on a call
+  whose stub is unset; `FakeLifecycle.allSucceeding()` sets every stub
+  explicitly for tests about something else, and `forViewTests()` is the view
+  fixtures' version.
+- `ProcessLifecycleRuntime.fake(...)` builds a runtime from the members a test
+  passes; any other member fails the test when reached.
+- `AppProcess.fixture(...)` and `WatchedAppPreset.fixture(...)` are the one place
+  tests build those models, so a new field needs one change.
+
+A fake that models something these cannot, such as a read that blocks until a
+cancellation or a simulated set of running processes, stays next to its tests.
+
 Tests that need settings create them with
 `InMemoryUserDefaults(suiteName: "TaskScope.<TestClass>.\(UUID().uuidString)")`
-from `Tests/TaskScopeTests/InMemoryUserDefaults.swift`, never with
+from `Tests/TaskScopeTests/Support/InMemoryUserDefaults.swift`, never with
 `UserDefaults(suiteName:)`. Each instance is its own in-memory domain, so
 parallel test processes cannot overwrite each other's fixtures and a run leaves
 no preference files behind.

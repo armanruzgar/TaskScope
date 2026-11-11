@@ -558,13 +558,13 @@ private actor ServiceHarness {
     }
 
     nonisolated var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: 501,
             fileExists: { [self] path in plistLabel != nil && path == "/Library/LaunchDaemons/com.paloaltonetworks.gp.pangpsd.plist" },
             launchAgentLabel: { [self] _ in plistLabel },
             runCommand: { [self] command, _ in await run(command) },
             loadProcessInventory: {
-                .success([AppProcess(pid: 42, parentPID: 1, uid: 0, cpu: 0, memoryMB: 0,
+                .success([AppProcess.fixture(pid: 42, parentPID: 1, uid: 0, cpu: 0, memoryMB: 0,
                     command: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS",
                     elapsedTime: "00:10", netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)])
             },

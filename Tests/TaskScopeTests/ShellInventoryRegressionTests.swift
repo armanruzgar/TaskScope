@@ -181,7 +181,7 @@ final class ShellInventoryRegressionTests: XCTestCase {
     }
 
     private func watchedProcess(name: String, path: String, uid: uid_t?) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: 1234, parentPID: 1, uid: uid, cpu: 0, memoryMB: 0,
             command: name, executablePath: path, elapsedTime: "00:01", startTime: "start",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -235,7 +235,7 @@ private actor SequenceInventory: ProcessInventoryProviding {
 
     func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
         calls += 1
-        return .success([AppProcess(
+        return .success([AppProcess.fixture(
             pid: calls, parentPID: 1, uid: 501, cpu: 0, memoryMB: 0,
             command: "Snapshot\(calls)", elapsedTime: "00:01", startTime: "start",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
@@ -258,7 +258,7 @@ private final class ReadinessHarness: @unchecked Sendable {
     var inventoryLoads: Int { lock.withLock { loads } }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        ProcessLifecycleRuntime.fake(
             userID: 501,
             fileExists: { _ in false },
             launchAgentLabel: { _ in nil },

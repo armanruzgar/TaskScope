@@ -7,7 +7,7 @@ import ViewInspector
 @MainActor
 final class Batch03FixTests: XCTestCase {
     private func row(_ pid: Int32 = 42, name: String = "Example", uid: uid_t = getuid()) -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 1,
+        AppProcess.fixture(pid: pid, parentPID: 1, uid: uid, cpu: 1, memoryMB: 1,
                    command: "/Applications/\(name).app/Contents/MacOS/\(name)",
                    executablePath: "/Applications/\(name).app/Contents/MacOS/\(name)",
                    elapsedTime: "00:10", startTime: "start-\(pid)",
@@ -21,8 +21,8 @@ final class Batch03FixTests: XCTestCase {
 
     private func manager(_ inventory: any ProcessInventoryProviding,
                          verification: (any ProcessInventoryProviding)? = nil,
-                         signaler: any ProcessSignaling = ManagerTestSignaler(),
-                         lifecycle: ManagerTestLifecycle = ManagerTestLifecycle(),
+                         signaler: any ProcessSignaling = FakeSignaler(),
+                         lifecycle: FakeLifecycle = FakeLifecycle.allSucceeding(),
                          settle: @escaping () async -> Void = {},
                          now: @escaping () -> Date = Date.init) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: verification,
@@ -35,8 +35,8 @@ final class Batch03FixTests: XCTestCase {
     func testBatchSurvivorsRemainReportedAndRequestedSelectionIsCleared() async {
         for force in [false, true] {
             let target = row()
-            let signaler = ManagerTestSignaler(alivePids: [target.pid])
-            let manager = manager(ManagerTestInventory(results: [.success([target])]), signaler: signaler)
+            let signaler = FakeSignaler(alive: [target.pid])
+            let manager = manager(ScriptedInventory([.success([target])], repeatsLast: true), signaler: signaler)
             await manager.loadProcessList()
             manager.select([target])
             await manager.batchTerminate(manager.selectionSnapshot(), forceKill: force)
@@ -49,9 +49,9 @@ final class Batch03FixTests: XCTestCase {
 
     func testUnverifiedBatchPreservesSelectionAndSendsNothing() async {
         let target = row()
-        let signaler = ManagerTestSignaler()
-        let verification = ManagerTestInventory(results: [.failure(.commandFailed("ps failed"))])
-        let manager = manager(ManagerTestInventory(results: [.success([target])]), verification: verification, signaler: signaler)
+        let signaler = FakeSignaler()
+        let verification = ScriptedInventory([.failure(.commandFailed("ps failed"))], repeatsLast: true)
+        let manager = manager(ScriptedInventory([.success([target])], repeatsLast: true), verification: verification, signaler: signaler)
         await manager.loadProcessList()
         manager.select([target])
         await manager.batchTerminate(manager.selectionSnapshot())
@@ -63,8 +63,8 @@ final class Batch03FixTests: XCTestCase {
     func testBatchOnlyDeselectsCapturedIdentitiesWhileSettling() async {
         let first = row(), later = row(43)
         let hold = Batch03Hold()
-        let manager = manager(ManagerTestInventory(results: [.success([first, later])]),
-                              signaler: ManagerTestSignaler(alivePids: [first.pid]),
+        let manager = manager(ScriptedInventory([.success([first, later])], repeatsLast: true),
+                              signaler: FakeSignaler(alive: [first.pid]),
                               settle: { await hold.wait() })
         await manager.loadProcessList()
         manager.select([first])
@@ -79,9 +79,9 @@ final class Batch03FixTests: XCTestCase {
     func testBatchPreservesSelectionsMadeWhileWaitingForAdmission() async {
         let first = row(), later = row(43)
         let hold = Batch03Hold()
-        let lifecycle = ManagerTestLifecycle()
-        lifecycle.agentLoadAction = { await hold.wait() }
-        let inventory = ManagerTestInventory(results: [.success([first, later])])
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.onBootstrapAgents = { await hold.wait() }
+        let inventory = ScriptedInventory([.success([first, later])], repeatsLast: true)
         let manager = manager(inventory, lifecycle: lifecycle)
         await manager.loadProcessList()
         manager.select([first])
@@ -108,8 +108,8 @@ final class Batch03FixTests: XCTestCase {
     func testBatchSummaryIncludesStoppedAndOnlyNonzeroRemainders() async {
         let a = row(), b = row(43), c = row(44)
         for force in [false, true] {
-            let signaler = ManagerTestSignaler(alivePids: [b.pid])
-            let manager = manager(ManagerTestInventory(results: [.success([a, b])]), signaler: signaler)
+            let signaler = FakeSignaler(alive: [b.pid])
+            let manager = manager(ScriptedInventory([.success([a, b])], repeatsLast: true), signaler: signaler)
             await manager.batchTerminate([a.identity, b.identity, c.identity], forceKill: force)
             XCTAssertEqual(manager.message, "\(force ? "Force stopped" : "Stopped") 1 of 3 selected; 1 still running, 1 no longer matched.")
             XCTAssertEqual(manager.batchActionReport?.targets.map(\.state), [.stopped, .requestedStillRunning, .stale])
@@ -119,8 +119,8 @@ final class Batch03FixTests: XCTestCase {
     func testSingleAndBatchPIDGuardsAndSelfSelection() async {
         let invalid = [Int32(-1), 0, 1].map { row($0) }
         let own = row(999_999), valid = row()
-        let signaler = ManagerTestSignaler()
-        let manager = manager(ManagerTestInventory(results: [.success(invalid + [own, valid])]), signaler: signaler)
+        let signaler = FakeSignaler()
+        let manager = manager(ScriptedInventory([.success(invalid + [own, valid])], repeatsLast: true), signaler: signaler)
         await manager.loadProcessList()
         manager.toggleSelection(own.pid)
         XCTAssertTrue(manager.selectedPids.isEmpty)
@@ -137,8 +137,8 @@ final class Batch03FixTests: XCTestCase {
 
     func testRefusedSignalsExplainOwnershipAndForceSurvivorsRemainRunning() async {
         let target = row(uid: getuid() + 1)
-        let rejected = manager(ManagerTestInventory(results: [.success([target])]),
-                               signaler: ManagerTestSignaler(rejectedPids: [target.pid]))
+        let rejected = manager(ScriptedInventory([.success([target])], repeatsLast: true),
+                               signaler: FakeSignaler(rejected: [target.pid]))
         let result = await rejected.terminate(target)
         XCTAssertEqual(result, .refused)
         XCTAssertEqual(rejected.message, "Could not send stop to Example. The process is not owned by the current user.")
@@ -147,13 +147,13 @@ final class Batch03FixTests: XCTestCase {
         XCTAssertEqual(rejected.batchActionReport?.targets.first?.detail, "The process is not owned by the current user.")
 
         let own = row()
-        let refusedOwn = manager(ManagerTestInventory(results: [.success([own])]),
-                                 signaler: ManagerTestSignaler(rejectedPids: [own.pid]))
+        let refusedOwn = manager(ScriptedInventory([.success([own])], repeatsLast: true),
+                                 signaler: FakeSignaler(rejected: [own.pid]))
         _ = await refusedOwn.terminate(own, forceKill: true)
         XCTAssertEqual(refusedOwn.message, "Could not send force stop to Example. The system refused the stop request.")
 
-        let survivor = manager(ManagerTestInventory(results: [.success([target])]),
-                               signaler: ManagerTestSignaler(alivePids: [target.pid]))
+        let survivor = manager(ScriptedInventory([.success([target])], repeatsLast: true),
+                               signaler: FakeSignaler(alive: [target.pid]))
         let forceResult = await survivor.terminate(target, forceKill: true)
         XCTAssertEqual(forceResult, .requestedStillRunning)
         XCTAssertEqual(survivor.message, "Example is still running after Force Stop.")
@@ -188,11 +188,11 @@ final class Batch03FixTests: XCTestCase {
     func testDelayedGracefulExitIsObservedForSingleAndBatchWithoutEscalation() async {
         for batch in [false, true] {
             let target = row()
-            let signaler = Batch03DelayedSignaler()
+            let signaler = FakeSignaler(alive: [target.pid])
             var polls = 0
-            let manager = manager(ManagerTestInventory(results: [.success([target])]), signaler: signaler, settle: {
+            let manager = manager(ScriptedInventory([.success([target])], repeatsLast: true), signaler: signaler, settle: {
                 polls += 1
-                if polls == 3 { signaler.alive = false }
+                if polls == 3 { signaler.setAlive(target.pid, false) }
             })
             if batch {
                 await manager.batchTerminate([target.identity])
@@ -202,7 +202,7 @@ final class Batch03FixTests: XCTestCase {
                 XCTAssertEqual(result, .stopped)
             }
             XCTAssertEqual(polls, 3)
-            XCTAssertEqual(signaler.signals, [SIGTERM])
+            XCTAssertEqual(signaler.sent.map(\.signal), [SIGTERM])
         }
     }
 
@@ -218,24 +218,24 @@ final class Batch03FixTests: XCTestCase {
         basicBystander.netOutKB = nil
         basicBystander.diskReadBytes = nil
         basicBystander.diskWriteBytes = nil
-        let inventory = ManagerTestInventory(results: [.success([target, bystander])])
-        let verification = ManagerTestInventory(results: [.success([basicBystander])])
+        let inventory = ScriptedInventory([.success([target, bystander])], repeatsLast: true)
+        let verification = ScriptedInventory([.success([basicBystander])], repeatsLast: true)
         let manager = manager(inventory, verification: verification)
         await manager.beginExtendedMetrics()
         await manager.loadProcessList()
         let result = await manager.terminate(target)
         XCTAssertEqual(result, .stale)
-        XCTAssertEqual(verification.fetchExtendedRequests, [false])
+        XCTAssertEqual(verification.extendedStatsRequests, [false])
         XCTAssertEqual(manager.inventorySnapshot.first, bystander)
         manager.endExtendedMetrics()
     }
 
     func testOpenStopsAtFailedReenablesAndPreservesIntent() async {
         for system in [false, true] {
-            let lifecycle = ManagerTestLifecycle()
+            let lifecycle = FakeLifecycle.allSucceeding()
             let failed = LifecycleBatchResult(jobs: [.init(label: "job", state: .failed, detail: "Cancelled.")])
-            if system { lifecycle.systemEnableResult = failed } else { lifecycle.agentEnableResult = failed }
-            let manager = manager(ManagerTestInventory(results: [.success([])]), lifecycle: lifecycle)
+            if system { lifecycle.enableDaemonsResult = failed } else { lifecycle.enableAgentsResult = failed }
+            let manager = manager(ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle)
             var keptOff = true
             manager.dependencies.isPresetKeptOff = { _ in keptOff }
             manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
@@ -252,12 +252,12 @@ final class Batch03FixTests: XCTestCase {
     func testOpenLateFailuresSayKeepOffWasClearedAndServicesWereRestored() async {
         let changed = LifecycleBatchResult(jobs: [.init(label: "job", state: .changed, detail: "Restored.")])
         for failedRead in [false, true] {
-            let lifecycle = ManagerTestLifecycle()
-            lifecycle.agentLoadResult = changed
-            lifecycle.openResult = false
-            let inventory = ManagerTestInventory(results: [
+            let lifecycle = FakeLifecycle.allSucceeding()
+            lifecycle.bootstrapAgentsResult = changed
+            lifecycle.openResult = .failed("Fake launch failed.")
+            let inventory = ScriptedInventory([
                 .success([]), failedRead ? .failure(.commandFailed("ps failed")) : .success([])
-            ])
+            ], repeatsLast: true)
             let manager = manager(inventory, lifecycle: lifecycle)
             var keptOff = true
             manager.dependencies.isPresetKeptOff = { _ in keptOff }
@@ -288,9 +288,9 @@ final class Batch03FixTests: XCTestCase {
             ))
         ]
         for (final, expected) in finals {
-            let lifecycle = ManagerTestLifecycle()
+            let lifecycle = FakeLifecycle.allSucceeding()
             let manager = manager(
-                ManagerTestInventory(results: [.success([row()]), .success([row()]), final]),
+                ScriptedInventory([.success([row()]), .success([row()]), final], repeatsLast: true),
                 lifecycle: lifecycle
             )
 
@@ -300,9 +300,9 @@ final class Batch03FixTests: XCTestCase {
             XCTAssertEqual(lifecycle.calls, ["exists", "daemon", "agents.load", "open"])
         }
 
-        let lifecycle = ManagerTestLifecycle()
-        lifecycle.openResult = false
-        let manager = manager(ManagerTestInventory(results: [.success([row()])]), lifecycle: lifecycle)
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.openResult = .failed("Fake launch failed.")
+        let manager = manager(ScriptedInventory([.success([row()])], repeatsLast: true), lifecycle: lifecycle)
         let result = await manager.openApp(preset)
         XCTAssertEqual(result, TaskScopeCommandResult(status: .failed, message: "Could not open Example: Fake launch failed."))
     }
@@ -310,9 +310,9 @@ final class Batch03FixTests: XCTestCase {
     func testKeepOffTerminationFailuresTakePrecedenceOverFinalInventory() async {
         for outcome in [ProcessTerminationOutcome.signalRejected, .inventoryUnavailable] {
             for final in [[AppProcess](), [row()]] {
-                let lifecycle = ManagerTestLifecycle()
+                let lifecycle = FakeLifecycle.allSucceeding()
                 lifecycle.terminationOutcome = outcome
-                let manager = manager(ManagerTestInventory(results: [.success([row()]), .success(final)]), lifecycle: lifecycle)
+                let manager = manager(ScriptedInventory([.success([row()]), .success(final)], repeatsLast: true), lifecycle: lifecycle)
                 let watched = preset
                 manager.dependencies.watchedPresets = { [watched] }
                 let result = await manager.keepOff(preset)
@@ -327,10 +327,10 @@ final class Batch03FixTests: XCTestCase {
     }
 
     func testFailedExplicitDisconnectLeavesVendorUIAvailableDuringEnforcement() async {
-        let lifecycle = ManagerTestLifecycle()
+        let lifecycle = FakeLifecycle.allSucceeding()
         lifecycle.disconnectResult = .failed("Complete the request in GlobalProtect.")
         var time = Date(timeIntervalSince1970: 1_000)
-        let manager = manager(ManagerTestInventory(results: [.success([])]), lifecycle: lifecycle, now: { time })
+        let manager = manager(ScriptedInventory([.success([])], repeatsLast: true), lifecycle: lifecycle, now: { time })
         manager.dependencies.watchedPresets = { [.globalProtect] }
         manager.dependencies.keptOffPresets = { [.globalProtect] }
         manager.dependencies.isPresetKeptOff = { _ in true }
@@ -347,8 +347,8 @@ final class Batch03FixTests: XCTestCase {
     }
 
     func testWatchedErrorSurvivesSuccessfulVerificationAndVerificationFailuresDoNotMarkWatchedStale() async {
-        let inventory = ManagerTestInventory(results: [.success([]), .failure(.commandFailed("watched failed"))])
-        let verification = ManagerTestInventory(results: [.success([])])
+        let inventory = ScriptedInventory([.success([]), .failure(.commandFailed("watched failed"))], repeatsLast: true)
+        let verification = ScriptedInventory([.success([])], repeatsLast: true)
         let manager = manager(inventory, verification: verification)
         await manager.refreshWatchedStatus()
         await manager.refreshWatchedStatus()
@@ -360,8 +360,8 @@ final class Batch03FixTests: XCTestCase {
         XCTAssertEqual(manager.watchedStatusAvailability, .stale)
         XCTAssertEqual(manager.lastSuccessfulWatchedReadAt, lastRead)
 
-        let healthy = self.manager(ManagerTestInventory(results: [.success([])]),
-                              verification: ManagerTestInventory(results: [.failure(.commandFailed("verify failed"))]))
+        let healthy = self.manager(ScriptedInventory([.success([])], repeatsLast: true),
+                              verification: ScriptedInventory([.failure(.commandFailed("verify failed"))], repeatsLast: true))
         await healthy.refreshWatchedStatus()
         _ = await healthy.terminate(row())
         XCTAssertEqual(healthy.watchedStatusAvailability, .current)
@@ -393,63 +393,6 @@ final class Batch03FixTests: XCTestCase {
             }
         }
     }
-}
-
-/// DarwinProcessSignaler's reading of `kill(2)` through an injected call. The
-/// injected call only records, and every case uses the null signal, so nothing
-/// is ever sent; the controlled-child tests in ProcessSignalIntegrationTests
-/// cover the real system call.
-final class Batch03DarwinSignalerTests: XCTestCase {
-    private final class KillLog: @unchecked Sendable {
-        private let lock = NSLock()
-        private var pids: [Int32] = []
-        var calls: [Int32] { lock.withLock { pids } }
-        func record(_ pid: Int32) { lock.withLock { pids.append(pid) } }
-    }
-
-    func testDeliveryMapsTheKernelAnswer() {
-        let answers: [(answer: (Int32, Int32), delivery: ProcessSignalDelivery)] = [
-            ((0, 0), .delivered),
-            ((-1, ESRCH), .noSuchProcess),
-            ((-1, EPERM), .rejected(errno: EPERM)),
-            ((-1, EINVAL), .rejected(errno: EINVAL))
-        ]
-        for (answer, delivery) in answers {
-            let signaler = DarwinProcessSignaler(kill: { _, _ in answer })
-            XCTAssertEqual(signaler.deliver(0, to: 4242), delivery)
-            XCTAssertEqual(signaler.send(0, to: 4242), delivery == .delivered)
-        }
-    }
-
-    /// `kill(pid, 0)` failing with EPERM means the process exists but belongs
-    /// to someone else, so it is alive. The test's own pid is used because the
-    /// zombie check reads that pid's real kernel state; it is never signalled.
-    func testLivenessTreatsPermissionDeniedAsAlive() {
-        let pid = getpid()
-        XCTAssertTrue(DarwinProcessSignaler(kill: { _, _ in (0, 0) }).isAlive(pid))
-        XCTAssertTrue(DarwinProcessSignaler(kill: { _, _ in (-1, EPERM) }).isAlive(pid))
-        XCTAssertFalse(DarwinProcessSignaler(kill: { _, _ in (-1, ESRCH) }).isAlive(pid))
-    }
-
-    func testPIDGuardRunsBeforeTheKernelCall() {
-        let log = KillLog()
-        let signaler = DarwinProcessSignaler(kill: { pid, _ in
-            log.record(pid)
-            return (0, 0)
-        })
-        for pid: Int32 in [1, 0, -1] {
-            XCTAssertEqual(signaler.deliver(0, to: pid), .rejected(errno: EINVAL))
-            XCTAssertFalse(signaler.isAlive(pid))
-        }
-        XCTAssertTrue(log.calls.isEmpty)
-    }
-}
-
-private final class Batch03DelayedSignaler: ProcessSignaling {
-    var alive = true
-    var signals: [Int32] = []
-    func send(_ signal: Int32, to pid: Int32) -> Bool { signals.append(signal); return true }
-    func isAlive(_ pid: Int32) -> Bool { alive }
 }
 
 actor Batch03Hold {

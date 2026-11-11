@@ -41,7 +41,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         let original = try JSONEncoder().encode([safe, invalid, duplicate])
         defaults.set(original, forKey: rulesKey)
 
-        let store = makeRulesStore(rulesKey: rulesKey, inventory: PersistenceRecoveryInventory(processes: [process(name: "Unsafe"), process(name: "Safe")]))
+        let store = makeRulesStore(rulesKey: rulesKey, inventory: ScriptedInventory(processes: [process(name: "Unsafe"), process(name: "Safe")]))
 
         XCTAssertEqual(store.rules.map(\.processName), ["Safe"])
         XCTAssertTrue(store.isRulesReadOnlyAfterRecovery)
@@ -89,7 +89,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         let original = try JSONEncoder().encode([unsafe])
         defaults.set(original, forKey: rulesKey)
 
-        let store = makeRulesStore(rulesKey: rulesKey, inventory: PersistenceRecoveryInventory(processes: [process(name: "Unsafe")]))
+        let store = makeRulesStore(rulesKey: rulesKey, inventory: ScriptedInventory(processes: [process(name: "Unsafe")]))
 
         XCTAssertTrue(store.rules.isEmpty)
         XCTAssertTrue(store.isRulesReadOnlyAfterRecovery)
@@ -114,7 +114,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         defaults.set(try JSONEncoder().encode([example]), forKey: rulesKey)
         let corruptEvents = Data([0xFE, 0x02])
         defaults.set(corruptEvents, forKey: eventsKey)
-        let inventory = PersistenceRecoveryInventory(processes: [process(name: "Example")])
+        let inventory = ScriptedInventory(processes: [process(name: "Example")])
 
         let store = makeRulesStore(
             rulesKey: rulesKey,
@@ -201,7 +201,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
     private func makeRulesStore(
         rulesKey: String = "rules",
         eventsKey: String = "events",
-        inventory: any ProcessInventoryProviding = PersistenceRecoveryInventory(processes: []),
+        inventory: any ProcessInventoryProviding = ScriptedInventory(processes: []),
         eventLimit: Int = 200
     ) -> AutoStopRulesStore {
         AutoStopRulesStore(
@@ -215,7 +215,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
     }
 
     private func process(name: String) -> AppProcess {
-        AppProcess(
+        AppProcess.fixture(
             pid: 42,
             parentPID: 1,
             uid: getuid(),
@@ -230,13 +230,5 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
             diskReadBytes: nil,
             diskWriteBytes: nil
         )
-    }
-}
-
-private struct PersistenceRecoveryInventory: ProcessInventoryProviding {
-    var processes: [AppProcess]
-
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        .success(processes)
     }
 }

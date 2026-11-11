@@ -81,10 +81,10 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
     /// it. Now the list is always there: a built-in Keep Off whose preset is
     /// not in it is refused before anything is disconnected or recorded.
     func testBuiltInKeepOffIsRefusedWhenThePresetListLacksIt() async {
-        let lifecycle = CoordinatorTestLifecycle()
+        let lifecycle = coordinatorLifecycle()
         let manager = ProcessManager(
-            processInventory: CoordinatorTestInventory(),
-            processSignaler: CoordinatorTestSignaler(),
+            processInventory: ScriptedInventory(processes: []),
+            processSignaler: FakeSignaler.forbidding("No signal may be sent"),
             lifecycle: lifecycle,
             settleAfterProcessChange: {},
             dependencies: .inert
@@ -105,7 +105,7 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
 
     func testStopOutcomeCarriesStatusMessageReportAndDiagnosticFromOneExit() async {
         let host = CoordinatorTestHost(snapshot: .failure(.commandFailed("ps failed")))
-        let lifecycle = CoordinatorTestLifecycle()
+        let lifecycle = coordinatorLifecycle()
         let coordinator = PresetLifecycleCoordinator(lifecycle: lifecycle, now: Date.init)
         let preset = example()
 
@@ -124,7 +124,7 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
     func testCancelledStopPutsTheEarlierStatusLineBack() async {
         let host = CoordinatorTestHost(snapshot: .failure(.cancelled))
         host.message = "Earlier status"
-        let coordinator = PresetLifecycleCoordinator(lifecycle: CoordinatorTestLifecycle(), now: Date.init)
+        let coordinator = PresetLifecycleCoordinator(lifecycle: coordinatorLifecycle(), now: Date.init)
 
         let outcome = await coordinator.stop(example(), scope: .app, host: host)
 
@@ -136,9 +136,9 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
     func testCompletedStopReportsItsRelaunchJobs() async {
         let preset = example()
         let host = CoordinatorTestHost(snapshot: .success(WatchedAppSnapshot(preset: preset, runningNames: [])))
-        let lifecycle = CoordinatorTestLifecycle()
+        let lifecycle = coordinatorLifecycle()
         let job = LifecycleJobResult(label: "com.example.agent", state: .changed, detail: "Unloaded and verified.")
-        lifecycle.unloadResult = LifecycleBatchResult(jobs: [job])
+        lifecycle.unloadAgentsResult = LifecycleBatchResult(jobs: [job])
         let coordinator = PresetLifecycleCoordinator(lifecycle: lifecycle, now: Date.init)
 
         let outcome = await coordinator.stop(preset, scope: .all, host: host)
@@ -150,7 +150,8 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(report?.title, "Example Relaunch Jobs")
         XCTAssertEqual(report?.jobs, [job])
         XCTAssertNil(outcome.diagnostic)
-        XCTAssertEqual(lifecycle.calls, ["unload", "terminate:all", "settle"])
+        XCTAssertEqual(lifecycle.calls, ["agents.unload", "terminate.scope:all", "settle"])
+        XCTAssertEqual(lifecycle.preservedPIDs, [], "A full stop preserves no agent processes")
     }
 
     /// Background enforcement runs on every poll; the same failure is shown
@@ -159,7 +160,7 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
         let preset = example()
         let host = CoordinatorTestHost(snapshot: .failure(.commandFailed("ps failed")))
         host.dependencies.isPresetKeptOff = { _ in true }
-        let coordinator = PresetLifecycleCoordinator(lifecycle: CoordinatorTestLifecycle(), now: Date.init)
+        let coordinator = PresetLifecycleCoordinator(lifecycle: coordinatorLifecycle(), now: Date.init)
 
         let first = await coordinator.keepOff(preset, recordIntent: false, confirmedFailureID: nil, host: host)
         XCTAssertEqual(first.result.status, .failed)
@@ -179,7 +180,7 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
         host.dependencies.isKeepOffIntentWritable = { false }
         var writes = 0
         host.dependencies.setPresetKeptOff = { _, _ in writes += 1 }
-        let lifecycle = CoordinatorTestLifecycle()
+        let lifecycle = coordinatorLifecycle()
         let coordinator = PresetLifecycleCoordinator(lifecycle: lifecycle, now: Date.init)
 
         let outcome = await coordinator.keepOff(example(), recordIntent: true, confirmedFailureID: nil, host: host)
@@ -194,8 +195,8 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
     }
 
     func testOpenWithAMissingBundleFailsWithItsReason() async {
-        let lifecycle = CoordinatorTestLifecycle()
-        lifecycle.bundleExists = false
+        let lifecycle = coordinatorLifecycle()
+        lifecycle.appExists = false
         let host = CoordinatorTestHost(snapshot: .failure(.commandFailed("unused")))
         let coordinator = PresetLifecycleCoordinator(lifecycle: lifecycle, now: Date.init)
 
@@ -205,7 +206,7 @@ final class PresetLifecycleCoordinatorTests: XCTestCase {
         XCTAssertEqual(outcome.message, outcome.result.message)
         XCTAssertEqual(outcome.diagnostic?.reason, .appBundleMissing)
         XCTAssertEqual(outcome.diagnostic?.action, .open)
-        XCTAssertEqual(lifecycle.calls, [])
+        XCTAssertEqual(lifecycle.calls, ["exists"], "Only the bundle check ran")
     }
 }
 
@@ -245,55 +246,12 @@ private final class CoordinatorTestHost: PresetLifecycleHost {
     }
 }
 
-private final class CoordinatorTestLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [String] = []
-    var bundleExists = true
-    var unloadResult = LifecycleBatchResult.notNeeded
-
-    var calls: [String] { lock.withLock { recorded } }
-    private func record(_ call: String) { lock.withLock { recorded.append(call) } }
-
-    func appBundleExists(at path: String) -> Bool { bundleExists }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult { record("open"); return .opened }
-    func settleAfterProcessChange() async { record("settle") }
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        record("terminate:main"); return .noMatchingProcesses
-    }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        record("terminate.helper:\(name)"); return .noMatchingProcesses
-    }
-    func terminateProcesses(for preset: WatchedAppPreset, scope: PresetStopScope) async -> [ProcessTerminationOutcome] {
-        record("terminate:\(scope)"); return []
-    }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { true }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        record("unload"); return unloadResult
-    }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult {
-        record("unload.preserving"); return unloadResult
-    }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("bootstrap"); return .notNeeded }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult {
-        record("disable"); return .notNeeded
-    }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("enable"); return .notNeeded }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("daemon.ensure"); return .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult {
-        record("daemon.disable"); return .notNeeded
-    }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { record("daemon.enable"); return .notNeeded }
-    func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult { record("disconnect"); return .disconnected }
-}
-
-private struct CoordinatorTestInventory: ProcessInventoryProviding {
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> { .success([]) }
-}
-
-private struct CoordinatorTestSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool {
-        XCTFail("No signal may be sent")
-        return false
-    }
-    func isAlive(_ pid: Int32) -> Bool { false }
+/// launchd changes are not needed, a preset stop answers in one
+/// `terminate.scope` call with no outcomes, the app exists and opens, waits for
+/// it succeed, and the VPN disconnects.
+private func coordinatorLifecycle() -> FakeLifecycle {
+    let lifecycle = FakeLifecycle.allSucceeding()
+    lifecycle.terminationOutcome = .noMatchingProcesses
+    lifecycle.terminateScope = { _, _ in [] }
+    return lifecycle
 }

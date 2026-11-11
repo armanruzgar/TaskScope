@@ -7,9 +7,12 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         for scope in [PresetStopScope.app, .helpers, .all] {
             let preset = examplePreset
             let store = PresetList([preset])
-            var lifecycle = FakeLifecycle()
-            lifecycle.onUnload = { await store.replace(with: []) }
-            let inventory = Inventory([.success(exampleProcesses)])
+            let lifecycle = makeLifecycle()
+            lifecycle.unloadAgents = { _ in
+                await store.replace(with: [])
+                return .notNeeded
+            }
+            let inventory = ScriptedInventory(processes: exampleProcesses)
             let manager = manager(inventory: inventory, lifecycle: lifecycle)
             manager.dependencies.watchedPresets = { store.presets }
 
@@ -28,9 +31,12 @@ final class LifecycleEngineRegressionTests: XCTestCase {
             edited.appPath = "/Applications/Replacement.app"
             let store = PresetList([preset])
             let replacement = edited
-            var lifecycle = FakeLifecycle()
-            lifecycle.onUnload = { await store.replace(with: [replacement]) }
-            let manager = manager(inventory: Inventory([.success(exampleProcesses)]), lifecycle: lifecycle)
+            let lifecycle = makeLifecycle()
+            lifecycle.unloadAgents = { _ in
+                await store.replace(with: [replacement])
+                return .notNeeded
+            }
+            let manager = manager(inventory: ScriptedInventory(processes: exampleProcesses), lifecycle: lifecycle)
             manager.dependencies.watchedPresets = { store.presets }
 
             let result = await stop(manager, preset: preset, scope: scope)
@@ -42,26 +48,25 @@ final class LifecycleEngineRegressionTests: XCTestCase {
     }
 
     func testMissingGlobalProtectBundleClearsOverridesWithoutSavedIntent() async {
-        let calls = Calls()
-        var lifecycle = FakeLifecycle(calls: calls)
-        lifecycle.bundleExists = false
-        let manager = manager(inventory: Inventory([.success([])]), lifecycle: lifecycle)
+        let lifecycle = makeLifecycle()
+        lifecycle.appExists = false
+        let manager = manager(inventory: ScriptedInventory(processes: []), lifecycle: lifecycle)
         manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
 
-        let recorded = await calls.values
-        XCTAssertEqual(recorded, ["enableSystem", "enableUser"])
+        XCTAssertEqual(observed(lifecycle), ["daemon.enable", "agents.enable"])
         XCTAssertEqual(result.status, .failed, "Missing bundle still prevents Open")
         XCTAssertEqual(result.message, "GlobalProtect is allowed to run, but its app bundle is missing at /Applications/GlobalProtect.app; nothing was opened.")
         XCTAssertNil(manager.lifecycleReport, "No changes or failures need a service report")
     }
 
     func testMissingBundleReportsOverrideFailureWithoutClaimingKeepOffIntent() async {
-        var lifecycle = FakeLifecycle()
-        lifecycle.bundleExists = false
-        lifecycle.systemEnableResult = batch(.failed, detail: "Approval cancelled")
-        let manager = manager(inventory: Inventory([.success([])]), lifecycle: lifecycle)
+        let lifecycle = makeLifecycle()
+        lifecycle.appExists = false
+        let refused = batch(.failed, detail: "Approval cancelled")
+        lifecycle.enableDaemons = { _ in refused }
+        let manager = manager(inventory: ScriptedInventory(processes: []), lifecycle: lifecycle)
         manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
@@ -76,12 +81,13 @@ final class LifecycleEngineRegressionTests: XCTestCase {
 
     func testHealthyGlobalProtectOpenDoesNotClaimRestorationOrShowReport() async {
         let runtime = CommandRuntime(disabledTable: "disabled services = {\n}")
-        var lifecycle = FakeLifecycle()
-        lifecycle.enableRuntime = runtime.runtime
-        lifecycle.ensureResult = batch(.verified)
-        lifecycle.systemEnableResult = batch(.verified)
-        lifecycle.bootstrapResult = batch(.alreadyLoaded)
-        let manager = manager(inventory: Inventory([.success(globalProtectProcesses)]), lifecycle: lifecycle)
+        let lifecycle = makeLifecycle(enablingAgentsWith: runtime.runtime)
+        let verified = batch(.verified)
+        let loaded = batch(.alreadyLoaded)
+        lifecycle.ensureDaemons = { _ in verified }
+        lifecycle.enableDaemons = { _ in verified }
+        lifecycle.bootstrapAgents = { _ in loaded }
+        let manager = manager(inventory: ScriptedInventory(processes: globalProtectProcesses), lifecycle: lifecycle)
         manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
@@ -89,16 +95,14 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         XCTAssertEqual(result.status, .completed)
         XCTAssertEqual(result.message, "GlobalProtect is already running.")
         XCTAssertNil(manager.lifecycleReport)
-        let calls = await lifecycle.calls.values
-        XCTAssertFalse(calls.contains("open"), "GlobalProtect's UI must never be opened over a running one")
+        XCTAssertFalse(lifecycle.calls.contains("open"), "GlobalProtect's UI must never be opened over a running one")
     }
 
     func testOpenReportsActualOverrideRestoration() async {
         let label = WatchedAppPreset.globalProtectInterfaceAgent.label
         let runtime = CommandRuntime(disabledTable: "disabled services = {\n\"\(label)\" => true\n}")
-        var lifecycle = FakeLifecycle()
-        lifecycle.enableRuntime = runtime.runtime
-        let manager = manager(inventory: Inventory([.success(globalProtectProcesses)]), lifecycle: lifecycle)
+        let lifecycle = makeLifecycle(enablingAgentsWith: runtime.runtime)
+        let manager = manager(inventory: ScriptedInventory(processes: globalProtectProcesses), lifecycle: lifecycle)
         manager.dependencies.isPresetKeptOff = { _ in false }
 
         let result = await manager.openApp(.globalProtect)
@@ -159,9 +163,10 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         for finalRead: Result<[AppProcess], ProcessInventoryError> in [
             .success(exampleProcesses), .failure(.commandFailed("ps unavailable")), .success([])
         ] {
-            var lifecycle = FakeLifecycle()
-            lifecycle.unloadResult = batch(.failed, detail: "bootout denied")
-            let manager = manager(inventory: Inventory([.success(exampleProcesses), finalRead]), lifecycle: lifecycle)
+            let lifecycle = makeLifecycle()
+            let denied = batch(.failed, detail: "bootout denied")
+            lifecycle.unloadAgents = { _ in denied }
+            let manager = manager(inventory: ScriptedInventory([.success(exampleProcesses), finalRead], repeatsLast: true), lifecycle: lifecycle)
             manager.dependencies.watchedPresets = { [self.examplePreset] }
             let result = await manager.quitMainApp(examplePreset)
             XCTAssertEqual(result.status, .failed)
@@ -175,9 +180,10 @@ final class LifecycleEngineRegressionTests: XCTestCase {
     }
 
     func testQuitAppJobFailureWithNoRunningAppDoesNotClaimItQuit() async {
-        var lifecycle = FakeLifecycle()
-        lifecycle.unloadResult = batch(.failed, detail: "bootout denied")
-        let manager = manager(inventory: Inventory([.success([])]), lifecycle: lifecycle)
+        let lifecycle = makeLifecycle()
+        let denied = batch(.failed, detail: "bootout denied")
+        lifecycle.unloadAgents = { _ in denied }
+        let manager = manager(inventory: ScriptedInventory(processes: []), lifecycle: lifecycle)
         let result = await manager.quitMainApp(examplePreset)
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(result.message.hasPrefix("No Example app found, but relaunch jobs failed:"), result.message)
@@ -185,15 +191,14 @@ final class LifecycleEngineRegressionTests: XCTestCase {
 
     func testPartialStopInventoryFailureDoesNotClaimNothingStopped() async {
         for scope in [PresetStopScope.helpers, .all] {
-            var lifecycle = FakeLifecycle()
-            lifecycle.helperOutcome = .inventoryUnavailable
-            let manager = manager(inventory: Inventory([.success(exampleProcesses), .success([])]), lifecycle: lifecycle)
+            let lifecycle = makeLifecycle()
+            lifecycle.terminateHelper = { _, _ in .inventoryUnavailable }
+            let manager = manager(inventory: ScriptedInventory([.success(exampleProcesses), .success([])], repeatsLast: true), lifecycle: lifecycle)
             let result = await stop(manager, preset: examplePreset, scope: scope)
             XCTAssertEqual(result.status, .failed)
             XCTAssertEqual(result.message, "Could not read the process list for every stop target; the stop may be incomplete.")
-            let calls = await lifecycle.calls.values
-            XCTAssertTrue(calls.contains("terminateHelper"))
-            if scope == .all { XCTAssertTrue(calls.contains("terminateMain")) }
+            XCTAssertTrue(lifecycle.calls.contains("terminate.helper:Helper"))
+            if scope == .all { XCTAssertTrue(lifecycle.calls.contains("terminate:Example")) }
         }
     }
 
@@ -214,18 +219,36 @@ final class LifecycleEngineRegressionTests: XCTestCase {
     }
 
     private func process(_ pid: Int32, path: String) -> AppProcess {
-        AppProcess(pid: pid, parentPID: 1, uid: getuid(), cpu: 0, memoryMB: 0, command: path,
-                   executablePath: path, elapsedTime: "00:01", startTime: "fixture-start",
-                   netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil)
+        .fixture(pid: pid, uid: getuid(), command: path, executablePath: path, elapsedTime: "00:01", startTime: "fixture-start")
+    }
+
+    /// Stops signal, launchd changes are not needed, the app exists and opens,
+    /// and waiting for the app fails. Agent enables run the real controller on
+    /// `runtime` when one is given.
+    private func makeLifecycle(enablingAgentsWith runtime: ProcessLifecycleRuntime? = nil) -> FakeLifecycle {
+        let lifecycle = FakeLifecycle.allSucceeding()
+        lifecycle.waitResult = false
+        lifecycle.disconnect = nil
+        if let runtime {
+            lifecycle.enableAgents = { preset in
+                await ProcessLifecycleController.enableUserLaunchAgents(for: preset, runtime: runtime)
+            }
+        }
+        return lifecycle
+    }
+
+    /// The calls these tests watch: stops, opens and launchd enables.
+    private func observed(_ lifecycle: FakeLifecycle) -> [String] {
+        lifecycle.calls.filter { $0.hasPrefix("terminate") || $0 == "open" || $0 == "daemon.enable" || $0 == "agents.enable" }
     }
 
     private func batch(_ state: LifecycleJobState, detail: String = "fixture") -> LifecycleBatchResult {
         LifecycleBatchResult(jobs: [LifecycleJobResult(label: "example.job", state: state, detail: detail)])
     }
 
-    private func manager(inventory: Inventory, lifecycle: FakeLifecycle) -> ProcessManager {
+    private func manager(inventory: ScriptedInventory, lifecycle: FakeLifecycle) -> ProcessManager {
         let manager = ProcessManager(processInventory: inventory, verificationInventory: inventory,
-                                     processSignaler: NoopSignaler(), lifecycle: lifecycle,
+                                     processSignaler: FakeSignaler(rejectingAll: true), lifecycle: lifecycle,
                                      settleAfterProcessChange: {}, dependencies: .inert)
         manager.enableNotifications = false
         return manager
@@ -247,73 +270,6 @@ private final class PresetList {
     func replace(with presets: [WatchedAppPreset]) { self.presets = presets }
 }
 
-private actor Calls {
-    var values: [String] = []
-    func record(_ value: String) { values.append(value) }
-}
-
-private struct FakeLifecycle: ProcessLifecycleServicing {
-    var calls = Calls()
-    var bundleExists = true
-    var onUnload: @Sendable () async -> Void = {}
-    var unloadResult = LifecycleBatchResult.notNeeded
-    var ensureResult = LifecycleBatchResult.notNeeded
-    var bootstrapResult = LifecycleBatchResult.notNeeded
-    var systemEnableResult = LifecycleBatchResult.notNeeded
-    var enableRuntime: ProcessLifecycleRuntime?
-    var helperOutcome = ProcessTerminationOutcome.signalled
-
-    func appBundleExists(at path: String) -> Bool { bundleExists }
-    func settleAfterProcessChange() async {}
-    func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await calls.record("terminateMain")
-        return .signalled
-    }
-    func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome {
-        await calls.record("terminateHelper")
-        return helperOutcome
-    }
-    func isProcessNamedRunning(_ name: String) async -> Bool { false }
-    func waitForProcessNamed(_ name: String, timeoutSeconds: TimeInterval) async -> Bool { false }
-    func openAppBundle(at path: String) async -> AppBundleOpenResult {
-        await calls.record("open")
-        return .opened
-    }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await onUnload()
-        return unloadResult
-    }
-    func bootstrapUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult { bootstrapResult }
-    func ensureSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult { ensureResult }
-    func enableSystemLaunchDaemons(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await calls.record("enableSystem")
-        return systemEnableResult
-    }
-    func enableUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {
-        await calls.record("enableUser")
-        guard let enableRuntime else { return .notNeeded }
-        return await ProcessLifecycleController.enableUserLaunchAgents(for: preset, runtime: enableRuntime)
-    }
-    func unloadUserLaunchAgents(for preset: WatchedAppPreset, preservingPIDs: Set<Int32>) async -> LifecycleBatchResult { await unloadUserLaunchAgents(for: preset) }
-    func disableUserLaunchAgents(for preset: WatchedAppPreset, preservingVPNService: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func disableSystemLaunchDaemons(for preset: WatchedAppPreset, allowAdministratorPrompt: Bool) async -> LifecycleBatchResult { .notNeeded }
-    func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool { await waitForProcessNamed(preset.mainProcessName, timeoutSeconds: timeoutSeconds) }
-}
-
-private actor Inventory: ProcessInventoryProviding {
-    var results: [Result<[AppProcess], ProcessInventoryError>]
-    init(_ results: [Result<[AppProcess], ProcessInventoryError>]) { self.results = results }
-    func load(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        if results.count > 1 { return results.removeFirst() }
-        return results[0]
-    }
-}
-
-private final class NoopSignaler: ProcessSignaling {
-    func send(_ signal: Int32, to pid: Int32) -> Bool { false }
-    func isAlive(_ pid: Int32) -> Bool { false }
-}
-
 private final class CommandRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private let disabledTable: String
@@ -330,7 +286,7 @@ private final class CommandRuntime: @unchecked Sendable {
     }
 
     var runtime: ProcessLifecycleRuntime {
-        ProcessLifecycleRuntime(
+        .fake(
             userID: getuid(), fileExists: { _ in true }, launchAgentLabel: { _ in "example.agent" },
             runCommand: { [self] command, _ in run(command) }, loadProcessInventory: { .success([]) },
             executablePathForPID: { _ in nil }, sendSignal: { _, _ in false }, isProcessAlive: { _ in false },

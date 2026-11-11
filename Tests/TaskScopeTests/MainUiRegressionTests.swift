@@ -42,7 +42,7 @@ final class MainUiRegressionTests: XCTestCase {
     }
 
     private func process(pid: Int32, parentPID: Int32 = 1, name: String, cpu: Double) -> AppProcess {
-        AppProcess(pid: pid, parentPID: parentPID, uid: getuid(), cpu: cpu, memoryMB: 1,
+        AppProcess.fixture(pid: pid, parentPID: parentPID, uid: getuid(), cpu: cpu, memoryMB: 1,
                    command: name, executablePath: "/Applications/Workers.app/Contents/MacOS/\(name)",
                    elapsedTime: "00:10", startTime: "start", netInKB: nil, netOutKB: nil,
                    diskReadBytes: nil, diskWriteBytes: nil)
