@@ -50,6 +50,7 @@ taskscope_validate_build_number_history() {
   local tagged_build
   local maximum_build=0
   local maximum_tag=""
+  local release_tag_count=0
   local LC_ALL=C
 
   tags="$(git -C "$root_dir" tag --list 'v*')" || {
@@ -57,7 +58,9 @@ taskscope_validate_build_number_history() {
     return 1
   }
   while IFS= read -r tag; do
-    [[ -n "$tag" ]] || continue
+    # Only v<major>.<minor>[.<patch>][-<suffix>] names are release tags.
+    [[ "$tag" =~ ^v[0-9]+(\.[0-9]+){1,2}(-[A-Za-z0-9.-]+)?$ ]] || continue
+    release_tag_count=$((release_tag_count + 1))
     tagged_build="$(git -C "$root_dir" show "$tag:BUILD_NUMBER" 2>/dev/null)" || {
       echo "Could not read BUILD_NUMBER at $tag." >&2
       return 1
@@ -75,6 +78,11 @@ taskscope_validate_build_number_history() {
     fi
   done <<< "$tags"
 
+  # Missing tags would make any build number pass, as in a --no-tags clone.
+  if [[ "$release_tag_count" -eq 0 && "${TASKSCOPE_FIRST_RELEASE:-0}" != 1 ]]; then
+    echo "No local release tags. Fetch the release tags, or set TASKSCOPE_FIRST_RELEASE=1 for the first release." >&2
+    return 1
+  fi
   if [[ ${#build_number} -lt ${#maximum_build} \
     || ( ${#build_number} -eq ${#maximum_build} && ! "$build_number" > "$maximum_build" ) ]]; then
     echo "BUILD_NUMBER ($build_number) must be greater than the value at $maximum_tag ($maximum_build)." >&2
@@ -141,7 +149,7 @@ taskscope_process_runs_bundle_executable() {
     /usr/bin/stat -f '%d %i' "$bundle/Contents/MacOS/$executable_name" 2>/dev/null
   )" || return 1
   read -r device inode < <(
-    /usr/sbin/lsof -a -p "$pid" -d txt -FDi 2>/dev/null \
+    LC_ALL=en_US.UTF-8 /usr/sbin/lsof -a -p "$pid" -d txt -FDi 2>/dev/null \
       | /usr/bin/awk '
           substr($0, 1, 1) == "D" && device == "" { device = substr($0, 2) }
           substr($0, 1, 1) == "i" { print device, substr($0, 2); exit }'
@@ -158,7 +166,10 @@ taskscope_require_no_other_app_instance() {
   local pid
   local path
 
-  expected_path="$(cd "$bundle" && pwd -P)" || return 1
+  expected_path="$bundle"
+  if [[ -d "$bundle" ]]; then
+    expected_path="$(cd "$bundle" && pwd -P)" || return 1
+  fi
   running_paths="$(taskscope_running_bundle_paths "$bundle_id")" || {
     echo "Could not check running TaskScope applications; refusing to launch $bundle." >&2
     return 1
@@ -189,7 +200,7 @@ taskscope_process_command() {
   local pid="$1"
   local command
 
-  command="$(/bin/ps -ww -p "$pid" -o command= 2>/dev/null)" || return 1
+  command="$(LC_ALL=en_US.UTF-8 /bin/ps -ww -p "$pid" -o command= 2>/dev/null)" || return 1
   [[ -n "$command" ]] || return 1
   printf '%s' "$command"
 }
@@ -201,7 +212,7 @@ taskscope_process_identity() {
   # PID alone is unsafe because macOS can reuse it after a process exits. The
   # process start time and full command together provide a stable shell-level
   # identity that can be revalidated immediately before each signal.
-  identity="$(/bin/ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null)" || return 1
+  identity="$(LC_ALL=en_US.UTF-8 /bin/ps -ww -p "$pid" -o lstart= -o command= 2>/dev/null)" || return 1
   [[ -n "$identity" ]] || return 1
   printf '%s' "$identity"
 }
@@ -213,7 +224,7 @@ taskscope_process_start_time() {
 
   # The start time survives exec, so PID plus start time follows a forked
   # child from the shell into the program it runs. Exited zombies do not count.
-  read -r state start_time < <(/bin/ps -p "$pid" -o stat= -o lstart= 2>/dev/null) \
+  read -r state start_time < <(LC_ALL=en_US.UTF-8 /bin/ps -p "$pid" -o stat= -o lstart= 2>/dev/null) \
     || return 1
   [[ -n "$start_time" && "$state" != Z* ]] || return 1
   printf '%s' "$start_time"
@@ -273,7 +284,7 @@ taskscope_process_executable_path() {
   # `lsof` obtains the process text vnode from the kernel. Unlike `ps`
   # command/argv0, an untrusted process cannot forge this path with `exec -a`.
   executable="$(
-    /usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null \
+    LC_ALL=en_US.UTF-8 /usr/sbin/lsof -a -p "$pid" -d txt -Fn 2>/dev/null \
       | /usr/bin/awk 'substr($0, 1, 1) == "n" { print substr($0, 2); exit }'
   )"
   [[ -n "$executable" ]] || return 1
@@ -301,7 +312,7 @@ taskscope_send_signal() {
 }
 
 taskscope_list_processes() {
-  /bin/ps -ww -axo pid=,command=
+  LC_ALL=en_US.UTF-8 /bin/ps -ww -axo pid=,command=
 }
 
 taskscope_pause() {
@@ -339,6 +350,9 @@ taskscope_stop_processes_for_executable() {
   local -a matching_pids=()
   local -a matching_identities=()
 
+  # Callers read this after a successful call: 1 only when verified processes
+  # were found and every one of them stopped, so a caller can report it.
+  TASKSCOPE_STOPPED_PROCESSES=0
   [[ -x "$executable" ]] || return 0
   canonical_executable="$(taskscope_canonical_file_path "$executable")" || return 0
 
@@ -377,7 +391,10 @@ taskscope_stop_processes_for_executable() {
         break
       fi
     done
-    [[ "$any_running" -eq 0 ]] && return 0
+    if [[ "$any_running" -eq 0 ]]; then
+      TASKSCOPE_STOPPED_PROCESSES=1
+      return 0
+    fi
     taskscope_pause 0.1
   done
 
@@ -396,10 +413,283 @@ taskscope_stop_processes_for_executable() {
         break
       fi
     done
-    [[ "$any_running" -eq 0 ]] && return 0
+    if [[ "$any_running" -eq 0 ]]; then
+      TASKSCOPE_STOPPED_PROCESSES=1
+      return 0
+    fi
     taskscope_pause 0.1
   done
 
   echo "Could not stop every verified TaskScope process for $canonical_executable." >&2
   return 1
+}
+
+# Prevent inherited Git repository overrides from redirecting -C operations.
+taskscope_clear_git_environment() {
+  local name
+  while IFS= read -r name; do
+    unset "$name"
+  done < <(git rev-parse --local-env-vars)
+}
+
+taskscope_validate_copy_destination() {
+  local destination="$1"
+  [[ -n "$destination" ]] || return 0
+  case "$destination" in
+    /*/TaskScope.app) ;;
+    *) echo "TASKSCOPE_VERIFIED_BUNDLE_COPY must be an absolute TaskScope.app path." >&2; return 1 ;;
+  esac
+  if [[ -e "$destination" || -L "$destination" ]]; then
+    echo "Refusing to overwrite verified bundle copy: $destination" >&2
+    return 1
+  fi
+  if [[ ! -d "$(dirname "$destination")" ]]; then
+    echo "Verified bundle copy destination directory does not exist." >&2
+    return 1
+  fi
+}
+
+taskscope_require_xcode() {
+  local version
+  local major
+  version="$(xcodebuild -version 2>/dev/null)" || version="unavailable"
+  major="$(awk '/^Xcode / { split($2, v, "."); print v[1]; exit }' <<< "$version")"
+  if [[ ! "$major" =~ ^[0-9]+$ || "$major" -lt 26 ]]; then
+    echo "TaskScope packaging needs Xcode 26 or later selected with xcode-select (found: $version)." >&2
+    return 2
+  fi
+}
+
+# Prints the package description as JSON. dump-package only evaluates the
+# manifest; it never resolves or fetches dependencies.
+taskscope_describe_package() {
+  swift package --package-path "$1" dump-package
+}
+
+taskscope_minimum_system_version() {
+  taskscope_describe_package "$1" | /usr/bin/plutil -extract platforms.0.version raw -o - -
+}
+
+# Prints one target's description as JSON. Equal descriptions print the same
+# text; a property list format cannot hold the nulls SwiftPM writes.
+taskscope_target_description() {
+  local package_path="$1"
+  local target="$2"
+  local description
+  local name
+  local index=0
+
+  description="$(taskscope_describe_package "$package_path")" || return 1
+  while name="$(/usr/bin/plutil -extract "targets.$index.name" raw -o - - <<< "$description" 2>/dev/null)"; do
+    if [[ "$name" == "$target" ]]; then
+      /usr/bin/plutil -extract "targets.$index" json -o - - <<< "$description"
+      return
+    fi
+    index=$((index + 1))
+  done
+  echo "The package at $package_path has no $target target." >&2
+  return 1
+}
+
+# The Info.plist copyright notice repeats the license's copyright line.
+taskscope_copyright_notice() {
+  local notice
+
+  notice="$(/usr/bin/awk '/^Copyright \(c\) [0-9][0-9][0-9][0-9] / { print; exit }' "$1/LICENSE" 2>/dev/null)"
+  if [[ -z "$notice" ]]; then
+    echo "LICENSE lacks a 'Copyright (c) <year> <holder>' line." >&2
+    return 1
+  fi
+  printf '%s' "$notice"
+}
+
+# shlock supplies atomic exclusion; the sidecar distinguishes a recycled PID
+# from the process that acquired the lock. Legacy locks get an actionable error.
+taskscope_acquire_lock() {
+  local lock="$1"
+  local description="$2"
+  local pid
+  local recorded_pid
+  local recorded_identity
+  local identity
+  if ! /usr/bin/shlock -f "$lock" -p "$$"; then
+    pid="$(cat "$lock" 2>/dev/null || true)"
+    recorded_pid="$(head -n 1 "$lock.owner" 2>/dev/null || true)"
+    recorded_identity="$(tail -n +2 "$lock.owner" 2>/dev/null || true)"
+    identity="$(taskscope_process_identity "$pid" 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[0-9]+$ && "$pid" == "$recorded_pid" \
+      && -n "$recorded_identity" && "$identity" != "$recorded_identity" \
+      && "$(cat "$lock" 2>/dev/null)" == "$pid" ]]; then
+      rm -f "$lock" "$lock.owner"
+      /usr/bin/shlock -f "$lock" -p "$$" || {
+        echo "Another TaskScope $description took $lock while a stale lock was removed." >&2
+        return 1
+      }
+    else
+      echo "Another TaskScope $description owns $lock. Recorded PID: $pid; current process: ${identity:-unavailable}." >&2
+      echo "If this is not a TaskScope script, remove $lock and $lock.owner, then retry." >&2
+      return 1
+    fi
+  fi
+  identity="$(taskscope_process_identity "$$")" || {
+    taskscope_release_lock "$lock"
+    echo "Could not capture lock owner identity for $lock." >&2
+    return 1
+  }
+  printf '%s\n%s\n' "$$" "$identity" > "$lock.owner"
+}
+
+taskscope_release_lock() {
+  rm -f "$1.owner" "$1"
+}
+
+# Invoked only under the destination's transaction lock. Do not discard a
+# backup when the replacement is absent or cannot be validated.
+taskscope_recover_bundles() {
+  local destination="$1"
+  local backup_prefix="$2"
+  local temporary_prefix="$3"
+  local path
+  local backup=""
+  for path in "$backup_prefix"*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    [[ -d "$path" && ! -L "$path" ]] || {
+      echo "Unexpected recovery artifact: $path; inspect it before retrying." >&2; return 1;
+    }
+    if [[ ! -e "$destination" && ! -L "$destination" ]]; then
+      if [[ -n "$backup" ]]; then
+        echo "Multiple backups found; restore the intended bundle to $destination before retrying." >&2
+        return 1
+      fi
+      backup="$path"
+    fi
+  done
+  if [[ -n "$backup" ]]; then
+    mv "$backup" "$destination"
+    echo "Recovered previous bundle at $destination." >&2
+  fi
+  for path in "$backup_prefix"* "$temporary_prefix"*; do
+    [[ -e "$path" || -L "$path" ]] || continue
+    [[ -d "$path" && ! -L "$path" ]] || {
+      echo "Unexpected recovery artifact: $path; inspect it before retrying." >&2; return 1;
+    }
+    if [[ "$path" == "$backup_prefix"* ]] \
+      && ! /usr/bin/codesign --verify --deep --strict "$destination" >/dev/null 2>&1; then
+      echo "An interrupted run left the backup $path, and $destination fails signature verification." >&2
+      echo "Keep the bundle you want at $destination, remove the other one, then retry." >&2
+      return 1
+    fi
+    rm -rf "$path"
+  done
+}
+
+taskscope_binary_rpaths() {
+  /usr/bin/otool -l "$1" | /usr/bin/awk '
+    $1 == "cmd" { rpath = ($2 == "LC_RPATH") }
+    rpath && $1 == "path" { sub(/^[[:space:]]*path /, ""); sub(/ \(offset [0-9]+\)$/, ""); print; rpath = 0 }'
+}
+
+taskscope_remove_build_rpaths() {
+  local executable="$1"
+  local paths
+  local path
+  paths="$(taskscope_binary_rpaths "$executable")" || return 1
+  while IFS= read -r path; do
+    [[ -n "$path" && "$path" != /usr/lib/swift ]] || continue
+    /usr/bin/install_name_tool -delete_rpath "$path" "$executable" || return 1
+  done <<< "$paths"
+}
+
+taskscope_verify_binary_paths() {
+  local executable="$1"
+  local paths
+  local dependencies
+  local path
+  dependencies="$(/usr/bin/otool -L "$executable")" || return 1
+  if /usr/bin/grep -Eq '^[[:space:]]+@rpath/' <<< "$dependencies"; then
+    echo "Bundle verification failed: unresolved @rpath dependency." >&2
+    return 1
+  fi
+  paths="$(taskscope_binary_rpaths "$executable")" || return 1
+  while IFS= read -r path; do
+    [[ -z "$path" || "$path" == /usr/lib/swift ]] || {
+      echo "Bundle verification failed: non-system runtime search path: $path" >&2
+      return 1
+    }
+  done <<< "$paths"
+}
+
+taskscope_verify_no_debug_paths() {
+  local symbols
+  symbols="$(/usr/bin/nm -ap "$1" 2>/dev/null)" || return 1
+  if /usr/bin/grep -Eq '[[:space:]]OSO[[:space:]]' <<< "$symbols"; then
+    echo "Release verification failed: debug OSO source paths remain in executable." >&2
+    return 1
+  fi
+}
+
+# SwiftPM resolves a root package's whole dependency graph before it builds any
+# product, so building the app from Package.swift fetches the test-only
+# ViewInspector package. Packaging builds this generated package instead: the
+# same Sources and the same TaskScope target with no dependencies, so it never
+# fetches anything and never rewrites the root Package.resolved.
+taskscope_prepare_application_package() {
+  local root="$1"
+  local minimum_version="$2"
+  local package_dir="$root/.build/taskscope-application"
+  local manifest_draft="$package_dir/Package.swift.$$"
+  local expected_target
+  local generated_target
+
+  mkdir -p "$package_dir" || return 1
+  if [[ -L "$package_dir/Sources" ]]; then
+    # A moved checkout leaves a link to its old location; the link is ours.
+    if [[ "$(readlink "$package_dir/Sources")" != "$root/Sources" ]]; then
+      rm "$package_dir/Sources" || return 1
+    fi
+  elif [[ -e "$package_dir/Sources" ]]; then
+    echo "Refusing to replace app package sources: $package_dir/Sources" >&2
+    return 1
+  fi
+  if [[ ! -L "$package_dir/Sources" ]]; then
+    # A concurrent run may create the same link first.
+    ln -s "$root/Sources" "$package_dir/Sources" 2>/dev/null || true
+  fi
+  [[ "$(readlink "$package_dir/Sources")" == "$root/Sources" ]] || {
+    echo "Could not link the app package sources at $package_dir/Sources." >&2
+    return 1
+  }
+  cat > "$manifest_draft" <<MANIFEST || return 1
+// swift-tools-version: 5.9
+// Generated by script/packaging_common.sh; do not edit.
+import PackageDescription
+
+let package = Package(
+    name: "TaskScopeApplication",
+    platforms: [.macOS("$minimum_version")],
+    products: [.executable(name: "TaskScope", targets: ["TaskScope"])],
+    targets: [
+        .executableTarget(
+            name: "TaskScope",
+            swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]
+        )
+    ]
+)
+MANIFEST
+  # Rewrite only on change: an unchanged manifest keeps the build up to date.
+  if cmp -s "$manifest_draft" "$package_dir/Package.swift"; then
+    rm "$manifest_draft"
+  else
+    mv "$manifest_draft" "$package_dir/Package.swift" || return 1
+  fi
+  # Package.swift stays the single source of the app target: refuse to build a
+  # target that differs from it in any setting.
+  expected_target="$(taskscope_target_description "$root" TaskScope)" || return 1
+  generated_target="$(taskscope_target_description "$package_dir" TaskScope)" || return 1
+  if [[ "$expected_target" != "$generated_target" ]]; then
+    echo "Package.swift declares the TaskScope target differently from the generated app package." >&2
+    echo "Update taskscope_prepare_application_package in script/packaging_common.sh to match." >&2
+    return 1
+  fi
+  printf '%s' "$package_dir"
 }

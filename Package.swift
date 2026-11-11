@@ -2,6 +2,10 @@
 
 import PackageDescription
 
+// Complete concurrency checking in every build and in the editor, not only in
+// the gate's separate strict step.
+let strictConcurrency: [SwiftSetting] = [.enableExperimentalFeature("StrictConcurrency")]
+
 let package = Package(
     name: "TaskScope",
     platforms: [
@@ -17,13 +21,14 @@ let package = Package(
         )
     ],
     targets: [
-        .executableTarget(name: "TaskScope"),
+        .executableTarget(name: "TaskScope", swiftSettings: strictConcurrency),
         .testTarget(
             name: "TaskScopeTests",
             dependencies: [
                 "TaskScope",
                 .product(name: "ViewInspector", package: "ViewInspector")
-            ]
+            ],
+            swiftSettings: strictConcurrency
         )
     ]
 )

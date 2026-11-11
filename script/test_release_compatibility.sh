@@ -2,9 +2,11 @@
 set -euo pipefail
 
 case "${1:-}" in
-  ""|--packaging-only|--evidence-only) ;;
-  *) echo "usage: $0 [--packaging-only|--evidence-only]" >&2; exit 2 ;;
+  ""|--packaging-only|--evidence-only|--pipeline-only) ;;
+  *) echo "usage: $0 [--packaging-only|--evidence-only|--pipeline-only]" >&2; exit 2 ;;
 esac
+
+while IFS= read -r git_variable; do unset "$git_variable"; done < <(git rev-parse --local-env-vars)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-release-evidence.XXXXXX")"
@@ -59,6 +61,7 @@ test_packaging_environment_isolation() (
   local inputs=(TASKSCOPE_BUNDLE_ID TASKSCOPE_SIGNING_STYLE TASKSCOPE_CODE_SIGN_IDENTITY
     TASKSCOPE_VERIFIED_BUNDLE_COPY TASKSCOPE_INSTALL_FAIL_AT TASKSCOPE_SKIP_BUILD
     TASKSCOPE_RELEASE_ARCHS TASKSCOPE_EXPECTED_TEAM_ID TASKSCOPE_NOTARY_KEYCHAIN_PROFILE
+    TASKSCOPE_OUTPUT_DIR TASKSCOPE_DSYM_COPY TASKSCOPE_FIRST_RELEASE
     BUILD_CONFIGURATION)
   for name in "${inputs[@]}"; do
     export "$name=inherited-release-value"
@@ -97,7 +100,14 @@ test_build_number_history() (
       *) return 1 ;;
     esac
   }
-  taskscope_validate_build_number_history "$TEST_DIR" 1
+  # Without release tags any build number would pass, so only an explicit
+  # first-release acknowledgement accepts an empty history.
+  if taskscope_validate_build_number_history "$TEST_DIR" 1 > "$OUTPUT" 2>&1; then
+    echo 'Release accepted a build number without any release tags.' >&2
+    exit 1
+  fi
+  grep -Fq 'No local release tags' "$OUTPUT"
+  TASKSCOPE_FIRST_RELEASE=1 taskscope_validate_build_number_history "$TEST_DIR" 1
   # The lower-version hotfix has the maximum build, independent of tag order.
   fixture_tags=$'v1.1.0-rc1\nv1.1.0\nv1.0.1'
   taskscope_validate_build_number_history "$TEST_DIR" 13
@@ -133,6 +143,20 @@ test_build_number_history() (
     exit 1
   fi
   grep -Fq 'Could not read BUILD_NUMBER at v0.9.0.' "$OUTPUT"
+  # Tags that merely start with v are not releases: they neither set the
+  # minimum nor count as release history.
+  fixture_tags=$'vendor-drop\nv-other-project'
+  if taskscope_validate_build_number_history "$TEST_DIR" 1 > "$OUTPUT" 2>&1; then
+    echo 'Non-release v* tags counted as release history.' >&2
+    exit 1
+  fi
+  grep -Fq 'No local release tags' "$OUTPUT"
+  fixture_tags=$'vendor-drop\nv1.0.1'
+  if taskscope_validate_build_number_history "$TEST_DIR" 12 > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'value at v1.0.1 (12)' "$OUTPUT"
+  taskscope_validate_build_number_history "$TEST_DIR" 13
   git() { return 1; }
   if taskscope_validate_build_number_history "$TEST_DIR" 13 > "$OUTPUT" 2>&1; then
     exit 1
@@ -177,17 +201,18 @@ EOF
     if [[ "$kind" == build ]]; then
       launch_script="$(awk '/^open_app\(\)/ { copying = 1 } copying { print }' "$ROOT_DIR/script/build_and_run.sh")"
     else
-      launch_script="$(awk '/^if \[\[ "\$OPEN_AFTER_INSTALL"/ { copying = 1 } copying { print }' "$ROOT_DIR/script/install.sh")"
+      launch_script="$(awk '/^INSTALL_STATE="complete"/ { complete = 1 } complete && /^if \[\[ "\$OPEN_AFTER_INSTALL"/ { copying = 1 } copying { print }' "$ROOT_DIR/script/install.sh")"
     fi
     [[ -n "$launch_script" ]] || exit 1
     for mode in run --logs logs --telemetry telemetry --debug debug; do
       : > "$TOOL_LOG"
-      if ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE="$mode" \
+      status=0
+      ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE="$mode" \
         RUNNING_PATH="$other_bundle" RUNNING_ID=com.example.TaskScopeTests \
         LAUNCH_SCRIPT="$launch_script" TOOL_LOG="$TOOL_LOG" \
-        bash "$harness" > "$OUTPUT" 2>&1; then
-        echo "$kind $mode launched beside a running same-ID bundle." >&2
-        exit 1
+        bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
+      if [[ "$kind" == build && "$status" -eq 0 ]] || [[ "$kind" == install && "$status" -ne 0 ]]; then
+        cat "$OUTPUT" >&2; exit 1
       fi
       [[ ! -s "$TOOL_LOG" ]] || { cat "$TOOL_LOG" >&2; exit 1; }
       grep -Fq "$other_bundle" "$OUTPUT"
@@ -210,23 +235,21 @@ EOF
     # A same-path copy whose executable was replaced is a stale build; `open`
     # would only activate it, so launching must refuse instead.
     : > "$TOOL_LOG"
-    if ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
+    status=0
+    ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
       RUNNING_PATH="$bundle" RUNNING_ID=com.example.TaskScopeTests STALE_EXECUTABLE=1 \
       LAUNCH_SCRIPT="$launch_script" TOOL_LOG="$TOOL_LOG" \
-      bash "$harness" > "$OUTPUT" 2>&1; then
-      echo "$kind launched beside a stale build of the same bundle." >&2
-      exit 1
-    fi
+      bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
+    [[ "$kind" == install || "$status" -ne 0 ]] || exit 1
     [[ ! -s "$TOOL_LOG" ]] || { cat "$TOOL_LOG" >&2; exit 1; }
     grep -Fq 'older build' "$OUTPUT"
     : > "$TOOL_LOG"
-    if ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
+    status=0
+    ROOT_DIR="$ROOT_DIR" TARGET_BUNDLE="$bundle" MODE=run \
       RUNNING_PATH="$other_bundle" RUNNING_ID=com.example.TaskScopeTests INVENTORY_FAILED=1 \
       LAUNCH_SCRIPT="$launch_script" TOOL_LOG="$TOOL_LOG" \
-      bash "$harness" > "$OUTPUT" 2>&1; then
-      echo "$kind launched after running-app lookup failed." >&2
-      exit 1
-    fi
+      bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
+    [[ "$kind" == install || "$status" -ne 0 ]] || exit 1
     [[ ! -s "$TOOL_LOG" ]] || exit 1
     grep -Fq 'Could not check running TaskScope applications' "$OUTPUT"
   done
@@ -249,9 +272,14 @@ test_verify_holds_packaging_lock() (
   cat > "$harness" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+source "$COMMON_SCRIPT"
+taskscope_require_xcode() { :; }
+taskscope_minimum_system_version() { printf 14.0; }
+taskscope_copyright_notice() { printf 'Copyright (c) 2026 Packaging Tests'; }
 DIST_DIR="$ROOT_DIR/dist/build.noindex"
 APP_NAME=TaskScope
 APP_BUNDLE="$DIST_DIR/TaskScope.app"
+taskscope_process_identity() { printf "fake-owner-identity"; }
 function /usr/bin/shlock() {
   [[ ! -e "$2" ]] || return 1
   printf '%s\n' "$4" > "$2"
@@ -275,7 +303,7 @@ eval "$VERIFY_FLOW"
 EOF
   for mode in --verify verify; do
     : > "$TOOL_LOG"
-    if ! ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
+    if ! COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh" ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
       bash "$harness" > "$OUTPUT" 2>&1; then
       cat "$OUTPUT" >&2
       exit 1
@@ -284,7 +312,7 @@ EOF
     [[ ! -e "$fixture/dist/build.noindex/.TaskScope.package.lock" ]] || exit 1
     printf 'other-owner\n' > "$fixture/dist/build.noindex/.TaskScope.package.lock"
     : > "$TOOL_LOG"
-    if ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
+    if COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh" ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
       bash "$harness" > "$OUTPUT" 2>&1; then
       echo 'Verification ignored an existing packaging lock.' >&2
       exit 1
@@ -293,7 +321,7 @@ EOF
     grep -Fq 'Another TaskScope packaging process owns' "$OUTPUT"
     grep -Fxq 'other-owner' "$fixture/dist/build.noindex/.TaskScope.package.lock"
     rm "$fixture/dist/build.noindex/.TaskScope.package.lock"
-    if ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" FAIL_STARTUP=1 \
+    if COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh" ROOT_DIR="$fixture" MODE="$mode" VERIFY_FLOW="$flow" TOOL_LOG="$TOOL_LOG" FAIL_STARTUP=1 \
       bash "$harness" > "$OUTPUT" 2>&1; then
       echo 'Verification ignored a startup failure.' >&2
       exit 1
@@ -338,6 +366,7 @@ INSTALL_STATE=preparing
 mkdir -p "$DEST_DIR" "$STAGED_BUNDLE/Contents"
 printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.2.3\nCFBundleVersion=7\n' \
   "$BUNDLE_ID" > "$STAGED_BUNDLE/Contents/Info.plist"
+taskscope_process_identity() { printf "fake-owner-identity"; }
 function /usr/bin/shlock() {
   [[ ! -e "$2" ]] || return 1
   printf '%s\n' "$4" > "$2"
@@ -470,7 +499,864 @@ EOF
   [[ "$status" -eq 31 ]] || { echo 'Packaging cleanup hid an earlier test failure.' >&2; exit 1; }
 )
 
-if [[ "${1:-}" != --evidence-only ]]; then
+# Packaging tests sign ad hoc and stage into their own temporary directory, so
+# neither the keychain nor the checkout's dist/build.noindex affects a run.
+test_packaging_test_isolation() (
+  local setup
+  export TASKSCOPE_CODE_SIGN_IDENTITY='Apple Development: Inherited' TASKSCOPE_OUTPUT_DIR=/inherited
+  setup="$(awk '{ print } /^TEST_PREFERENCES_DIR=/ { exit }' "$ROOT_DIR/script/test_packaging.sh")"
+  eval "$setup"
+  # TEST_DIR is now the setup's own temporary directory.
+  rm -rf "$TEST_DIR"
+  [[ "${TASKSCOPE_CODE_SIGN_IDENTITY:-}" == - ]] || {
+    echo 'Packaging tests sign with a keychain identity.' >&2
+    exit 1
+  }
+  [[ "${TASKSCOPE_OUTPUT_DIR:-}" == "$TEST_DIR/build.noindex" ]] || {
+    echo 'Packaging tests stage outside their temporary directory.' >&2
+    exit 1
+  }
+)
+
+# A caller's exported Git repository (GIT_DIR in a worktree's pre-commit hook,
+# for example) must not redirect the fixtures' git commands.
+test_git_environment_is_cleared() (
+  local script
+  for script in test_packaging test_release_compatibility; do
+    (
+      export GIT_DIR=/caller/.git GIT_WORK_TREE=/caller GIT_INDEX_FILE=/caller/.git/index
+      eval "$(awk '/^ROOT_DIR=/ { exit } { print }' "$ROOT_DIR/script/$script.sh")"
+      [[ -z "${GIT_DIR:-}${GIT_WORK_TREE:-}${GIT_INDEX_FILE:-}" ]] || {
+        echo "$script.sh keeps the caller's Git repository variables." >&2
+        exit 1
+      }
+    )
+  done
+)
+
+# Only argument parsing, which precedes ROOT_DIR, is evaluated here, so no
+# build, install, or release step can start.
+test_script_arguments_and_help() (
+  local entry
+  local script
+  local valid
+  local prefix
+  local option
+  local status
+  for entry in build_and_run:--stage install:--no-open release:--preflight; do
+    script="${entry%%:*}"
+    valid="${entry#*:}"
+    prefix="$(awk '/^ROOT_DIR=/ { exit } { print }' "$ROOT_DIR/script/$script.sh")"
+    for option in --help -h; do
+      if ! PREFIX="$prefix" bash -c 'eval "$PREFIX"' _ "$option" > "$OUTPUT" 2>&1; then
+        echo "$script.sh rejected $option." >&2
+        cat "$OUTPUT" >&2
+        exit 1
+      fi
+      grep -q '^usage:' "$OUTPUT" && grep -q '^Environment:' "$OUTPUT" || {
+        echo "$script.sh $option does not describe its modes and environment." >&2
+        exit 1
+      }
+    done
+    # A second option is a usage error, like a misspelled first one.
+    for option in "$valid --verify" "$valid extra" --definitely-invalid; do
+      status=0
+      # shellcheck disable=SC2086 # Each case is a list of arguments.
+      PREFIX="$prefix" bash -c 'eval "$PREFIX"' _ $option > "$OUTPUT" 2>&1 || status="$?"
+      if [[ "$status" -ne 2 ]] || ! grep -q '^usage:' "$OUTPUT"; then
+        echo "$script.sh did not reject arguments: $option" >&2
+        exit 1
+      fi
+    done
+  done
+  # A full release must be requested explicitly.
+  prefix="$(awk '/^ROOT_DIR=/ { exit } { print }' "$ROOT_DIR/script/release.sh")"
+  status=0
+  PREFIX="$prefix" bash -c 'eval "$PREFIX"' _ > "$OUTPUT" 2>&1 || status="$?"
+  [[ "$status" -eq 2 ]] || {
+    echo 'release.sh starts a full release without an explicit mode.' >&2
+    exit 1
+  }
+)
+
+# An invalid TASKSCOPE_VERIFIED_BUNDLE_COPY is rejected before any tool runs or
+# the staged bundle changes. Every tool reached after validation is a fake.
+test_verified_copy_validated_before_build() (
+  local fixture="$TEST_DIR/verified copy fixture"
+  local tool
+  local entry
+  local value
+  local expected
+  mkdir -p "$fixture/script" "$fixture/bin" "$fixture/Existing/TaskScope.app" \
+    "$fixture/Dangling" "$fixture/Valid"
+  ln -s "$fixture/missing.app" "$fixture/Dangling/TaskScope.app"
+  cp "$ROOT_DIR/script/build_and_run.sh" "$ROOT_DIR/script/packaging_common.sh" "$fixture/script/"
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  for tool in xcodebuild swift xcrun; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${0##*/}" >> "$TOOL_LOG"\nexit 91\n' > "$fixture/bin/$tool"
+    chmod +x "$fixture/bin/$tool"
+  done
+  for entry in \
+    "relative/TaskScope.app|must be an absolute TaskScope.app path" \
+    "$fixture/Valid/Other.app|must be an absolute TaskScope.app path" \
+    "$fixture/Existing/TaskScope.app|Refusing to overwrite verified bundle copy" \
+    "$fixture/Dangling/TaskScope.app|Refusing to overwrite verified bundle copy" \
+    "$fixture/Absent/TaskScope.app|destination directory does not exist"; do
+    value="${entry%%|*}"
+    expected="${entry#*|}"
+    : > "$TOOL_LOG"
+    if TOOL_LOG="$TOOL_LOG" PATH="$fixture/bin:$PATH" TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests \
+      TASKSCOPE_CODE_SIGN_IDENTITY=- TASKSCOPE_OUTPUT_DIR="$fixture/out" \
+      TASKSCOPE_VERIFIED_BUNDLE_COPY="$value" \
+      bash "$fixture/script/build_and_run.sh" --stage > "$OUTPUT" 2>&1; then
+      echo "Staging accepted verified copy destination $value." >&2
+      exit 1
+    fi
+    grep -Fq "$expected" "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
+    if [[ -s "$TOOL_LOG" || -e "$fixture/out" ]]; then
+      echo "Invalid verified copy destination $value was reported only after packaging work." >&2
+      exit 1
+    fi
+  done
+  # A valid destination passes validation and reaches the Xcode check.
+  : > "$TOOL_LOG"
+  if TOOL_LOG="$TOOL_LOG" PATH="$fixture/bin:$PATH" TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests \
+    TASKSCOPE_CODE_SIGN_IDENTITY=- TASKSCOPE_OUTPUT_DIR="$fixture/out" \
+    TASKSCOPE_VERIFIED_BUNDLE_COPY="$fixture/Valid/TaskScope.app" \
+    bash "$fixture/script/build_and_run.sh" --stage > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fxq xcodebuild "$TOOL_LOG" || { cat "$OUTPUT" >&2; exit 1; }
+)
+
+# The installer refuses anything at the destination that is not a TaskScope
+# bundle directory with the expected identifier, and refuses a launch conflict,
+# before staging, stopping, or replacing anything. Every tool is a fake.
+test_installer_guards_before_changes() (
+  local definitions
+  local flow
+  local cleanup_definition
+  local status
+  local fixture="$TEST_DIR/installer guard fixture"
+  local harness="$TEST_DIR/installer-guard-harness.sh"
+  definitions="$(awk '/^cleanup_install\(\)/ { copying = 1 } /^if \[\[ ! -d "\$DEST_DIR"/ { exit } copying { print }' "$ROOT_DIR/script/install.sh")"
+  flow="$(awk '/^if \[\[ ! -d "\$DEST_DIR"/ { copying = 1 } copying { print }' "$ROOT_DIR/script/install.sh")"
+  cleanup_definition="$(awk '/^cleanup_install\(\)/ { copying = 1 } copying { print } copying && /^}$/ { exit }' "$ROOT_DIR/script/install.sh")"
+  mkdir -p "$fixture/script"
+  printf '#!/usr/bin/env bash\nprintf "stage\\n" >> "$TOOL_LOG"\n' > "$fixture/script/build_and_run.sh"
+  chmod +x "$fixture/script/build_and_run.sh"
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  cat > "$harness" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$COMMON_SCRIPT"
+APP_NAME=TaskScope
+BUNDLE_ID=com.example.TaskScopeTests
+DEST_DIR="$ROOT_DIR/Applications"
+DEST_BUNDLE="$DEST_DIR/TaskScope.app"
+STAGED_BUNDLE="$ROOT_DIR/dist/build.noindex/TaskScope.app"
+INSTALLING_BUNDLE="$DEST_DIR/.TaskScope.installing.$$"
+BACKUP_BUNDLE="$DEST_DIR/.TaskScope.backup.$$"
+INSTALL_LOCK="$DEST_DIR/.TaskScope.install.lock"
+PACKAGING_LOCK="$ROOT_DIR/dist/build.noindex/.TaskScope.package.lock"
+INSTALL_LOCK_ACQUIRED=0
+PACKAGING_LOCK_ACQUIRED=0
+INSTALL_STATE=preparing
+DESTINATION_STOPPED=0
+mkdir -p "$DEST_DIR" "$STAGED_BUNDLE/Contents"
+printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.2.3\nCFBundleVersion=7\n' \
+  "$BUNDLE_ID" > "$STAGED_BUNDLE/Contents/Info.plist"
+function /usr/libexec/PlistBuddy() {
+  local key="${2#Print :}"
+  awk -F= -v key="$key" '$1 == key { print $2 }' "$3"
+}
+function /usr/bin/codesign() { :; }
+function /usr/bin/ditto() { cp -R "$1" "$2"; }
+function /usr/bin/open() { printf 'open %s\n' "$*" >> "$TOOL_LOG"; }
+taskscope_running_bundle_paths() {
+  [[ -z "${RUNNING_PATH:-}" ]] || printf '4242\t%s\n' "$RUNNING_PATH"
+}
+eval "$INSTALL_DEFINITIONS"
+stop_destination_app() { printf 'stop-destination\n' >> "$TOOL_LOG"; }
+eval "$INSTALL_FLOW"
+EOF
+  local common="$ROOT_DIR/script/packaging_common.sh"
+  run_installer() {
+    : > "$TOOL_LOG"
+    COMMON_SCRIPT="$common" ROOT_DIR="$fixture" \
+      INSTALL_DEFINITIONS="$definitions" INSTALL_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
+      TASKSCOPE_SKIP_BUILD=0 bash "$harness" > "$OUTPUT" 2>&1
+  }
+  mkdir -p "$fixture/Applications"
+  # A regular file or a dangling link named TaskScope.app is never replaced.
+  printf 'precious user data\n' > "$fixture/Applications/TaskScope.app"
+  if OPEN_AFTER_INSTALL=0 run_installer; then
+    echo 'Installer replaced a regular file named TaskScope.app.' >&2
+    exit 1
+  fi
+  grep -Fq 'Refusing to replace' "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
+  grep -Fxq 'precious user data' "$fixture/Applications/TaskScope.app"
+  [[ ! -s "$TOOL_LOG" ]] || { echo 'Installer staged or stopped before refusing.' >&2; exit 1; }
+  rm "$fixture/Applications/TaskScope.app"
+  ln -s "$fixture/missing.app" "$fixture/Applications/TaskScope.app"
+  if OPEN_AFTER_INSTALL=0 run_installer; then
+    echo 'Installer replaced a dangling link named TaskScope.app.' >&2
+    exit 1
+  fi
+  grep -Fq 'Refusing to replace' "$OUTPUT"
+  [[ -L "$fixture/Applications/TaskScope.app" && ! -s "$TOOL_LOG" ]] || exit 1
+  rm "$fixture/Applications/TaskScope.app"
+  # A same-ID app running elsewhere stops the install before any change.
+  if OPEN_AFTER_INSTALL=1 RUNNING_PATH='/Elsewhere/TaskScope.app' run_installer; then
+    echo 'Installer ignored a launch conflict.' >&2
+    exit 1
+  fi
+  grep -Fq '/Elsewhere/TaskScope.app' "$OUTPUT" && grep -Fq 'Quit that copy' "$OUTPUT" \
+    || { cat "$OUTPUT" >&2; exit 1; }
+  if [[ -s "$TOOL_LOG" || -e "$fixture/Applications/TaskScope.app" ]]; then
+    echo 'Installer changed the destination before reporting a launch conflict.' >&2
+    exit 1
+  fi
+  # Without a conflict the install completes and opens the new bundle.
+  OPEN_AFTER_INSTALL=1 run_installer || { cat "$OUTPUT" >&2; exit 1; }
+  grep -Fxq "open $fixture/Applications/TaskScope.app" "$TOOL_LOG"
+
+  # A rename that never happened must not delete what is at the destination,
+  # and a confirmed stop is reported when the install then fails.
+  mkdir -p "$fixture/Unrelated.app"
+  status=0
+  (
+    eval "$cleanup_definition"
+    DEST_BUNDLE="$fixture/Unrelated.app"
+    INSTALLING_BUNDLE="$fixture/none"
+    BACKUP_BUNDLE="$fixture/none"
+    INSTALL_LOCK_ACQUIRED=0
+    PACKAGING_LOCK_ACQUIRED=0
+    INSTALL_STATE=installing
+    DESTINATION_STOPPED=1
+    false || cleanup_install
+  ) > "$OUTPUT" 2>&1 || status="$?"
+  [[ "$status" -eq 1 && -d "$fixture/Unrelated.app" ]] || {
+    echo 'Install cleanup deleted a destination this run never created.' >&2
+    exit 1
+  }
+  grep -Fq 'was quit for the upgrade and has not been restarted' "$OUTPUT" || {
+    echo 'A failed install did not say that the stopped app stays quit.' >&2
+    exit 1
+  }
+)
+
+# Locks record their owner's start time and command, so a PID that was reused
+# by an unrelated process no longer blocks packaging. shlock is a fake here.
+test_lock_owner_identity() (
+  local lock="$TEST_DIR/identity.lock"
+  local owner_identity='Tue Nov 10 10:00:00 2026 bash script/build_and_run.sh --stage'
+  source "$ROOT_DIR/script/packaging_common.sh"
+  function /usr/bin/shlock() {
+    [[ ! -e "$2" ]] || return 1
+    printf '%s\n' "$4" > "$2"
+  }
+  taskscope_process_identity() { printf '%s' "$owner_identity"; }
+  taskscope_acquire_lock "$lock" 'packaging process'
+  [[ "$(head -n 1 "$lock.owner")" == "$$" ]] && grep -Fq "$owner_identity" "$lock.owner"
+  # The recorded owner is still running: refuse, naming it and the remedy.
+  if taskscope_acquire_lock "$lock" 'packaging process' > "$OUTPUT" 2>&1; then
+    echo 'A live lock owner was ignored.' >&2
+    exit 1
+  fi
+  grep -Fq "Recorded PID: $$" "$OUTPUT" && grep -Fq "remove $lock" "$OUTPUT"
+  # The PID now belongs to an unrelated process: the lock is stale.
+  owner_identity='Tue Nov 10 11:00:00 2026 /usr/libexec/unrelated'
+  taskscope_acquire_lock "$lock" 'packaging process' > "$OUTPUT" 2>&1 || {
+    cat "$OUTPUT" >&2
+    echo 'A lock whose PID was reused still blocked packaging.' >&2
+    exit 1
+  }
+  taskscope_release_lock "$lock"
+  [[ ! -e "$lock" && ! -e "$lock.owner" ]]
+  # A lock without an owner record is never broken automatically.
+  printf '%s\n' "$$" > "$lock"
+  if taskscope_acquire_lock "$lock" 'packaging process' > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq "remove $lock and $lock.owner" "$OUTPUT"
+  rm -f "$lock"
+)
+
+# A killed run leaves hidden transaction bundles. The next run restores a
+# backup when the destination is missing and removes the leftovers.
+test_interrupted_transaction_recovery() (
+  local recovery="$TEST_DIR/recovery"
+  local fixture="$TEST_DIR/recovery fixture"
+  local tool
+  source "$ROOT_DIR/script/packaging_common.sh"
+  function /usr/bin/codesign() { [[ ! -e "${@: -1}/invalid" ]]; }
+  mkdir -p "$recovery/.TaskScope.backup.11" "$recovery/.TaskScope.installing.11"
+  printf previous > "$recovery/.TaskScope.backup.11/marker"
+  taskscope_recover_bundles "$recovery/TaskScope.app" "$recovery/.TaskScope.backup." \
+    "$recovery/.TaskScope.installing." 2> "$OUTPUT"
+  [[ "$(cat "$recovery/TaskScope.app/marker")" == previous ]] || {
+    echo 'An interrupted install did not restore the previous bundle.' >&2
+    exit 1
+  }
+  [[ ! -e "$recovery/.TaskScope.installing.11" ]] || exit 1
+  # With the destination present and valid, leftovers are removed.
+  mkdir -p "$recovery/.TaskScope.backup.12" "$recovery/.TaskScope.installing.12"
+  taskscope_recover_bundles "$recovery/TaskScope.app" "$recovery/.TaskScope.backup." \
+    "$recovery/.TaskScope.installing."
+  [[ ! -e "$recovery/.TaskScope.backup.12" && ! -e "$recovery/.TaskScope.installing.12" ]] || exit 1
+  # A backup is kept while the destination fails verification.
+  mkdir -p "$recovery/.TaskScope.backup.13"
+  touch "$recovery/TaskScope.app/invalid"
+  if taskscope_recover_bundles "$recovery/TaskScope.app" "$recovery/.TaskScope.backup." \
+    "$recovery/.TaskScope.installing." > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  [[ -d "$recovery/.TaskScope.backup.13" ]] && grep -Fq 'fails signature verification' "$OUTPUT"
+  rm -rf "$recovery/TaskScope.app"
+  # Two backups and no destination: the user decides which one to keep.
+  mkdir -p "$recovery/.TaskScope.backup.14"
+  if taskscope_recover_bundles "$recovery/TaskScope.app" "$recovery/.TaskScope.backup." \
+    "$recovery/.TaskScope.installing." > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'Multiple backups found' "$OUTPUT"
+  [[ ! -e "$recovery/TaskScope.app" ]] || exit 1
+
+  # Staging recovers its own output under the packaging lock, before any build.
+  mkdir -p "$fixture/script" "$fixture/bin" "$fixture/out/.TaskScope.output-backup.21" \
+    "$fixture/out/.TaskScope.staging.21"
+  printf previous > "$fixture/out/.TaskScope.output-backup.21/marker"
+  cp "$ROOT_DIR/script/build_and_run.sh" "$ROOT_DIR/script/packaging_common.sh" "$fixture/script/"
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  printf '#!/usr/bin/env bash\nprintf "Xcode 26.0\\nBuild version 17A1\\n"\n' > "$fixture/bin/xcodebuild"
+  printf '#!/usr/bin/env bash\nexit 91\n' > "$fixture/bin/swift"
+  chmod +x "$fixture/bin/xcodebuild" "$fixture/bin/swift"
+  if PATH="$fixture/bin:$PATH" TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests \
+    TASKSCOPE_CODE_SIGN_IDENTITY=- TASKSCOPE_OUTPUT_DIR="$fixture/out" \
+    bash "$fixture/script/build_and_run.sh" --stage > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  [[ "$(cat "$fixture/out/TaskScope.app/marker" 2>/dev/null)" == previous ]] || {
+    cat "$OUTPUT" >&2
+    echo 'An interrupted stage did not restore the previous staged bundle.' >&2
+    exit 1
+  }
+  if find "$fixture/out" -maxdepth 1 -name '.TaskScope.*.21' -print -quit | grep -q .; then
+    echo 'An interrupted stage left hidden bundles behind.' >&2
+    exit 1
+  fi
+)
+
+test_xcode_requirement() (
+  local status
+  source "$ROOT_DIR/script/packaging_common.sh"
+  for version in unavailable 'Xcode 25.4' 'Xcode 9.4'; do
+    if [[ "$version" == unavailable ]]; then
+      xcodebuild() { echo 'xcode-select: error: tool requires Xcode' >&2; return 1; }
+    else
+      eval "xcodebuild() { printf '%s\nBuild version 1A1\n' '$version'; }"
+    fi
+    status=0
+    taskscope_require_xcode > "$OUTPUT" 2>&1 || status="$?"
+    [[ "$status" -eq 2 ]] && grep -Fq 'needs Xcode 26 or later selected with xcode-select' "$OUTPUT" \
+      && grep -Fq "found: $version" "$OUTPUT" || {
+      echo "Packaging accepted $version." >&2
+      cat "$OUTPUT" >&2
+      exit 1
+    }
+  done
+  xcodebuild() { printf 'Xcode 26.1\nBuild version 17B1\n'; }
+  taskscope_require_xcode
+)
+
+# Only /usr/lib/swift may remain as a runtime search path, no @rpath library
+# may be linked, and a distributed binary carries no debug-map source paths.
+test_binary_search_and_debug_paths() (
+  local rpath='/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx'
+  local dependency='/usr/lib/libSystem.B.dylib'
+  local deleted=""
+  source "$ROOT_DIR/script/packaging_common.sh"
+  function /usr/bin/otool() {
+    if [[ "$1" == -l ]]; then
+      printf 'Load command 20\n          cmd LC_RPATH\n      cmdsize 32\n         path /usr/lib/swift (offset 12)\n'
+      [[ -z "$rpath" ]] || printf 'Load command 21\n          cmd LC_RPATH\n      cmdsize 120\n         path %s (offset 12)\n' "$rpath"
+    else
+      printf 'TaskScope:\n\t%s (compatibility version 1.0.0, current version 1.0.0)\n' "$dependency"
+    fi
+  }
+  function /usr/bin/install_name_tool() {
+    [[ "$1" == -delete_rpath && "$2" == "$rpath" ]] || return 1
+    deleted="$2"
+    rpath=""
+  }
+  if taskscope_verify_binary_paths TaskScope > "$OUTPUT" 2>&1; then
+    echo 'The toolchain search path was accepted.' >&2
+    exit 1
+  fi
+  grep -Fq 'non-system runtime search path' "$OUTPUT"
+  local original="$rpath"
+  taskscope_remove_build_rpaths TaskScope
+  [[ "$deleted" == "$original" ]] || { echo 'The toolchain search path was not removed.' >&2; exit 1; }
+  taskscope_verify_binary_paths TaskScope
+  dependency='@rpath/libswiftCompatibilitySpan.dylib'
+  if taskscope_verify_binary_paths TaskScope > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'unresolved @rpath dependency' "$OUTPUT"
+  function /usr/bin/nm() { printf '0000000000000000 - 00 0000    OSO /Users/maintainer/TaskScope/.build/TaskScopeApp.o\n'; }
+  if taskscope_verify_no_debug_paths TaskScope > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'debug OSO source paths' "$OUTPUT"
+  function /usr/bin/nm() { printf '0000000100000000 T _main\n'; }
+  taskscope_verify_no_debug_paths TaskScope
+)
+
+# A packaged app that exits at launch is reported with its status and output,
+# not as an identity capture failure. The "app" is a script that exits at once.
+test_startup_failure_is_reported() (
+  local APP_NAME=TaskScope
+  local BUNDLE_ID=com.example.TaskScopeTests
+  local bundle="$TEST_DIR/Crashing.app"
+  source "$ROOT_DIR/script/packaging_common.sh"
+  mkdir -p "$bundle/Contents/MacOS"
+  printf '#!/usr/bin/env bash\necho "synthetic startup failure" >&2\nexit 23\n' \
+    > "$bundle/Contents/MacOS/TaskScope"
+  chmod +x "$bundle/Contents/MacOS/TaskScope"
+  eval "$(awk '/^verify_startup_readiness\(\)/ { copying = 1 } /^stop_staged_app_instances\(\)/ { exit } copying { print }' "$ROOT_DIR/script/build_and_run.sh")"
+  unregister_staged_app() { :; }
+  taskscope_send_signal() { return 1; }
+  # Waits until the child has exited, whether or not bash has reaped it yet.
+  wait_for_exit() {
+    local state
+    for _ in {1..200}; do
+      state="$(/bin/ps -p "$1" -o stat= 2>/dev/null || true)"
+      [[ -n "$state" && "$state" != Z* ]] || return 0
+      /bin/sleep 0.05
+    done
+  }
+  # The child exits before its identity is captured...
+  taskscope_wait_for_process_identity() { wait_for_exit "$1"; return 1; }
+  if verify_startup_readiness "$bundle" > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'packaged app exited during startup with status 23' "$OUTPUT" \
+    && grep -Fq 'synthetic startup failure' "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
+  # ...or just after.
+  taskscope_wait_for_process_identity() { wait_for_exit "$1"; printf 'captured-identity'; }
+  if verify_startup_readiness "$bundle" > "$OUTPUT" 2>&1; then
+    exit 1
+  fi
+  grep -Fq 'packaged app exited during startup with status 23' "$OUTPUT" \
+    && grep -Fq 'synthetic startup failure' "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
+)
+
+# Launch modes refuse a same-ID app running elsewhere before they take the lock,
+# build, or replace the staged bundle. Every operation here is a fake.
+test_launch_conflict_checked_before_build() (
+  local flow
+  local mode
+  local status
+  local harness="$TEST_DIR/launch-guard-harness.sh"
+  cat > "$harness" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$COMMON_SCRIPT"
+DIST_DIR="$GUARD_DIR"
+APP_BUNDLE="$DIST_DIR/TaskScope.app"
+BUNDLE_ID=com.example.TaskScopeTests
+PACKAGING_LOCK="$DIST_DIR/.TaskScope.package.lock"
+taskscope_require_xcode() { :; }
+taskscope_running_bundle_paths() { printf '4242\t/Elsewhere/TaskScope.app\n'; }
+taskscope_acquire_lock() { printf 'lock\n' >> "$TOOL_LOG"; }
+eval "$GUARD_FLOW"
+EOF
+  flow="$(awk '
+    /^taskscope_require_xcode$/ { copying = 1 }
+    copying { print }
+    copying && /^PACKAGING_LOCK_ACQUIRED=1$/ { exit }
+  ' "$ROOT_DIR/script/build_and_run.sh")"
+  [[ "$flow" == *taskscope_acquire_lock* ]] || {
+    echo 'The packaging preamble before the lock was not found.' >&2
+    exit 1
+  }
+  for mode in run --logs logs --telemetry telemetry --debug debug --stage stage; do
+    : > "$TOOL_LOG"
+    status=0
+    MODE="$mode" GUARD_FLOW="$flow" GUARD_DIR="$TEST_DIR/launch guard" TOOL_LOG="$TOOL_LOG" \
+      COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh" \
+      bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
+    case "$mode" in
+      --stage|stage)
+        if [[ "$status" -ne 0 ]] || ! grep -Fxq lock "$TOOL_LOG"; then
+          echo "Staging without a launch refused because of a running app." >&2
+          cat "$OUTPUT" >&2
+          exit 1
+        fi
+        ;;
+      *)
+        if [[ "$status" -eq 0 || -s "$TOOL_LOG" ]] || ! grep -Fq '/Elsewhere/TaskScope.app' "$OUTPUT"; then
+          echo "$mode did not refuse a launch conflict before packaging." >&2
+          cat "$OUTPUT" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  done
+)
+
+# Every signature uses the hardened runtime; only --debug adds get-task-allow.
+test_signing_uses_hardened_runtime() (
+  local signing_flow
+  local SIGNING_STYLE
+  local MODE
+  local CODE_SIGN_IDENTITY=-
+  local STAGING_BUNDLE="$TEST_DIR/Signing.app"
+  local METADATA_WORK_DIR="$TEST_DIR/signing work"
+  local signed="$TEST_DIR/signing-calls"
+  mkdir -p "$METADATA_WORK_DIR"
+  signing_flow="$(awk '
+    /^if \[\[ "\$SIGNING_STYLE" == "distribution" \]\]; then$/ { copying = 1 }
+    /^verify_bundle "\$STAGING_BUNDLE"$/ { exit }
+    copying { print }
+  ' "$ROOT_DIR/script/build_and_run.sh")"
+  [[ -n "$signing_flow" ]] || { echo 'The signing flow was not found.' >&2; exit 1; }
+  function /usr/bin/codesign() {
+    printf '%s\n' "$*" >> "$signed"
+    if [[ "$*" == *--entitlements* ]]; then
+      cat "$METADATA_WORK_DIR/debug.entitlements" >> "$signed"
+    fi
+  }
+  for SIGNING_STYLE in development distribution; do
+    for MODE in --stage run --debug; do
+      : > "$signed"
+      eval "$signing_flow"
+      [[ "$(grep -c -- '--sign' "$signed")" -eq 1 ]] \
+        && grep -q -- '--options runtime' "$signed" || {
+        echo "$SIGNING_STYLE $MODE signing lacks the hardened runtime." >&2
+        exit 1
+      }
+      if [[ "$SIGNING_STYLE" == development && "$MODE" == --debug ]]; then
+        grep -Fq '<key>com.apple.security.get-task-allow</key>' "$signed"
+      elif grep -q -- '--entitlements' "$signed"; then
+        echo "$SIGNING_STYLE $MODE signing added entitlements." >&2
+        exit 1
+      fi
+    done
+  done
+)
+
+# Drives release.sh --release end to end through fakes: Git, signing, build,
+# notarization, Gatekeeper, and archiving are shell functions injected with
+# BASH_ENV. Nothing is built, signed, or sent anywhere.
+test_release_pipeline() (
+  local pipeline="$TEST_DIR/pipeline"
+  local fixture="$pipeline/fixture"
+  local evidence='Evidence/GlobalProtect/lifecycle/1.2.3-7'
+  local final_dir="$fixture/dist/releases/TaskScope-1.2.3-7-macOS-arm64"
+  local step
+  mkdir -p "$fixture/script" "$fixture/$evidence"
+  cp "$ROOT_DIR/script/release.sh" "$ROOT_DIR/script/packaging_common.sh" "$fixture/script/"
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  printf '## [1.2.3] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
+  # The staging step is a stub that fabricates an inert bundle and dSYM.
+  cat > "$fixture/script/build_and_run.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${TASKSCOPE_SIGNING_STYLE:-}" == distribution && "$1" == --stage ]]
+# A release stages into its own work directory, never the development output.
+[[ "$TASKSCOPE_OUTPUT_DIR" == */.TaskScope.release.*/stage.noindex ]]
+[[ ! -e "$TASKSCOPE_VERIFIED_BUNDLE_COPY" && ! -e "$TASKSCOPE_DSYM_COPY" ]]
+mkdir -p "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS" \
+  "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents" "$TASKSCOPE_DSYM_COPY"
+printf 'inert fixture, never executable code\n' > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS/TaskScope"
+chmod +x "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS/TaskScope"
+printf metadata > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents/version.json"
+printf metadata > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents/extract.actionsdata"
+touch "$TOOL_LOG.built"
+EOF
+  chmod +x "$fixture/script/build_and_run.sh"
+  # Evidence validation runs for real; only its Git facts come from the fake.
+  cat > "$fixture/$evidence/arm64.evidence" <<EOF
+schema_version=1
+evidence_kind=authorized-lifecycle
+test_date=$(date -u +%F)
+taskscope_version=1.2.3
+taskscope_build=7
+source_revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+bundle_id=com.example.TaskScopeTests
+signing_kind=ad-hoc
+install_method=staged-bundle
+macos_version=26.0
+macos_build=25A1
+architecture=arm64
+globalprotect_version=6.3.3
+agent_layout=pangpa-only
+persistence_event=reboot
+coverage_gaps=none
+manual_results=$evidence/manual.txt
+EOF
+  printf 'Synthetic manual results; never product evidence.\n' > "$fixture/$evidence/manual.txt"
+  for step in baseline keep_off relaunch persistence keep_off_disabled open protected_service vpn managed_policy; do
+    printf 'result_%s=pass\n' "$step" >> "$fixture/$evidence/arm64.evidence"
+  done
+  for step in baseline keep_off relaunch persistence keep_off_disabled open; do
+    printf 'report_%s=%s/%s.txt\n' "$step" "$evidence" "$step" >> "$fixture/$evidence/arm64.evidence"
+    printf 'Synthetic %s snapshot; never product evidence.\n' "$step" > "$fixture/$evidence/$step.txt"
+  done
+  cat > "$pipeline/fakes.sh" <<'EOF'
+git() (
+  if [[ "${1:-}" == -C ]]; then cd "$2"; shift 2; fi
+  case "$1" in
+    rev-parse)
+      case "$*" in
+        *--local-env-vars*) command git rev-parse --local-env-vars ;;
+        *refs/tags/*) [[ "$SCENARIO" == existing-tag ]] ;;
+        *--abbrev-ref*) [[ "$SCENARIO" != no-upstream ]] || return 1; printf 'origin/main\n' ;;
+        *)
+          if [[ "$SCENARIO" == unpushed && "$2" == HEAD ]]; then printf '%040d\n' 1
+          else printf '%040d\n' 2; fi ;;
+      esac ;;
+    tag) printf 'v1.0.0\n' ;;
+    show) if [[ "$*" == *BUILD_NUMBER* ]]; then printf '2\n'; else date -u +%F; fi ;;
+    ls-files|merge-base|diff) return 0 ;;
+    hash-object) command shasum -a 256 "${@: -1}" | awk '{ print $1 }' ;;
+    status)
+      if [[ "$SCENARIO" == dirty || ( "$SCENARIO" == build-dirty && -e "$TOOL_LOG.built" ) ]]; then
+        printf ' M Sources/file.swift\n'
+      fi ;;
+    symbolic-ref)
+      if [[ "$*" == *origin/HEAD* ]]; then printf 'origin/main\n'
+      elif [[ "$SCENARIO" == detached ]]; then return 1
+      elif [[ "$SCENARIO" == side-branch ]]; then printf 'feature\n'
+      else printf 'main\n'; fi ;;
+    fetch) printf 'fetch %s\n' "$*" >> "$TOOL_LOG" ;;
+    remote) printf 'https://example.invalid/TaskScope.git\n' ;;
+    *) echo "Unexpected Git operation: $*" >&2; return 91 ;;
+  esac
+)
+function /usr/bin/security() {
+  [[ "$SCENARIO" != missing-identity ]] || return 0
+  printf '  1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "%s: Tests"\n' \
+    "$([[ "$SCENARIO" == wrong-identity ]] && echo 'Apple Development' || echo 'Developer ID Application')"
+}
+function /usr/bin/codesign() {
+  case "$*" in
+    *-dvvv*)
+      [[ "$SCENARIO" == missing-runtime ]] || printf 'CodeDirectory v=20500 flags=0x10000(runtime)\n'
+      if [[ "$SCENARIO" == wrong-team ]]; then printf 'TeamIdentifier=WRONGTEAM1\n'
+      else printf 'TeamIdentifier=ABCDEFGHIJ\n'; fi ;;
+    *--entitlements*)
+      [[ "$SCENARIO" != entitlements ]] || printf '<plist><dict><key>unexpected</key><true/></dict></plist>\n' ;;
+    *) return 0 ;;
+  esac
+}
+codesign() { /usr/bin/codesign "$@"; }
+function /usr/libexec/PlistBuddy() {
+  case "$2" in
+    *CFBundleIdentifier) printf 'com.example.TaskScopeTests\n' ;;
+    *CFBundleShortVersionString) printf '1.2.3\n' ;;
+    *CFBundleVersion) printf '7\n' ;;
+    *LSMinimumSystemVersion) printf '14.0\n' ;;
+    *) return 91 ;;
+  esac
+}
+function /usr/bin/vtool() { printf 'minos 14.0\n'; }
+function /usr/bin/otool() {
+  if [[ "$1" == -L ]]; then
+    printf 'TaskScope:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n'
+  else
+    printf '          cmd LC_RPATH\n         path /usr/lib/swift (offset 12)\n'
+    [[ "$SCENARIO" != rpath ]] \
+      || printf '          cmd LC_RPATH\n         path /Applications/Xcode.app/toolchain (offset 12)\n'
+  fi
+}
+function /usr/bin/nm() {
+  if [[ "$SCENARIO" == debug-paths ]]; then printf '0000 - 00 0000 OSO /Users/maintainer/TaskScopeApp.o\n'
+  else printf '0000 T _main\n'; fi
+}
+lipo() { printf 'arm64\n'; }
+dwarfdump() { printf 'UUID: 01234567-89AB-CDEF-0123-456789ABCDEF (arm64) fixture\n'; }
+xcodebuild() { printf 'Xcode 26.0\nBuild version 17A1\n'; }
+swift() {
+  if [[ "$1" == package ]]; then printf '{"platforms":[{"platformName":"macos","version":"14.0"}]}\n'
+  else printf 'Swift version 6.2\n'; fi
+}
+function /usr/bin/shlock() {
+  [[ "$SCENARIO" != locked ]] || return 1
+  printf '%s\n' "$4" > "$2"
+}
+shlock() { /usr/bin/shlock "$@"; }
+function /bin/ps() { printf 'Tue Nov 10 10:00:00 2026 bash script/release.sh --release\n'; }
+function /usr/sbin/spctl() { printf 'spctl %s\n' "$*" >> "$TOOL_LOG"; }
+spctl() { /usr/sbin/spctl "$@"; }
+xcrun() {
+  case "$*" in
+    '--find '*) return 0 ;;
+    'notarytool history '*) return 0 ;;
+    'notarytool submit '*)
+      printf 'notarytool submit\n' >> "$TOOL_LOG"
+      if [[ "$SCENARIO" == rejected ]]; then printf '{"status":"Invalid","id":"fixture-id"}\n'
+      else printf '{"status":"Accepted","id":"fixture-id"}\n'; fi ;;
+    'notarytool log '*) printf '{"diagnostic":"synthetic"}\n' > "${@: -1}" ;;
+    'stapler '*) printf 'stapler %s\n' "$1 $2" >> "$TOOL_LOG" ;;
+    '--sdk macosx --show-sdk-version') printf '26.0\n' ;;
+    *) echo "Unexpected xcrun: $*" >&2; return 91 ;;
+  esac
+}
+# A tar file stands in for each ZIP archive.
+function /usr/bin/ditto() {
+  case "$1" in
+    -c) local source="${@: -2:1}"; /usr/bin/tar -cf "${@: -1}" -C "$(dirname "$source")" "$(basename "$source")" ;;
+    -x) /usr/bin/tar -xf "$3" -C "$4" ;;
+    *) cp "$1" "$2" ;;
+  esac
+}
+ditto() { /usr/bin/ditto "$@"; }
+EOF
+  local pipeline_output="$pipeline/output"
+  local pipeline_tools="$pipeline/tools"
+  run_pipeline_case() {
+    local scenario="$1"
+    local mode="${2:---release}"
+    rm -rf "$fixture/dist"
+    rm -f "$pipeline_tools.built"
+    : > "$pipeline_tools"
+    if [[ "$scenario" == stale-work ]]; then
+      mkdir -p "$fixture/dist/.TaskScope.release.EARLIER/TaskScope.app"
+    fi
+    (
+      export BASH_ENV="$pipeline/fakes.sh" SCENARIO="$scenario" TOOL_LOG="$pipeline_tools"
+      export TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests TASKSCOPE_RELEASE_ARCHS=arm64
+      export TASKSCOPE_CODE_SIGN_IDENTITY='Developer ID Application: Tests'
+      export TASKSCOPE_EXPECTED_TEAM_ID=ABCDEFGHIJ TASKSCOPE_NOTARY_KEYCHAIN_PROFILE=Tests
+      unset TASKSCOPE_KEEP_RELEASE_WORK TASKSCOPE_FIRST_RELEASE
+      case "$scenario" in
+        no-identity) unset TASKSCOPE_CODE_SIGN_IDENTITY ;;
+        # Requested by SHA-1, the keychain's identity is an Apple Development one.
+        wrong-identity) export TASKSCOPE_CODE_SIGN_IDENTITY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA ;;
+        no-team) unset TASKSCOPE_EXPECTED_TEAM_ID ;;
+        bad-team) export TASKSCOPE_EXPECTED_TEAM_ID=abc ;;
+        no-profile) unset TASKSCOPE_NOTARY_KEYCHAIN_PROFILE ;;
+        archs) export TASKSCOPE_RELEASE_ARCHS='arm64 x86_64' ;;
+        existing-output) mkdir -p "$final_dir" ;;
+        keep-rejected) export TASKSCOPE_KEEP_RELEASE_WORK=1 SCENARIO=rejected ;;
+      esac
+      bash "$fixture/script/release.sh" "$mode"
+    ) > "$pipeline_output" 2>&1
+  }
+  assert_pipeline_failure() {
+    local scenario="$1"
+    local expected="$2"
+    local mode="${3:---release}"
+    if run_pipeline_case "$scenario" "$mode"; then
+      echo "Release $mode accepted scenario $scenario." >&2
+      cat "$pipeline_output" >&2
+      exit 1
+    fi
+    grep -Fq -- "$expected" "$pipeline_output" || {
+      cat "$pipeline_output" >&2
+      echo "Release $mode did not explain scenario $scenario: $expected" >&2
+      exit 1
+    }
+    [[ ! -e "$final_dir/SHA256SUMS" ]] || {
+      echo "Rejected scenario $scenario published artifacts." >&2
+      exit 1
+    }
+    case "$scenario" in
+      rejected|keep-rejected) ;;
+      *)
+        if grep -q '^notarytool submit' "$pipeline_tools"; then
+          echo "Rejected scenario $scenario reached notarization." >&2
+          exit 1
+        fi
+        ;;
+    esac
+    CHECKS=$((CHECKS + 1))
+  }
+  # Offline preflight rejects bad inputs before any credential or build step.
+  assert_pipeline_failure archs 'architecture policy is arm64 only' --preflight
+  assert_pipeline_failure existing-tag 'Release tag v1.2.3 already exists' --preflight
+  assert_pipeline_failure existing-output 'Refusing to overwrite existing release output' --preflight
+  printf 'invalid\n' > "$fixture/VERSION"
+  assert_pipeline_failure clean 'Invalid VERSION value' --preflight
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '0\n' > "$fixture/BUILD_NUMBER"
+  assert_pipeline_failure clean 'Invalid BUILD_NUMBER value' --preflight
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  # A version must be matched literally, so 1x2y3 is not a 1.2.3 heading.
+  printf '## [1x2y3] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
+  assert_pipeline_failure clean "lacks a '## [1.2.3]' heading" --preflight
+  printf '## [1.2.3.4] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
+  assert_pipeline_failure clean "lacks a '## [1.2.3]' heading" --preflight
+  printf '## [Unreleased]\n\n- Pending change\n\n## [1.2.3] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
+  assert_pipeline_failure clean 'still has Unreleased entries' --preflight
+  printf '## [Unreleased]\n\n## [1.2.3] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
+  # Full releases check credentials, the repository, and the signed bundle.
+  assert_pipeline_failure no-identity 'TASKSCOPE_CODE_SIGN_IDENTITY is required'
+  assert_pipeline_failure no-team '10-character Apple Team ID'
+  assert_pipeline_failure bad-team '10-character Apple Team ID'
+  assert_pipeline_failure no-profile 'TASKSCOPE_NOTARY_KEYCHAIN_PROFILE is required'
+  assert_pipeline_failure missing-identity 'not available with its private key'
+  assert_pipeline_failure wrong-identity 'must name a Developer ID Application identity'
+  assert_pipeline_failure dirty 'clean Git worktree'
+  assert_pipeline_failure detached 'detached HEAD'
+  assert_pipeline_failure side-branch 'default branch main'
+  assert_pipeline_failure no-upstream 'configured upstream'
+  assert_pipeline_failure unpushed 'must match its fetched upstream'
+  assert_pipeline_failure locked 'Another TaskScope release process owns'
+  assert_pipeline_failure build-dirty 'Release build changed the Git worktree'
+  assert_pipeline_failure missing-runtime 'hardened runtime is absent'
+  assert_pipeline_failure wrong-team 'signing Team ID mismatch'
+  assert_pipeline_failure entitlements 'unexpectedly contains entitlements'
+  assert_pipeline_failure rpath 'unsafe runtime search paths'
+  assert_pipeline_failure debug-paths 'debug OSO source paths remain'
+  # A rejected notarization publishes nothing and removes the signed work,
+  # keeping only the notary diagnostics.
+  assert_pipeline_failure rejected 'Notarization was not accepted (status: Invalid)'
+  if find "$fixture/dist" -maxdepth 1 -name '.TaskScope.release.*' -type d -print -quit | grep -q .; then
+    echo 'A failed release kept its signed work directory.' >&2
+    exit 1
+  fi
+  find "$fixture/dist" -name 'TaskScope-1.2.3-7-macOS-arm64-notary-log.json' -path '*notary-diagnostics*' \
+    -print -quit | grep -q . || { echo 'A failed release dropped the notary log.' >&2; exit 1; }
+  assert_pipeline_failure keep-rejected 'Release work preserved for diagnosis'
+  find "$fixture/dist" -maxdepth 1 -name '.TaskScope.release.*' -type d -print -quit | grep -q . \
+    || { echo 'TASKSCOPE_KEEP_RELEASE_WORK=1 did not keep the work directory.' >&2; exit 1; }
+  # A complete run publishes exactly the five artifacts, named with the build
+  # number, records where the commit came from, and prunes earlier work.
+  if ! run_pipeline_case stale-work; then
+    cat "$pipeline_output" >&2
+    exit 1
+  fi
+  [[ "$(find "$final_dir" -type f | wc -l | tr -d ' ')" -eq 5 ]] || { ls -la "$final_dir" >&2; exit 1; }
+  for step in TaskScope-1.2.3-7-macOS-arm64.zip TaskScope-1.2.3-7-macOS-arm64-dSYM.zip \
+    TaskScope-1.2.3-7-macOS-arm64-provenance.txt TaskScope-1.2.3-7-macOS-arm64-notary.json SHA256SUMS; do
+    [[ -s "$final_dir/$step" ]] || { echo "The release lacks $step." >&2; exit 1; }
+  done
+  grep -Fxq 'git_branch=main' "$final_dir/TaskScope-1.2.3-7-macOS-arm64-provenance.txt"
+  grep -Fxq 'git_upstream=origin/main' "$final_dir/TaskScope-1.2.3-7-macOS-arm64-provenance.txt"
+  grep -Fxq 'git_remote_url=https://example.invalid/TaskScope.git' "$final_dir/TaskScope-1.2.3-7-macOS-arm64-provenance.txt"
+  grep -Fq 'fetch --tags origin' "$pipeline_tools"
+  if find "$fixture/dist" -maxdepth 1 -name '.TaskScope.release.*' -type d -print -quit | grep -q .; then
+    echo 'A release left earlier or current work directories behind.' >&2
+    exit 1
+  fi
+  [[ ! -e "$fixture/dist/build.noindex" ]] || {
+    echo 'A release replaced the development staged bundle.' >&2
+    exit 1
+  }
+  CHECKS=$((CHECKS + 1))
+  echo "Release pipeline tests passed ($CHECKS cases)."
+)
+
+TEST_MODE="${1:-}"
+if [[ -z "$TEST_MODE" || "$TEST_MODE" == --packaging-only ]]; then
   test_packaging_preferences_cleanup
   test_install_locks_and_rechecks_copy
   test_verify_holds_packaging_lock
@@ -478,9 +1364,24 @@ if [[ "${1:-}" != --evidence-only ]]; then
   test_staging_stops_before_swap
   test_packaging_environment_isolation
   test_build_number_history
-  echo 'Packaging regression tests passed (7 groups: preferences, install, verification, launch, staging, environment, build history).'
+  test_packaging_test_isolation
+  test_git_environment_is_cleared
+  test_script_arguments_and_help
+  test_verified_copy_validated_before_build
+  test_installer_guards_before_changes
+  test_lock_owner_identity
+  test_interrupted_transaction_recovery
+  test_xcode_requirement
+  test_binary_search_and_debug_paths
+  test_startup_failure_is_reported
+  test_launch_conflict_checked_before_build
+  test_signing_uses_hardened_runtime
+  echo 'Packaging regression tests passed (19 groups).'
 fi
-[[ "${1:-}" != --packaging-only ]] || exit 0
+if [[ -z "$TEST_MODE" || "$TEST_MODE" == --pipeline-only ]]; then
+  test_release_pipeline
+fi
+[[ -z "$TEST_MODE" || "$TEST_MODE" == --evidence-only ]] || exit 0
 
 mkdir -p "$FIXTURE_DIR/script" "$FIXTURE_DIR/Sources" "$EVIDENCE_DIR" "$FAKE_BIN"
 cp "$ROOT_DIR/script/release.sh" "$ROOT_DIR/script/packaging_common.sh" "$FIXTURE_DIR/script/"
@@ -489,6 +1390,9 @@ printf '7\n' > "$FIXTURE_DIR/BUILD_NUMBER"
 printf '## [1.2.3] - 2026-09-26\n' > "$FIXTURE_DIR/CHANGELOG.md"
 printf 'tested candidate\n' > "$FIXTURE_DIR/Sources/candidate.txt"
 git init -q -b main "$FIXTURE_DIR"
+[[ "$(cd "$(git -C "$FIXTURE_DIR" rev-parse --absolute-git-dir)" && pwd -P)" == "$(cd "$FIXTURE_DIR/.git" && pwd -P)" ]] || {
+  echo 'Fixture Git directory escaped the temporary repository.' >&2; exit 1;
+}
 git -C "$FIXTURE_DIR" config user.name 'Packaging Tests'
 git -C "$FIXTURE_DIR" config user.email 'packaging-tests@example.invalid'
 git -C "$FIXTURE_DIR" config commit.gpgsign false
@@ -503,6 +1407,12 @@ cat > "$FAKE_BIN/release-tool" <<'EOF'
 #!/usr/bin/env bash
 printf '%s %s\n' "${0##*/}" "$*" >> "$TOOL_LOG"
 [[ "${0##*/}" == xcrun && "${1:-}" == --find ]] && exit 0
+if [[ "${0##*/}" == xcodebuild && "${1:-}" == -version ]]; then
+  printf 'Xcode 26.0\nBuild version 17A1\n'; exit 0
+fi
+if [[ "${0##*/}" == swift && "${1:-}" == package ]]; then
+  printf '{"platforms":[{"platformName":"macos","version":"14.0"}]}\n'; exit 0
+fi
 exit 91
 EOF
 chmod +x "$FAKE_BIN/release-tool"
@@ -515,7 +1425,7 @@ run_release() {
   (
     unset TASKSCOPE_CODE_SIGN_IDENTITY TASKSCOPE_EXPECTED_TEAM_ID TASKSCOPE_NOTARY_KEYCHAIN_PROFILE
     cd "$TEST_DIR" # The gate must resolve evidence independently of the caller cwd.
-    TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests TASKSCOPE_RELEASE_ARCHS=arm64 \
+    TASKSCOPE_FIRST_RELEASE=1 TASKSCOPE_BUNDLE_ID=com.example.TaskScopeTests TASKSCOPE_RELEASE_ARCHS=arm64 \
       TOOL_LOG="$TOOL_LOG" PATH="$FAKE_BIN:$PATH" \
       bash "$FIXTURE_DIR/script/release.sh" "$@"
   ) > "$OUTPUT" 2>&1
@@ -554,8 +1464,23 @@ assert_success() {
     'Credential-independent release preflight passed.' 'Full release still requires TASKSCOPE_CODE_SIGN_IDENTITY.'; do
     grep -Fq "$message" "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
   done
-  if grep -v '^xcrun --find ' "$TOOL_LOG" | grep -q . || [[ -e "$FIXTURE_DIR/dist" ]]; then
+  if [[ -n "$(grep -Ev '^(xcrun --find |xcodebuild -version|swift package )' "$TOOL_LOG")" || -e "$FIXTURE_DIR/dist" ]]; then
     echo "Preflight attempted a build, credential, or artifact operation." >&2
+    exit 1
+  fi
+  CHECKS=$((CHECKS + 1))
+}
+
+# Rejections of the release inputs themselves, before the evidence gate.
+assert_input_failure() {
+  local expected="$1"
+  if run_release --preflight; then
+    echo "Release preflight unexpectedly accepted: $expected" >&2
+    exit 1
+  fi
+  grep -Fq -- "$expected" "$OUTPUT" || { cat "$OUTPUT" >&2; exit 1; }
+  if [[ -s "$TOOL_LOG" || -e "$FIXTURE_DIR/dist" ]]; then
+    echo "Rejected release inputs caused release-tool or artifact side effects." >&2
     exit 1
   fi
   CHECKS=$((CHECKS + 1))
@@ -581,7 +1506,7 @@ assert_failure 'No lifecycle manifests found' preflight
 cat > "$MANIFEST" <<EOF
 schema_version=1
 evidence_kind=authorized-lifecycle
-test_date=2026-09-26
+test_date=$(date -u +%F)
 taskscope_version=1.2.3
 taskscope_build=7
 source_revision=$TESTED_REVISION
@@ -608,6 +1533,21 @@ done
 cp "$MANIFEST" "$TEST_DIR/valid.evidence"
 git -C "$FIXTURE_DIR" add Evidence
 assert_success
+
+# release.sh inspects the checkout it releases even when the caller exports
+# another repository, as a hook in a linked worktree does with GIT_DIR.
+git init -q "$TEST_DIR/decoy repository"
+GIT_DIR="$TEST_DIR/decoy repository/.git" GIT_WORK_TREE="$TEST_DIR/decoy repository" \
+  GIT_INDEX_FILE="$TEST_DIR/decoy repository/.git/index" assert_success
+
+# A version whose release tag already exists cannot be released again, even
+# when its build number is higher than the tagged one.
+EARLIER_BUILD_BLOB="$(printf '6\n' | git -C "$FIXTURE_DIR" hash-object -w --stdin)"
+EARLIER_TREE="$(printf '100644 blob %s\tBUILD_NUMBER\n' "$EARLIER_BUILD_BLOB" | git -C "$FIXTURE_DIR" mktree)"
+EARLIER_COMMIT="$(git -C "$FIXTURE_DIR" commit-tree "$EARLIER_TREE" -m 'Earlier release of 1.2.3')"
+git -C "$FIXTURE_DIR" tag v1.2.3 "$EARLIER_COMMIT"
+assert_input_failure 'Release tag v1.2.3 already exists'
+git -C "$FIXTURE_DIR" tag -d v1.2.3 >/dev/null
 
 printf '\n' >> "$MANIFEST"
 assert_success
@@ -741,14 +1681,58 @@ git -C "$FIXTURE_DIR" rm -q --cached "$EVIDENCE_RELATIVE/arm64.evidence"
 assert_failure 'Evidence file is not tracked'
 git -C "$FIXTURE_DIR" add Evidence
 
+# A manifest kept in a subdirectory would otherwise be skipped silently, even
+# one that is tracked but missing from the working tree.
+mkdir -p "$EVIDENCE_DIR/nested"
+cp "$MANIFEST" "$EVIDENCE_DIR/nested/hidden.evidence"
+assert_failure 'Place each manifest directly in'
+git -C "$FIXTURE_DIR" add Evidence
+rm "$EVIDENCE_DIR/nested/hidden.evidence"
+assert_failure 'Place each manifest directly in'
+git -C "$FIXTURE_DIR" rm -q --cached "$EVIDENCE_RELATIVE/nested/hidden.evidence"
+rmdir "$EVIDENCE_DIR/nested"
+# Test dates must be real calendar dates between the tested commit and today.
+for bad_date in 2026-02-30 2026-13-01 0000-00-00 2099-01-01 2000-01-01; do
+  set_field test_date "$bad_date"
+  case "$bad_date" in
+    2099-01-01) assert_failure 'must not be in the future' ;;
+    2000-01-01) assert_failure 'precedes source_revision author date' ;;
+    *) assert_failure 'valid calendar date' ;;
+  esac
+  reset_manifest
+done
+# Every artifact is a distinct file: manual results are not a snapshot, no
+# artifact is a manifest, and no two artifacts share contents.
+set_field manual_results "$EVIDENCE_RELATIVE/baseline.txt"
+assert_failure 'distinct report path'
+reset_manifest
+set_field manual_results "$EVIDENCE_RELATIVE/arm64.evidence"
+assert_failure 'cannot be a .evidence manifest'
+reset_manifest
+set_field report_open "$EVIDENCE_RELATIVE/arm64.evidence"
+assert_failure 'cannot be a .evidence manifest'
+reset_manifest
+cp "$EVIDENCE_DIR/open.txt" "$TEST_DIR/open-original"
+cp "$EVIDENCE_DIR/baseline.txt" "$EVIDENCE_DIR/open.txt"
+assert_failure 'must have distinct contents'
+rm "$EVIDENCE_DIR/open.txt"
+ln "$EVIDENCE_DIR/baseline.txt" "$EVIDENCE_DIR/open.txt"
+assert_failure 'must have distinct contents'
+rm "$EVIDENCE_DIR/open.txt"
+cp "$TEST_DIR/open-original" "$EVIDENCE_DIR/open.txt"
+
 # A valid environment must not hide another environment with coverage gaps.
 cp "$MANIFEST" "$EVIDENCE_DIR/other.evidence"
 printf 'result_open=fail\n' >> "$EVIDENCE_DIR/other.evidence"
 git -C "$FIXTURE_DIR" add Evidence
 assert_failure 'result_open must be pass'
+# A copied manifest is the same environment, not a second tested one.
 cp "$MANIFEST" "$EVIDENCE_DIR/other.evidence"
+assert_failure 'Duplicate tested environment'
+sed 's/macos_build=25G83/macos_build=25G84/' "$MANIFEST" > "$EVIDENCE_DIR/other.evidence"
 git -C "$FIXTURE_DIR" add Evidence
 assert_success
+grep -Fq 'evidence gate passed (2 tested environment(s))' "$OUTPUT"
 
 # Retaining evidence in a subsequent commit does not invalidate the tested
 # source revision. A later code commit does, even with the same version/build.

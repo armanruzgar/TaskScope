@@ -1,13 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<EOF
+usage: $0 [run|--stage|--debug|--logs|--telemetry|--verify]
+Default: run (build, stage, and launch). --stage builds without launching;
+--verify checks the existing bundle and launches a temporary startup check;
+--debug builds for lldb; --logs and --telemetry launch and stream logs.
+Environment: BUILD_CONFIGURATION=debug|release, TASKSCOPE_BUNDLE_ID,
+TASKSCOPE_CODE_SIGN_IDENTITY (name, SHA-1, or - for ad-hoc),
+TASKSCOPE_SIGNING_STYLE=development|distribution, TASKSCOPE_OUTPUT_DIR (absolute),
+TASKSCOPE_VERIFIED_BUNDLE_COPY (new absolute TaskScope.app path),
+TASKSCOPE_DSYM_COPY (new absolute dSYM path for distribution packaging).
+Packaging requires Xcode 26 or later. All signing uses hardened runtime;
+--debug alone adds the debugger entitlement.
+EOF
+}
+[[ $# -le 1 ]] || { usage >&2; exit 2; }
+case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 MODE="${1:-run}"
 
 case "$MODE" in
   run|--stage|stage|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify)
     ;;
   *)
-    echo "usage: $0 [run|--stage|--debug|--logs|--telemetry|--verify]" >&2
+    usage >&2
     exit 2
     ;;
 esac
@@ -15,14 +32,14 @@ esac
 BUILD_CONFIGURATION="${BUILD_CONFIGURATION:-}"
 PRODUCT_NAME="TaskScope"
 APP_NAME="TaskScope"
-MIN_SYSTEM_VERSION="14.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/script/packaging_common.sh"
 BUNDLE_ID="$(taskscope_resolve_bundle_id)"
 # Keep the local build out of Spotlight beside the installed /Applications copy.
 # Release archives still go to dist/releases through release.sh.
-DIST_DIR="$ROOT_DIR/dist/build.noindex"
+DIST_DIR="${TASKSCOPE_OUTPUT_DIR:-$ROOT_DIR/dist/build.noindex}"
+[[ "$DIST_DIR" == /* ]] || { echo "TASKSCOPE_OUTPUT_DIR must be absolute." >&2; exit 2; }
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
@@ -57,9 +74,6 @@ resolve_code_sign_identity() {
 
 APP_VERSION="$(taskscope_read_release_value "$VERSION_FILE" "version")"
 APP_BUILD_NUMBER="$(taskscope_read_release_value "$BUILD_NUMBER_FILE" "build number")"
-CODE_SIGN_RECORD="$(resolve_code_sign_identity)"
-CODE_SIGN_IDENTITY="${CODE_SIGN_RECORD%% *}"
-CODE_SIGN_IDENTITY_NAME="${CODE_SIGN_RECORD#* }"
 SIGNING_STYLE="${TASKSCOPE_SIGNING_STYLE:-development}"
 
 if [[ ! "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]]; then
@@ -92,6 +106,19 @@ case "$BUILD_CONFIGURATION" in
     ;;
 esac
 
+VERIFIED_BUNDLE_COPY="${TASKSCOPE_VERIFIED_BUNDLE_COPY:-}"
+taskscope_validate_copy_destination "$VERIFIED_BUNDLE_COPY"
+DSYM_COPY="${TASKSCOPE_DSYM_COPY:-}"
+if [[ -n "$DSYM_COPY" ]]; then
+  [[ "$DSYM_COPY" == /* && ! -e "$DSYM_COPY" && ! -L "$DSYM_COPY" \
+    && -d "$(dirname "$DSYM_COPY")" ]] || {
+    echo "TASKSCOPE_DSYM_COPY must be a new absolute path with an existing parent." >&2
+    exit 2
+  }
+fi
+CODE_SIGN_RECORD="$(resolve_code_sign_identity)"
+CODE_SIGN_IDENTITY="${CODE_SIGN_RECORD%% *}"
+CODE_SIGN_IDENTITY_NAME="${CODE_SIGN_RECORD#* }"
 case "$SIGNING_STYLE" in
   development)
     ;;
@@ -106,6 +133,11 @@ case "$SIGNING_STYLE" in
     exit 2
     ;;
 esac
+# Only distribution packaging strips the binary and keeps its dSYM.
+if [[ -n "$DSYM_COPY" && "$SIGNING_STYLE" != distribution ]]; then
+  echo "TASKSCOPE_DSYM_COPY requires TASKSCOPE_SIGNING_STYLE=distribution." >&2
+  exit 2
+fi
 
 verify_plist_value() {
   local plist="$1"
@@ -152,6 +184,10 @@ verify_bundle() {
   verify_plist_value "$plist" "CFBundleShortVersionString" "$APP_VERSION"
   verify_plist_value "$plist" "CFBundleVersion" "$APP_BUILD_NUMBER"
   verify_plist_value "$plist" "LSMinimumSystemVersion" "$MIN_SYSTEM_VERSION"
+  verify_plist_value "$plist" "CFBundleInfoDictionaryVersion" "6.0"
+  verify_plist_value "$plist" "CFBundleDevelopmentRegion" "en"
+  verify_plist_value "$plist" "LSApplicationCategoryType" "public.app-category.utilities"
+  verify_plist_value "$plist" "NSHumanReadableCopyright" "$APP_COPYRIGHT"
   verify_plist_value "$plist" "CFBundleURLTypes:0:CFBundleURLSchemes:0" "taskscope"
 
   local obsolete_privacy_key
@@ -213,6 +249,12 @@ verify_bundle() {
   done
 
   /usr/bin/codesign --verify --deep --strict "$bundle"
+  local signature_info
+  signature_info="$(/usr/bin/codesign -dvvv "$bundle" 2>&1)"
+  /usr/bin/grep -Eq 'flags=.*runtime' <<< "$signature_info" || {
+    echo "Bundle verification failed: hardened runtime is absent." >&2; return 1;
+  }
+  taskscope_verify_binary_paths "$executable"
 }
 
 # The icns must carry every iconset member at its exact pixel size; a member
@@ -279,6 +321,7 @@ verify_startup_readiness() (
   local attempt
   local registered_bundle_id=""
   local is_ready=0
+  local startup_status=0
 
   readiness_home="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-startup.XXXXXX")"
 
@@ -314,7 +357,18 @@ verify_startup_readiness() (
     ! readiness_process_is_running
   }
 
+  report_startup_exit() {
+    startup_status=0
+    wait "$verify_pid" 2>/dev/null || startup_status="$?"
+    echo "Bundle verification failed: packaged app exited during startup with status $startup_status." >&2
+  }
+
   cleanup_readiness_process() {
+    local result="$?"
+    if [[ "$result" -ne 0 && -s "$readiness_home/startup.log" ]]; then
+      echo "Packaged app startup output:" >&2
+      tail -n 40 "$readiness_home/startup.log" >&2
+    fi
     if [[ -n "$verify_pid" ]]; then
       signal_readiness_process TERM >/dev/null 2>&1 || true
       if ! wait_for_readiness_process_exit; then
@@ -336,21 +390,24 @@ verify_startup_readiness() (
 
   script_command="$(taskscope_process_command "$$" || true)"
   CFFIXED_USER_HOME="$readiness_home" \
-    "$executable" --automation --verify-startup >/dev/null 2>&1 &
+    "$executable" --automation --verify-startup >"$readiness_home/startup.log" 2>&1 &
   verify_pid="$!"
   # Captured at once: an unreaped child's PID cannot yet belong to another process.
   verify_pid_start="$(taskscope_process_start_time "$verify_pid" || true)"
   verify_pid_identity="$(
     taskscope_wait_for_process_identity "$verify_pid" 40 "$executable"
   )" || {
-    echo "Bundle verification failed: could not capture startup process identity." >&2
+    if ! taskscope_process_start_time "$verify_pid" >/dev/null; then
+      report_startup_exit
+    else
+      echo "Bundle verification failed: could not capture startup process identity." >&2
+    fi
     return 1
   }
 
   for attempt in {1..50}; do
     if ! taskscope_process_matches_identity "$verify_pid" "$verify_pid_identity"; then
-      wait "$verify_pid" 2>/dev/null || true
-      echo "Bundle verification failed: packaged app exited during startup." >&2
+      report_startup_exit
       return 1
     fi
 
@@ -395,13 +452,16 @@ APP_INTENTS_PROTOCOLS=""
 PACKAGING_LOCK="$DIST_DIR/.$APP_NAME.package.lock"
 PACKAGING_LOCK_ACQUIRED=0
 OUTPUT_BACKUP="$DIST_DIR/.$APP_NAME.output-backup.$$"
-VERIFIED_BUNDLE_COPY="${TASKSCOPE_VERIFIED_BUNDLE_COPY:-}"
 VERIFIED_COPY_TEMP=""
 PUBLISH_COMPLETE=0
+TASKSCOPE_STOPPED_PROCESSES=0
 
 cleanup_packaging_work() {
   local exit_code="$?"
 
+  if [[ "$exit_code" -ne 0 && "$TASKSCOPE_STOPPED_PROCESSES" -eq 1 ]]; then
+    echo "The running staged TaskScope was quit for restaging and has not been restarted." >&2
+  fi
   if [[ -d "$STAGING_BUNDLE" ]]; then
     rm -rf "$STAGING_BUNDLE"
   fi
@@ -420,7 +480,7 @@ cleanup_packaging_work() {
     rm -rf "$VERIFIED_COPY_TEMP"
   fi
   if [[ "$PACKAGING_LOCK_ACQUIRED" -eq 1 ]]; then
-    rm -f "$PACKAGING_LOCK"
+    taskscope_release_lock "$PACKAGING_LOCK"
   fi
 
   return "$exit_code"
@@ -429,12 +489,25 @@ trap cleanup_packaging_work EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+taskscope_require_xcode
+# Check launch conflicts before compilation or replacing any existing bundle.
+case "$MODE" in
+  run|--logs|logs|--telemetry|telemetry|--debug|debug)
+    taskscope_require_no_other_app_instance "$APP_BUNDLE" "$BUNDLE_ID" ;;
+esac
 mkdir -p "$DIST_DIR"
-if ! /usr/bin/shlock -f "$PACKAGING_LOCK" -p "$$"; then
-  echo "Another TaskScope packaging process owns $PACKAGING_LOCK." >&2
-  exit 1
-fi
+taskscope_acquire_lock "$PACKAGING_LOCK" "packaging process"
 PACKAGING_LOCK_ACQUIRED=1
+taskscope_recover_bundles "$APP_BUNDLE" "$DIST_DIR/.$APP_NAME.output-backup." "$DIST_DIR/.$APP_NAME.staging."
+
+# Package.swift alone sets the deployment target, so the linker's minimum OS,
+# LSMinimumSystemVersion and the App Intents metadata always match the code.
+MIN_SYSTEM_VERSION="$(taskscope_minimum_system_version "$ROOT_DIR")"
+[[ "$MIN_SYSTEM_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
+  echo "Could not determine the Package.swift macOS deployment target." >&2
+  exit 1
+}
+APP_COPYRIGHT="$(taskscope_copyright_notice "$ROOT_DIR")"
 
 # Hold the packaging lock across both static and startup verification so a
 # concurrent restage cannot replace the bundle or stop the readiness process.
@@ -453,11 +526,22 @@ fi
 rm -rf "$STAGING_BUNDLE"
 rm -rf "$OUTPUT_BACKUP"
 METADATA_WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-app-intents.XXXXXX")"
-APP_INTENTS_CONST_VALUES="$METADATA_WORK_DIR/TaskScope.swiftconstvalues"
 APP_INTENTS_SOURCE_LIST="$METADATA_WORK_DIR/app-intents-sources.txt"
 APP_INTENTS_CONST_LIST="$METADATA_WORK_DIR/app-intents-const-values.txt"
-APP_INTENTS_PROTOCOLS="$METADATA_WORK_DIR/app-intents-protocols.json"
-mkdir -p "$METADATA_WORK_DIR"
+
+# Build from the generated app-only package: same sources and target, without
+# the test-only dependency graph of Package.swift.
+APP_PACKAGE_DIR="$(taskscope_prepare_application_package "$ROOT_DIR" "$MIN_SYSTEM_VERSION")"
+# Every App Intents type lives in this file. The compiler records the path it
+# compiled, which runs through the generated package's Sources link.
+APP_INTENTS_SOURCE="$APP_PACKAGE_DIR/Sources/TaskScope/Services/TaskScopeIntents.swift"
+# Stable paths keep the compiler arguments identical between runs, so an
+# unchanged tree is an up-to-date build instead of a full recompile.
+APP_INTENTS_CACHE_DIR="$APP_PACKAGE_DIR/app-intents"
+APP_INTENTS_CONST_VALUES="$APP_INTENTS_CACHE_DIR/TaskScope.swiftconstvalues"
+APP_INTENTS_PROTOCOLS="$APP_INTENTS_CACHE_DIR/app-intents-protocols.json"
+APP_INTENTS_INPUTS="$APP_INTENTS_CACHE_DIR/inputs.sha256"
+mkdir -p "$APP_INTENTS_CACHE_DIR"
 
 TOOLCHAIN_DIR="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain"
 APP_INTENTS_PROTOCOL_SOURCE="$TOOLCHAIN_DIR/usr/share/swift/SwiftConstantValues/AppIntents.json"
@@ -465,8 +549,11 @@ if [[ ! -s "$APP_INTENTS_PROTOCOL_SOURCE" ]]; then
   echo "Missing App Intents compiler protocol metadata: $APP_INTENTS_PROTOCOL_SOURCE" >&2
   exit 1
 fi
-/usr/bin/plutil -extract constValueProtocols json -o "$APP_INTENTS_PROTOCOLS" \
+/usr/bin/plutil -extract constValueProtocols json -o "$METADATA_WORK_DIR/protocols.json" \
   "$APP_INTENTS_PROTOCOL_SOURCE"
+if ! cmp -s "$METADATA_WORK_DIR/protocols.json" "$APP_INTENTS_PROTOCOLS"; then
+  cp "$METADATA_WORK_DIR/protocols.json" "$APP_INTENTS_PROTOCOLS"
+fi
 
 # SwiftPM links with the deployment target as the binary's SDK version, which
 # opts the app into old-SDK compatibility behavior. Record the real SDK.
@@ -476,28 +563,59 @@ LINKER_PLATFORM_FLAGS=(
   -Xlinker "$MIN_SYSTEM_VERSION" -Xlinker "$SDK_VERSION"
 )
 
+metadata_inputs_digest() {
+  {
+    /usr/bin/shasum -a 256 "$APP_INTENTS_SOURCE" "$ROOT_DIR/Package.swift" \
+      "$APP_PACKAGE_DIR/Package.swift" "$APP_INTENTS_PROTOCOLS"
+    xcodebuild -version
+  } | /usr/bin/shasum -a 256
+}
+
 if [[ "$BUILD_CONFIGURATION" == "debug" ]]; then
-  swift build -c debug --disable-index-store "${LINKER_PLATFORM_FLAGS[@]}"
+  swift build --package-path "$APP_PACKAGE_DIR" --force-resolved-versions -c debug \
+    --disable-index-store "${LINKER_PLATFORM_FLAGS[@]}"
 fi
 
-swift build -c "$METADATA_BUILD_CONFIGURATION" --disable-index-store \
-  "${LINKER_PLATFORM_FLAGS[@]}" \
-  -Xswiftc -emit-const-values \
-  -Xswiftc -Xfrontend \
-  -Xswiftc -const-gather-protocols-file \
-  -Xswiftc -Xfrontend \
-  -Xswiftc "$APP_INTENTS_PROTOCOLS" \
-  -Xswiftc -emit-const-values-path \
-  -Xswiftc "$APP_INTENTS_CONST_VALUES"
-BUILD_BINARY="$(swift build -c "$BUILD_CONFIGURATION" --show-bin-path)/$PRODUCT_NAME"
+# The release build exists only for the metadata when the product is a debug
+# build, so reuse the last extraction while its inputs are unchanged.
+NEEDS_METADATA=1
+if [[ "$BUILD_CONFIGURATION" == debug && -s "$APP_INTENTS_CONST_VALUES" && -f "$APP_INTENTS_INPUTS" \
+  && "$(metadata_inputs_digest)" == "$(cat "$APP_INTENTS_INPUTS")" ]]; then
+  NEEDS_METADATA=0
+fi
+if [[ "$NEEDS_METADATA" -eq 1 ]]; then
+  if [[ ! -s "$APP_INTENTS_CONST_VALUES" ]]; then
+    # The compiler writes constant values only when it compiles the module,
+    # which an up-to-date build skips; start from a clean build instead.
+    swift package --package-path "$APP_PACKAGE_DIR" clean
+  fi
+  rm -f "$APP_INTENTS_INPUTS"
+  swift build --package-path "$APP_PACKAGE_DIR" --force-resolved-versions \
+    -c "$METADATA_BUILD_CONFIGURATION" --disable-index-store \
+    "${LINKER_PLATFORM_FLAGS[@]}" \
+    -Xswiftc -emit-const-values \
+    -Xswiftc -Xfrontend \
+    -Xswiftc -const-gather-protocols-file \
+    -Xswiftc -Xfrontend \
+    -Xswiftc "$APP_INTENTS_PROTOCOLS" \
+    -Xswiftc -emit-const-values-path \
+    -Xswiftc "$APP_INTENTS_CONST_VALUES"
+  metadata_inputs_digest > "$APP_INTENTS_INPUTS"
+fi
+BUILD_BINARY="$(
+  swift build --package-path "$APP_PACKAGE_DIR" --force-resolved-versions \
+    -c "$BUILD_CONFIGURATION" --show-bin-path
+)/$PRODUCT_NAME"
 
 if [[ ! -s "$APP_INTENTS_CONST_VALUES" ]]; then
   echo "App Intents constant-value extraction produced no metadata." >&2
   exit 1
 fi
+# Work from a private copy: a concurrent build may rewrite the shared cache.
+cp "$APP_INTENTS_CONST_VALUES" "$METADATA_WORK_DIR/TaskScope.swiftconstvalues"
 
-printf '%s\n' "$ROOT_DIR/Sources/TaskScope/Services/TaskScopeIntents.swift" > "$APP_INTENTS_SOURCE_LIST"
-printf '%s\n' "$APP_INTENTS_CONST_VALUES" > "$APP_INTENTS_CONST_LIST"
+printf '%s\n' "$APP_INTENTS_SOURCE" > "$APP_INTENTS_SOURCE_LIST"
+printf '%s\n' "$METADATA_WORK_DIR/TaskScope.swiftconstvalues" > "$APP_INTENTS_CONST_LIST"
 
 mkdir -p "$STAGING_MACOS" "$STAGING_RESOURCES"
 cp "$BUILD_BINARY" "$STAGING_BINARY"
@@ -517,6 +635,10 @@ swift "$ROOT_DIR/script/render_icon.swift" "$STAGING_ICON"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $MIN_SYSTEM_VERSION" "$STAGING_PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool false" "$STAGING_PLIST"
 /usr/libexec/PlistBuddy -c "Add :NSPrincipalClass string NSApplication" "$STAGING_PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleInfoDictionaryVersion string 6.0" "$STAGING_PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleDevelopmentRegion string en" "$STAGING_PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.utilities" "$STAGING_PLIST"
+/usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string $APP_COPYRIGHT" "$STAGING_PLIST"
 
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$STAGING_PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$STAGING_PLIST"
@@ -543,12 +665,38 @@ TARGET_TRIPLE="$(uname -m)-apple-macos${MIN_SYSTEM_VERSION}"
   --force \
   --no-app-shortcuts-localization
 
+# Remove build-machine search paths before signing. Swift system runtime
+# libraries are loaded from /usr/lib/swift; external @rpath dependencies fail.
+taskscope_remove_build_rpaths "$STAGING_BINARY"
+if [[ "$SIGNING_STYLE" == distribution ]]; then
+  xcrun dsymutil "$STAGING_BINARY" -o "$METADATA_WORK_DIR/$APP_NAME.dSYM"
+  /usr/bin/strip -S "$STAGING_BINARY"
+  taskscope_verify_no_debug_paths "$STAGING_BINARY"
+fi
 /usr/bin/xattr -cr "$STAGING_BUNDLE"
+# Every signature enables the hardened runtime: the dynamic linker then ignores
+# DYLD_INSERT_LIBRARIES, so injected code cannot borrow TaskScope's
+# Accessibility grant from an unmodified, still-trusted bundle.
 if [[ "$SIGNING_STYLE" == "distribution" ]]; then
   /usr/bin/codesign --force --options runtime --timestamp \
     --sign "$CODE_SIGN_IDENTITY" "$STAGING_BUNDLE"
+elif [[ "$MODE" == "--debug" || "$MODE" == "debug" ]]; then
+  # lldb needs get-task-allow to run a hardened binary; only --debug has it.
+  cat > "$METADATA_WORK_DIR/debug.entitlements" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.get-task-allow</key>
+	<true/>
+</dict>
+</plist>
+PLIST
+  /usr/bin/codesign --force --options runtime --timestamp=none \
+    --entitlements "$METADATA_WORK_DIR/debug.entitlements" \
+    --sign "$CODE_SIGN_IDENTITY" "$STAGING_BUNDLE"
 else
-  /usr/bin/codesign --force --timestamp=none \
+  /usr/bin/codesign --force --options runtime --timestamp=none \
     --sign "$CODE_SIGN_IDENTITY" "$STAGING_BUNDLE"
 fi
 verify_bundle "$STAGING_BUNDLE"
@@ -575,22 +723,7 @@ PUBLISH_COMPLETE=1
 rm -rf "$OUTPUT_BACKUP"
 
 if [[ -n "$VERIFIED_BUNDLE_COPY" ]]; then
-  case "$VERIFIED_BUNDLE_COPY" in
-    /*/TaskScope.app)
-      ;;
-    *)
-      echo "TASKSCOPE_VERIFIED_BUNDLE_COPY must be an absolute TaskScope.app path." >&2
-      exit 1
-      ;;
-  esac
-  if [[ -e "$VERIFIED_BUNDLE_COPY" ]]; then
-    echo "Refusing to overwrite verified bundle copy: $VERIFIED_BUNDLE_COPY" >&2
-    exit 1
-  fi
-  if [[ ! -d "$(dirname "$VERIFIED_BUNDLE_COPY")" ]]; then
-    echo "Verified bundle copy destination directory does not exist." >&2
-    exit 1
-  fi
+  taskscope_validate_copy_destination "$VERIFIED_BUNDLE_COPY"
 
   VERIFIED_COPY_TEMP="$VERIFIED_BUNDLE_COPY.copying.$$"
   [[ ! -e "$VERIFIED_COPY_TEMP" ]] || {
@@ -603,6 +736,10 @@ if [[ -n "$VERIFIED_BUNDLE_COPY" ]]; then
   VERIFIED_COPY_TEMP=""
 fi
 
+if [[ -n "$DSYM_COPY" ]]; then
+  [[ ! -e "$DSYM_COPY" && ! -L "$DSYM_COPY" ]] || { echo "Refusing to overwrite dSYM copy." >&2; exit 1; }
+  /usr/bin/ditto "$METADATA_WORK_DIR/$APP_NAME.dSYM" "$DSYM_COPY"
+fi
 cleanup_packaging_work
 trap - EXIT INT TERM
 

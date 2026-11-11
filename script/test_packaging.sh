@@ -5,7 +5,11 @@ set -euo pipefail
 unset TASKSCOPE_BUNDLE_ID TASKSCOPE_SIGNING_STYLE TASKSCOPE_CODE_SIGN_IDENTITY \
   TASKSCOPE_VERIFIED_BUNDLE_COPY TASKSCOPE_INSTALL_FAIL_AT TASKSCOPE_SKIP_BUILD \
   TASKSCOPE_RELEASE_ARCHS TASKSCOPE_EXPECTED_TEAM_ID TASKSCOPE_NOTARY_KEYCHAIN_PROFILE \
+  TASKSCOPE_OUTPUT_DIR TASKSCOPE_DSYM_COPY TASKSCOPE_FIRST_RELEASE \
   BUILD_CONFIGURATION
+
+# Discard inherited Git repository overrides before any fixture operations.
+while IFS= read -r git_variable; do unset "$git_variable"; done < <(git rev-parse --local-env-vars)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_SCRIPT="$ROOT_DIR/script/build_and_run.sh"
@@ -13,8 +17,19 @@ INSTALL_SCRIPT="$ROOT_DIR/script/install.sh"
 RELEASE_SCRIPT="$ROOT_DIR/script/release.sh"
 COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-packaging.XXXXXX")"
+export TASKSCOPE_CODE_SIGN_IDENTITY=-
+export TASKSCOPE_OUTPUT_DIR="$TEST_DIR/build.noindex"
 TEST_BUNDLE_ID="com.example.TaskScopeTests.Run$(/usr/bin/uuidgen | /usr/bin/tr -d '-')"
 TEST_PREFERENCES_DIR="$HOME/Library/Preferences"
+
+# Every case stages into TEST_DIR. The checkout's own staged bundle and its
+# Package.resolved must end the run exactly as they started.
+checkout_state() {
+  /usr/bin/stat -f '%m %i' "$ROOT_DIR/dist/build.noindex/TaskScope.app/Contents/Info.plist" \
+    2>/dev/null || echo 'no staged bundle'
+  /usr/bin/shasum -a 256 "$ROOT_DIR/Package.resolved"
+}
+CHECKOUT_STATE="$(checkout_state)"
 
 assert_no_test_preferences() {
   local path
@@ -144,6 +159,32 @@ source "$COMMON_SCRIPT"
 )
 
 (
+  # In the C locale (cron, launchd, many SSH sessions) ps and lsof escape a path
+  # that is not ASCII. The helpers must still find and stop such a copy.
+  unicode_executable="$TEST_DIR/Packaging — Apps/TaskScope.app/Contents/MacOS/TaskScope"
+  mkdir -p "$(dirname "$unicode_executable")"
+  cp /bin/sleep "$unicode_executable"
+  /usr/bin/codesign --force --sign - "$unicode_executable" >/dev/null 2>&1
+
+  "$unicode_executable" 30 &
+  unicode_pid="$!"
+  # The PID stays this shell's child until it is waited for, so it cannot be reused.
+  trap '/bin/kill -KILL "$unicode_pid" 2>/dev/null || true; wait "$unicode_pid" 2>/dev/null || true' EXIT
+  if ! LC_ALL=C LANG= taskscope_wait_for_process_identity \
+    "$unicode_pid" 40 "$unicode_executable" >/dev/null; then
+    echo "Process identity capture failed for a non-ASCII path in the C locale." >&2
+    exit 1
+  fi
+  LC_ALL=C LANG= taskscope_stop_processes_for_executable "$unicode_executable"
+  if /bin/kill -0 "$unicode_pid" >/dev/null 2>&1; then
+    echo "The stop helper missed a copy at a non-ASCII path in the C locale." >&2
+    exit 1
+  fi
+  wait "$unicode_pid" 2>/dev/null || true
+  trap - EXIT
+)
+
+(
   rejected_executable="/bin/sleep"
   taskscope_list_processes() {
     printf '4242 %s 30\n' "$rejected_executable"
@@ -255,9 +296,137 @@ fi
 # in the real compatibility matrix or a managed GlobalProtect installation.
 bash "$ROOT_DIR/script/test_release_compatibility.sh"
 
-PACKAGE_LOCK="$ROOT_DIR/dist/build.noindex/.TaskScope.package.lock"
-mkdir -p "$ROOT_DIR/dist/build.noindex"
-/usr/bin/shlock -f "$PACKAGE_LOCK" -p "$$"
+# The icon renders in a private directory: an AppIcon.iconset beside the output
+# survives, and bad arguments or outputs fail with one line instead of a crash.
+ICON_DIR="$TEST_DIR/Icon"
+ICON_OUTPUT="$TEST_DIR/icon.out"
+mkdir -p "$ICON_DIR/AppIcon.iconset" "$ICON_DIR/ReadOnly"
+printf 'artwork\n' > "$ICON_DIR/AppIcon.iconset/source.psd"
+swift "$ROOT_DIR/script/render_icon.swift" "$ICON_DIR/AppIcon.icns"
+if [[ ! -s "$ICON_DIR/AppIcon.icns" ]] || ! grep -Fxq artwork "$ICON_DIR/AppIcon.iconset/source.psd"; then
+  echo "Icon rendering replaced an existing AppIcon.iconset." >&2
+  exit 1
+fi
+ICON_HELP="$(swift "$ROOT_DIR/script/render_icon.swift" --help)"
+grep -q '^usage:' <<< "$ICON_HELP"
+for icon_arguments in --bogus "$ICON_DIR/icon.png" "$ICON_DIR/one.icns $ICON_DIR/two.icns"; do
+  icon_status=0
+  # shellcheck disable=SC2086 # Each case is a list of arguments.
+  swift "$ROOT_DIR/script/render_icon.swift" $icon_arguments > "$ICON_OUTPUT" 2>&1 || icon_status="$?"
+  if [[ "$icon_status" -ne 2 ]] || ! grep -q '^usage:' "$ICON_OUTPUT"; then
+    echo "Icon rendering accepted arguments: $icon_arguments" >&2
+    cat "$ICON_OUTPUT" >&2
+    exit 1
+  fi
+done
+chmod a-w "$ICON_DIR/ReadOnly"
+icon_status=0
+swift "$ROOT_DIR/script/render_icon.swift" "$ICON_DIR/ReadOnly/AppIcon.icns" > "$ICON_OUTPUT" 2>&1 \
+  || icon_status="$?"
+chmod u+w "$ICON_DIR/ReadOnly"
+if [[ "$icon_status" -ne 1 ]] || ! grep -q '^Icon rendering failed:' "$ICON_OUTPUT" \
+  || grep -Eq 'Stack dump|Fatal error' "$ICON_OUTPUT"; then
+  echo "An icon rendering failure was not reported as a one-line error." >&2
+  cat "$ICON_OUTPUT" >&2
+  exit 1
+fi
+
+# Package.swift alone sets the deployment target, enables complete concurrency
+# checking for both targets, and defines the app target that packaging builds.
+MANIFEST_FIXTURE="$TEST_DIR/Manifest"
+MANIFEST_OUTPUT="$TEST_DIR/manifest.out"
+mkdir -p "$MANIFEST_FIXTURE/Sources/TaskScope"
+# Output is captured before grep -q: with pipefail, a writer that grep -q
+# leaves early fails the pipeline with SIGPIPE even though the text matched.
+for strict_target in TaskScope TaskScopeTests; do
+  STRICT_TARGET_DESCRIPTION="$(taskscope_target_description "$ROOT_DIR" "$strict_target")"
+  if ! grep -q '"StrictConcurrency"' <<< "$STRICT_TARGET_DESCRIPTION"; then
+    echo "Package.swift does not enable complete concurrency checking for $strict_target." >&2
+    exit 1
+  fi
+done
+sed 's/\.macOS(\.v14)/.macOS("15.0")/' "$ROOT_DIR/Package.swift" > "$MANIFEST_FIXTURE/Package.swift"
+grep -Fq '.macOS("15.0")' "$MANIFEST_FIXTURE/Package.swift"
+if [[ "$(taskscope_minimum_system_version "$MANIFEST_FIXTURE")" != 15.0 ]]; then
+  echo "Packaging ignored a changed Package.swift deployment target." >&2
+  exit 1
+fi
+taskscope_prepare_application_package "$MANIFEST_FIXTURE" 15.0 >/dev/null
+sed 's/\.executableTarget(name: "TaskScope"/.executableTarget(name: "TaskScope", exclude: ["Diverged"]/' \
+  "$ROOT_DIR/Package.swift" > "$MANIFEST_FIXTURE/Package.swift"
+grep -q 'Diverged' "$MANIFEST_FIXTURE/Package.swift"
+if taskscope_prepare_application_package "$MANIFEST_FIXTURE" 14.0 > "$MANIFEST_OUTPUT" 2>&1; then
+  echo "Packaging built an app target that differs from Package.swift." >&2
+  exit 1
+fi
+grep -Fq 'declares the TaskScope target differently' "$MANIFEST_OUTPUT"
+
+# Unchanged sources must build with identical compiler arguments, or SwiftPM
+# recompiles the whole module, and a debug stage reuses the App Intents metadata
+# while its inputs are unchanged. This fake swift records each build and creates
+# the metadata file a build would write; package queries run the real swift.
+METADATA_FIXTURE="$TEST_DIR/Metadata Fixture"
+METADATA_BIN="$TEST_DIR/metadata-bin"
+BUILD_LOG="$TEST_DIR/swift-builds"
+mkdir -p "$METADATA_FIXTURE/script" "$METADATA_FIXTURE/Sources/TaskScope/Services" "$METADATA_BIN"
+cp "$BUILD_SCRIPT" "$COMMON_SCRIPT" "$ROOT_DIR/script/render_icon.swift" "$METADATA_FIXTURE/script/"
+cp "$ROOT_DIR/Package.swift" "$ROOT_DIR/LICENSE" "$ROOT_DIR/VERSION" "$ROOT_DIR/BUILD_NUMBER" "$METADATA_FIXTURE/"
+cp "$ROOT_DIR/Sources/TaskScope/Services/TaskScopeIntents.swift" "$METADATA_FIXTURE/Sources/TaskScope/Services/"
+cat > "$METADATA_BIN/swift" <<EOF
+#!/usr/bin/env bash
+if [[ "\$1" == package ]]; then exec /usr/bin/swift "\$@"; fi
+if [[ " \$* " == *" --show-bin-path "* ]]; then printf '%s\n' "$TEST_DIR/no-binary"; exit 0; fi
+printf '%s\n' "\$*" >> "$BUILD_LOG"
+previous=""
+for argument in "\$@"; do
+  [[ "\$previous" != -emit-const-values-path ]] || printf '{}\n' > "\$argument"
+  [[ "\$argument" == -Xswiftc ]] || previous="\$argument"
+done
+EOF
+chmod +x "$METADATA_BIN/swift"
+run_metadata_stage() {
+  # The stage stops at the missing binary, after every build has run.
+  if PATH="$METADATA_BIN:$PATH" TASKSCOPE_BUNDLE_ID="$TEST_BUNDLE_ID" \
+    TASKSCOPE_OUTPUT_DIR="$METADATA_FIXTURE/out" \
+    bash "$METADATA_FIXTURE/script/build_and_run.sh" --stage > "$TEST_DIR/metadata.out" 2>&1; then
+    echo "The metadata fixture unexpectedly staged a bundle." >&2
+    exit 1
+  fi
+  grep -Fq "$TEST_DIR/no-binary/TaskScope" "$TEST_DIR/metadata.out" || {
+    cat "$TEST_DIR/metadata.out" >&2
+    exit 1
+  }
+}
+: > "$BUILD_LOG"
+run_metadata_stage
+run_metadata_stage
+if [[ "$(grep -c -- '-c release' "$BUILD_LOG")" -ne 2 ]] \
+  || [[ "$(sed -n 1p "$BUILD_LOG")" != "$(sed -n 2p "$BUILD_LOG")" ]]; then
+  echo "Unchanged sources produced different compiler arguments." >&2
+  cat "$BUILD_LOG" >&2
+  exit 1
+fi
+: > "$BUILD_LOG"
+BUILD_CONFIGURATION=debug run_metadata_stage
+if grep -q -- '-c release' "$BUILD_LOG" || ! grep -q -- '-c debug' "$BUILD_LOG"; then
+  echo "A debug stage rebuilt release metadata for unchanged App Intents sources." >&2
+  cat "$BUILD_LOG" >&2
+  exit 1
+fi
+printf '// Changed intents source\n' >> "$METADATA_FIXTURE/Sources/TaskScope/Services/TaskScopeIntents.swift"
+: > "$BUILD_LOG"
+BUILD_CONFIGURATION=debug run_metadata_stage
+grep -q -- '-c release' "$BUILD_LOG" || {
+  echo "A debug stage reused App Intents metadata after its source changed." >&2
+  exit 1
+}
+
+PACKAGE_LOCK="$TASKSCOPE_OUTPUT_DIR/.TaskScope.package.lock"
+mkdir -p "$TASKSCOPE_OUTPUT_DIR"
+/usr/bin/shlock -f "$PACKAGE_LOCK" -p "$$" || {
+  echo "Another packaging process is running; rerun later ($PACKAGE_LOCK)." >&2
+  exit 1
+}
 rm -f "$SWIFT_MARKER"
 if TASKSCOPE_BUNDLE_ID='com.example.TaskScopeTests' PATH="$FAKE_BIN:$PATH" \
   "$BUILD_SCRIPT" --stage >/dev/null 2>&1; then
@@ -278,7 +447,7 @@ TASKSCOPE_BUNDLE_ID="$TEST_BUNDLE_ID" \
   TASKSCOPE_VERIFIED_BUNDLE_COPY="$VERIFIED_COPY_BUNDLE" \
   "$BUILD_SCRIPT" --stage >/dev/null
 
-STAGED_PLIST="$ROOT_DIR/dist/build.noindex/TaskScope.app/Contents/Info.plist"
+STAGED_PLIST="$TASKSCOPE_OUTPUT_DIR/TaskScope.app/Contents/Info.plist"
 STAGED_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$STAGED_PLIST")"
 if [[ "$STAGED_ID" != "$TEST_BUNDLE_ID" ]]; then
   echo "Staged bundle did not use the configured identifier." >&2
@@ -300,12 +469,52 @@ for stale_key in NSAppleEventsUsageDescription NSServerUsageDescription; do
   fi
 done
 
+STAGED_APP="$TASKSCOPE_OUTPUT_DIR/TaskScope.app"
+STAGED_BINARY="$STAGED_APP/Contents/MacOS/TaskScope"
+# The hardened runtime keeps DYLD_INSERT_LIBRARIES out of the signed app,
+# without entitlements outside a --debug build.
+STAGED_SIGNATURE="$(/usr/bin/codesign -dvvv "$STAGED_APP" 2>&1)"
+if ! /usr/bin/grep -Eq 'flags=.*runtime' <<< "$STAGED_SIGNATURE"; then
+  echo "The staged app is signed without the hardened runtime." >&2
+  exit 1
+fi
+STAGED_ENTITLEMENTS="$(/usr/bin/codesign -d --entitlements - --xml "$STAGED_APP" 2>/dev/null || true)"
+if /usr/bin/grep -q '<key>' <<< "$STAGED_ENTITLEMENTS"; then
+  echo "The staged app carries entitlements." >&2
+  exit 1
+fi
+# No search path into the build machine's toolchain survives in the app.
+taskscope_verify_binary_paths "$STAGED_BINARY"
+# The plist, the binary's minimum OS, and Package.swift agree.
+PACKAGE_MINIMUM="$(taskscope_minimum_system_version "$ROOT_DIR")"
+STAGED_BUILD_VERSION="$(/usr/bin/vtool -show-build "$STAGED_BINARY")"
+if [[ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$STAGED_PLIST")" != "$PACKAGE_MINIMUM" ]] \
+  || ! /usr/bin/grep -Eq "minos[[:space:]]+$PACKAGE_MINIMUM\$" <<< "$STAGED_BUILD_VERSION"; then
+  echo "The staged deployment target differs from Package.swift ($PACKAGE_MINIMUM)." >&2
+  exit 1
+fi
+for plist_entry in CFBundleInfoDictionaryVersion=6.0 CFBundleDevelopmentRegion=en \
+  LSApplicationCategoryType=public.app-category.utilities \
+  "NSHumanReadableCopyright=$(taskscope_copyright_notice "$ROOT_DIR")"; do
+  if [[ "$(/usr/libexec/PlistBuddy -c "Print :${plist_entry%%=*}" "$STAGED_PLIST" 2>/dev/null)" \
+    != "${plist_entry#*=}" ]]; then
+    echo "The staged Info.plist lacks ${plist_entry%%=*} = ${plist_entry#*=}." >&2
+    exit 1
+  fi
+done
+# Packaging builds the app-only package, which resolves no dependencies.
+if /usr/bin/grep -q ViewInspector "$ROOT_DIR/.build/taskscope-application/.build/workspace-state.json" 2>/dev/null \
+  || [[ -e "$ROOT_DIR/.build/taskscope-application/.build/checkouts/ViewInspector" ]]; then
+  echo "Packaging resolved the test-only ViewInspector dependency." >&2
+  exit 1
+fi
+
 TASKSCOPE_BUNDLE_ID="$TEST_BUNDLE_ID" "$BUILD_SCRIPT" --verify >/dev/null
 assert_no_test_preferences
 
 # A startup check launches the staged bundle. It must leave no duplicate
 # launcher registration even though the build folder is excluded from metadata.
-swift - "$ROOT_DIR/dist/build.noindex/TaskScope.app" "$TEST_BUNDLE_ID" <<'SWIFT'
+swift - "$TASKSCOPE_OUTPUT_DIR/TaskScope.app" "$TEST_BUNDLE_ID" <<'SWIFT'
 import AppKit
 let stagedPath = CommandLine.arguments[1]
 let bundleID = CommandLine.arguments[2]
@@ -402,7 +611,7 @@ done
 
 if find "$TEST_APPLICATIONS" -maxdepth 1 \
   \( -name '.TaskScope.installing.*' -o -name '.TaskScope.backup.*' \
-    -o -name '.TaskScope.install.lock' \) -print -quit | grep -q .; then
+    -o -name '.TaskScope.install.lock*' \) -print -quit | grep -q .; then
   echo "Installer left transaction artifacts behind." >&2
   exit 1
 fi
@@ -411,6 +620,11 @@ fi
 DEFAULT_STAGED_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$STAGED_PLIST")"
 if [[ "$DEFAULT_STAGED_ID" != 'com.local.TaskScope' ]]; then
   echo "Default packaging no longer uses the development bundle identifier." >&2
+  exit 1
+fi
+
+if [[ "$(checkout_state)" != "$CHECKOUT_STATE" ]]; then
+  echo "Packaging tests changed the checkout's staged bundle or Package.resolved." >&2
   exit 1
 fi
 

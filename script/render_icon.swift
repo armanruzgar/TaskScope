@@ -1,63 +1,75 @@
 import AppKit
 import Foundation
 
-let outputPath = CommandLine.arguments.dropFirst().first ?? "AppIcon.icns"
-let outputURL = URL(fileURLWithPath: outputPath)
-let fileManager = FileManager.default
-let iconsetURL = outputURL
-    .deletingLastPathComponent()
-    .appendingPathComponent("AppIcon.iconset", isDirectory: true)
+let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["--help"] || arguments == ["-h"] {
+    print("usage: swift script/render_icon.swift [output.icns] (default: AppIcon.icns)")
+    exit(0)
+}
+guard arguments.count <= 1, arguments.first?.hasPrefix("-") != true,
+      arguments.first.map({ URL(fileURLWithPath: $0).pathExtension == "icns" }) ?? true else {
+    FileHandle.standardError.write(Data("usage: swift script/render_icon.swift [output.icns]\n".utf8))
+    exit(2)
+}
 
-try? fileManager.removeItem(at: iconsetURL)
-try fileManager.createDirectory(
-    at: iconsetURL,
-    withIntermediateDirectories: true
-)
+do {
+    try generateIcon(at: URL(fileURLWithPath: arguments.first ?? "AppIcon.icns"))
+} catch {
+    FileHandle.standardError.write(Data("Icon rendering failed: \(error.localizedDescription)\n".utf8))
+    exit(1)
+}
 
-let specs: [(points: Int, scale: Int)] = [
-    (16, 1), (16, 2),
-    (32, 1), (32, 2),
-    (128, 1), (128, 2),
-    (256, 1), (256, 2),
-    (512, 1), (512, 2)
-]
+func generateIcon(at outputURL: URL) throws {
+    let fileManager = FileManager.default
+    let temporaryURL = fileManager.temporaryDirectory
+        .appendingPathComponent("TaskScopeIcon-" + UUID().uuidString, isDirectory: true)
+    try fileManager.createDirectory(at: temporaryURL, withIntermediateDirectories: false)
+    defer { try? fileManager.removeItem(at: temporaryURL) }
+    let iconsetURL = temporaryURL.appendingPathComponent("AppIcon.iconset", isDirectory: true)
+    try fileManager.createDirectory(at: iconsetURL, withIntermediateDirectories: false)
+    let specs: [(points: Int, scale: Int)] = [
+        (16, 1), (16, 2),
+        (32, 1), (32, 2),
+        (128, 1), (128, 2),
+        (256, 1), (256, 2),
+        (512, 1), (512, 2)
+    ]
 
-for spec in specs {
-    let pixels = spec.points * spec.scale
-    let bitmap = try renderIcon(pixels: pixels)
-    // `NSImage.lockFocus` rendered at the display's backing scale, so a 16-point
-    // member came out at 32 pixels and iconutil silently dropped the 16 and 128
-    // point members. Drawing into an explicit bitmap makes the size exact.
-    guard bitmap.pixelsWide == pixels, bitmap.pixelsHigh == pixels else {
+    for spec in specs {
+        let pixels = spec.points * spec.scale
+        let bitmap = try renderIcon(pixels: pixels)
+        // `NSImage.lockFocus` rendered at the display's backing scale, so a 16-point
+        // member came out at 32 pixels and iconutil silently dropped the 16 and 128
+        // point members. Drawing into an explicit bitmap makes the size exact.
+        guard bitmap.pixelsWide == pixels, bitmap.pixelsHigh == pixels else {
+            throw NSError(
+                domain: "TaskScopeIcon",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Rendered \(bitmap.pixelsWide)x\(bitmap.pixelsHigh) pixels for a \(pixels)-pixel member."
+                ]
+            )
+        }
+        let suffix = spec.scale == 1 ? "" : "@2x"
+        let filename = "icon_\(spec.points)x\(spec.points)\(suffix).png"
+        try writePNG(bitmap: bitmap, to: iconsetURL.appendingPathComponent(filename))
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
+    process.arguments = ["-c", "icns", iconsetURL.path, "-o", outputURL.path]
+    try process.run()
+    process.waitUntilExit()
+
+    if process.terminationStatus != 0 {
         throw NSError(
             domain: "TaskScopeIcon",
-            code: 2,
-            userInfo: [
-                NSLocalizedDescriptionKey:
-                    "Rendered \(bitmap.pixelsWide)x\(bitmap.pixelsHigh) pixels for a \(pixels)-pixel member."
-            ]
+            code: Int(process.terminationStatus),
+            userInfo: [NSLocalizedDescriptionKey: "iconutil failed"]
         )
     }
-    let suffix = spec.scale == 1 ? "" : "@2x"
-    let filename = "icon_\(spec.points)x\(spec.points)\(suffix).png"
-    try writePNG(bitmap: bitmap, to: iconsetURL.appendingPathComponent(filename))
 }
-
-let process = Process()
-process.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-process.arguments = ["-c", "icns", iconsetURL.path, "-o", outputURL.path]
-try process.run()
-process.waitUntilExit()
-
-if process.terminationStatus != 0 {
-    throw NSError(
-        domain: "TaskScopeIcon",
-        code: Int(process.terminationStatus),
-        userInfo: [NSLocalizedDescriptionKey: "iconutil failed"]
-    )
-}
-
-try? fileManager.removeItem(at: iconsetURL)
 
 func renderIcon(pixels: Int) throws -> NSBitmapImageRep {
     guard let bitmap = NSBitmapImageRep(
