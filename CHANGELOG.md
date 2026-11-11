@@ -5,6 +5,12 @@ All notable changes to TaskScope are documented in this file. The project uses
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-10
+
+Source/development release with the fixes from the November 2026 audit. Build
+metadata is `1.1.0 (3)`. Like 1.0.0, it does not include a Developer ID-signed,
+notarized, universal, or public binary.
+
 ### Added
 
 - Added a confirmed, persistent Keep GlobalProtect Off switch to the built-in GlobalProtect preset. It disables and unloads the fixed `pangpa` and optional `pangps` user launch agents and, with macOS administrator approval, disables and boots out the fixed `system/com.paloaltonetworks.gp.pangpsd` VPN daemon; GlobalProtect Quit All and Stop Services Anyway use the same path. Open or turning the switch off restores the services.
@@ -275,5 +281,6 @@ does not include a Developer ID-signed, notarized, universal, or public binary.
 - Keep corrupt preset, rule, event, settings, and saved-selection backups from
   being clobbered by later reads.
 
-[Unreleased]: https://github.com/armanruzgar/TaskScope/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/armanruzgar/TaskScope/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/armanruzgar/TaskScope/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/armanruzgar/TaskScope/releases/tag/v1.0.0

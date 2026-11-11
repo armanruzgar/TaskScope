@@ -5,9 +5,9 @@ release is complete only when its tag, notes, artifacts, and documented claims
 match independently verified evidence. A changelog entry, local install, or
 staged app is not itself a published release.
 
-## Current 1.0.0 scope
+## Current 1.1.0 scope
 
-- Version: `1.0.0`
+- Version: `1.1.0`
 - Build: `3` (the 1.0.0 tag carries build `2`; `script/release.sh` refuses a
   build number that is not greater than every `v*` tag's)
 - Deployment target: macOS 14
@@ -17,10 +17,10 @@ staged app is not itself a published release.
   the original repository, so commits from before 2026-10-17 have different
   SHAs; [Evidence/README.md](Evidence/README.md#commit-shas-in-older-records)
   maps the SHAs that older records cite
-- Next version: no release after 1.0.0 has been published. Because the
-  `v1.0.0` tag exists, `script/release.sh` refuses `VERSION` 1.0.0; before the
-  next release, raise `VERSION` and move the `[Unreleased]` changelog entries
-  under a `## [<version>]` heading
+- Releases: 1.1.0 (tag `v1.1.0`, 2026-11-10) is the latest source release;
+  1.0.0 is superseded. Because both tags exist, `script/release.sh` refuses
+  `VERSION` 1.0.0 and 1.1.0; before the next release, raise `VERSION` and move
+  the `[Unreleased]` changelog entries under a `## [<version>]` heading
 - Local bundle identifier: `com.local.TaskScope`
 - Possible local signatures: Apple Development or ad-hoc, both with the hardened
   runtime; only `--debug` builds add the `get-task-allow` debugging entitlement
@@ -28,7 +28,7 @@ staged app is not itself a published release.
   Developer ID signature, hardened-runtime review, notarization, stapling, or a
   public downloadable app bundle
 
-Do not attach `dist/build.noindex/TaskScope.app` or an archive of it to the GitHub 1.0.0
+Do not attach `dist/build.noindex/TaskScope.app` or an archive of it to a GitHub
 source release as a production binary. GitHub's generated source archives are
 the only release artifacts within this scope unless the credential-gated
 pipeline and full binary gate below complete with real Apple credentials.
@@ -290,7 +290,7 @@ lifecycle evidence contract, and required tools. It refuses a version whose
 heading with no entries left under `## [Unreleased]`, and refuses to overwrite
 release output from an earlier run. With the repository's current unverified
 lifecycle coverage, this command is expected to fail with collection
-instructions; the current `VERSION`, 1.0.0, also fails the tag check. After
+instructions. After
 evidence passes, it reports missing credentials but does not sign, notarize, or
 create a releasable artifact.
 
