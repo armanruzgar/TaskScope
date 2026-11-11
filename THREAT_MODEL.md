@@ -485,9 +485,11 @@ Required invariants:
 
 - no analytics or automatic diagnostic upload;
 - do not log monitored processes' command lines or imported lifecycle payloads.
-  A command line appears only in the Process Detail sheet the user opens: it is
-  read on request, kept only if the process still has the row's start time,
-  and never stored, logged, or included in diagnostics;
+  A command line appears only in the Process Detail sheet the user opens or on
+  the clipboard after Copy Command Line: it is read on request, only while the
+  PID still has the row's start time and executable path (checked before and
+  after the read), and never stored, logged, or included in diagnostics,
+  reports, exports, or notifications;
 - record every signal TaskScope sends, and every launchd change, app open, and
   administrator request it runs, in the Unified Log's `Actions` category with
   the outcome, so its actions can be reconstructed after it quits; signal,

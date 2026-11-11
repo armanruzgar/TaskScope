@@ -270,11 +270,7 @@ struct SystemActivityMonitorProcessChecker: ActivityMonitorProcessChecking {
 
         // The inventory's `ps lstart` is normalized to C-locale UTC seconds.
         // Check the kernel start time on both sides of the kernel path read.
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(start.seconds))) == identity.startTime
+        return ProcessStartTime.psText(epochSeconds: Int(start.seconds)) == identity.startTime
     }
 
     /// The inventory stores standardized paths, which drop a leading /private

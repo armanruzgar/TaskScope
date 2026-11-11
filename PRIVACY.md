@@ -16,9 +16,13 @@ TaskScope can read local information exposed by macOS process tools, including:
 - PID, parent PID, process owner UID, process/executable name, command path,
   start and elapsed time;
 - for the process whose **Show Detail** sheet you open, the owner's account
-  name and the full command line (**Arguments**). A command line can contain
-  secrets such as tokens. Both are read only when you open the sheet, shown
-  only there, and never stored, logged, or included in diagnostics;
+  name and the full command line (**Command Line**), and for the row whose
+  **Copy Command Line** you choose, its command line. A command line can
+  contain secrets such as tokens. Command lines are read only on these
+  requests, and only while the PID still has the row's start time and
+  executable path. They are shown only in that sheet or placed on the
+  clipboard, and are never stored, logged, or included in diagnostics,
+  reports, exports, or notifications;
 - observed CPU and resident memory usage;
 - extended per-process network byte counters (from `nettop`) and cumulative
   disk I/O byte counters (from the kernel's per-process resource usage) when
@@ -162,10 +166,14 @@ added, renamed, or deleted.
 
 TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
 diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Executable
-Path** in a process row's context menu, and **Copy Report** in a Stop or service
-results report. Copy Executable Path replaces the clipboard contents with the
-process's kernel executable path, or with its `ps` command name when that path
-is unavailable. Copy Report copies the report as shown, which can include process
+Path** and **Copy Command Line** in a process row's context menu, and **Copy
+Report** in a Stop or service results report. Copy Executable Path replaces the
+clipboard contents with the process's kernel executable path, or with its `ps`
+command name when that path is unavailable. Copy Command Line replaces them
+with the process's command line, marked confidential
+(`org.nspasteboard.ConcealedType`) so that clipboard-history tools that honor
+that marker do not keep it; its status message says only whether it was
+copied. Copy Report copies the report as shown, which can include process
 names and PIDs or launch-job labels and their results. Text you select in the
 Process Detail sheet, including a command line, is copied only by your own
 Copy command. TaskScope does not read the clipboard.

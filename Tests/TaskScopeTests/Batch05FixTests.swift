@@ -257,40 +257,50 @@ final class Batch05ReaderFixTests: XCTestCase {
         XCTAssertTrue(row.hasExited)
     }
 
-    func testDetailArgumentsPreserveSpacesAndRejectAnotherProcess() async {
+    /// Another user's process: the kernel refuses its arguments, so `ps`
+    /// prints them, and its start time must still be the row's.
+    func testDetailCommandLinePreservesSpacesAndRejectsAnotherProcess() async {
         let process = batch05Process(42)
-        let reader = SystemProcessDetailReader()
         let arguments = "python  worker.py --name 'two words'"
         for (pid, stamp, expected) in [
-            (42, start, Optional(arguments)),
-            (42, "Wed Oct 7 17:04:48 2026", nil),
-            (43, start, nil)
+            (42, start, CommandLineReadResult.loaded(arguments)),
+            (42, "Wed Oct 7 17:04:48 2026", .identityChanged),
+            (43, start, .unavailable("The command line could not be parsed."))
         ] {
             let runner = Batch05ScriptedRunner([
                 shellResult("42 1 me \(start) /usr/bin/python"),
                 shellResult("\(pid) \(stamp) \(arguments)")
             ])
+            let commandLines = SystemProcessCommandLineReader(
+                processEntry: { .found(KernelProcessEntry(pid: $0, parentPID: 1, uid: 0, startSeconds: 1_791_392_687)) },
+                kernelArguments: { _ in .refused(errno: EINVAL) },
+                executablePath: { _ in nil },
+                run: { await runner.run($0) }
+            )
+            let reader = SystemProcessDetailReader(commandLineReader: commandLines)
 
             let detail = await reader.readDetail(for: process, run: { await runner.run($0) })
 
             XCTAssertEqual(detail?.command, "/usr/bin/python")
-            XCTAssertEqual(detail?.arguments, expected)
+            XCTAssertEqual(detail?.commandLine, expected)
         }
     }
 
     @MainActor
-    func testDetailSheetShowsTheArgumentsOrSaysTheyAreUnavailable() throws {
+    func testDetailSheetShowsTheCommandLineOrSaysWhyItIsUnavailable() throws {
         let process = batch05Process(42)
         var detail = ProcessDetail(pid: 42, parentPID: 1, user: "me", startTime: start, command: "/usr/bin/python")
-        detail.arguments = "python worker.py --port 8080"
+        detail.commandLine = .loaded("python worker.py --port 8080")
 
         let shown = ProcessDetailSheet(process: process, detail: detail, failed: false, onClose: {})
-        XCTAssertNoThrow(try shown.inspect().find(text: "Arguments"))
+        XCTAssertNoThrow(try shown.inspect().find(text: "Command Line"))
         XCTAssertNoThrow(try shown.inspect().find(text: "python worker.py --port 8080"))
+        XCTAssertThrowsError(try shown.inspect().find(text: "Arguments"))
 
-        detail.arguments = nil
+        detail.commandLine = .identityChanged
         let unavailable = ProcessDetailSheet(process: process, detail: detail, failed: false, onClose: {})
         XCTAssertNoThrow(try unavailable.inspect().find(text: "Unavailable"))
+        XCTAssertNoThrow(try unavailable.inspect().find(text: "This PID now belongs to a different process."))
     }
 
     func testIdentityStandardizesThePathAndFollowsUpdatesWithoutChangingTheRawPath() {

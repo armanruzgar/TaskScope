@@ -1447,6 +1447,9 @@ struct TaskScopePopoverView: View {
         Button("Copy Executable Path") {
             copyExecutablePath(of: process)
         }
+        Button("Copy Command Line") {
+            copyCommandLine(of: process)
+        }
         Divider()
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
@@ -1477,6 +1480,9 @@ struct TaskScopePopoverView: View {
         Button("Copy Executable Path") {
             copyExecutablePath(of: process)
         }
+        Button("Copy Command Line") {
+            copyCommandLine(of: process)
+        }
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
         }
@@ -1501,6 +1507,22 @@ struct TaskScopePopoverView: View {
             process.executablePath ?? process.command,
             forType: .string
         )
+    }
+
+    /// Reads the command line only now, on request, and copies it only if the
+    /// PID still has the row's identity; otherwise the footer says why.
+    func copyCommandLine(
+        of process: AppProcess,
+        write: @escaping @MainActor (String) -> Void = { ProcessCommandLineCopy.writeToClipboard($0) }
+    ) {
+        Task {
+            let message = await ProcessCommandLineCopy.perform(
+                for: process,
+                read: { await processManager.commandLine(for: $0) },
+                write: write
+            )
+            processManager.setMessage(message)
+        }
     }
 
     private func presetConfirmationMessage(

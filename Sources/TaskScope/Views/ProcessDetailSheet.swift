@@ -27,9 +27,8 @@ struct ProcessDetailSheet: View {
                 LabeledContent("User", value: detail.user)
                 LabeledContent("Started", value: detail.displayStartTime())
                 LabeledContent("Command", value: detail.command)
-                LabeledContent("Arguments") {
-                    Text(detail.arguments ?? "Unavailable")
-                        .textSelection(.enabled)
+                LabeledContent("Command Line") {
+                    commandLineValue(detail.commandLine)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -58,5 +57,23 @@ struct ProcessDetailSheet: View {
         .textSelection(.enabled)
         .padding(20)
         .frame(width: 420)
+    }
+
+    /// The command line, or why it is missing. It is shown only here.
+    @ViewBuilder
+    private func commandLineValue(_ result: CommandLineReadResult) -> some View {
+        if let commandLine = result.commandLine {
+            Text(verbatim: commandLine)
+                .textSelection(.enabled)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Unavailable")
+                if let reason = result.message {
+                    Text(verbatim: reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
     }
 }

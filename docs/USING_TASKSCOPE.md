@@ -63,8 +63,9 @@ start of each row; with a selection, the red button with the count offers
 stop button at the end of a row opens the Stop review for that process.
 Right-click a row for **Create Auto-Stop Rule…**, **Watch This Process…**,
 **Save Selection as Preset…** (when rows are selected), **Stop…**, **Force
-Stop…**, **Show Detail**, **Copy Executable Path**, and **Open in Activity
-Monitor**; VoiceOver offers the same actions in its Actions rotor.
+Stop…**, **Show Detail**, **Copy Executable Path**, **Copy Command Line**, and
+**Open in Activity Monitor**; VoiceOver offers the same actions in its Actions
+rotor.
 
 The process list supports search, sorting, filters, and flat or expandable tree
 views. When the display limit truncates results, **Showing N of M** includes
@@ -191,12 +192,14 @@ Preset stops also unload the preset's user launch agents before signalling
 ### Process details and Activity Monitor
 
 A row's context menu offers **Show Detail** (Command-I for the keyboard row),
-**Copy Executable Path**, and **Open in Activity Monitor**. Show Detail opens a
-read-only sheet with the name, PID, parent PID, owner's account name, start
-time, `ps` command name, **Arguments**, CPU, and memory. Arguments is the
-process's full command line, read only when you open the sheet and kept only if
-the process still has the row's start time; it reads **Unavailable** when it
-cannot be read. Command lines can contain secrets such as tokens, so check the
+**Copy Executable Path**, **Copy Command Line**, and **Open in Activity
+Monitor**. Show Detail opens a read-only sheet with the name, PID, parent PID,
+owner's account name, start time, `ps` command name, **Command Line**, CPU, and
+memory. Command Line is the process's full command line, its arguments
+separated by spaces as `ps` prints them. It is read only when you open the
+sheet, and only while the PID still has the row's start time and executable
+path, checked before and after the read; otherwise it reads **Unavailable**
+with the reason. Command lines can contain secrets such as tokens, so check the
 sheet before sharing a screenshot of it. You can select and copy the sheet's
 text; it has no copy button or Activity Monitor control. CPU and memory follow
 the process list while the process is listed; otherwise the sheet says they
@@ -208,6 +211,16 @@ Copy Executable Path copies the process's kernel executable path, or the `ps`
 command name when that path is unavailable; it never copies arguments. For a
 process started from a shell, the sheet's Command (for example `sleep`) can
 therefore differ from what Copy Executable Path copies (`/bin/sleep`).
+
+Copy Command Line reads the command line when you choose it, with the same
+checks as the sheet, and copies it only if the PID still belongs to the row's
+process. Otherwise nothing is copied and the footer says why, for example that
+the PID now belongs to a different process. The footer never shows the command
+line itself, and the clipboard entry is marked confidential
+(`org.nspasteboard.ConcealedType`) so that clipboard-history tools that honor
+that marker do not keep it. TaskScope reads your own processes' command lines
+directly from macOS; for other users' processes it runs `ps`, which can read
+them.
 
 Open in Activity Monitor requests exact selection of that process.
 The row's UTC start time and kernel executable path must match before opening,

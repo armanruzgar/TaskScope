@@ -1220,6 +1220,12 @@ final class ProcessManager: ObservableObject {
         return result
     }
 
+    /// The row's command line for Copy Command Line, read only if the PID still
+    /// has the row's identity. It is handed to the caller and never kept here.
+    func commandLine(for process: AppProcess) async -> CommandLineReadResult {
+        await detailReader.commandLine(for: process.identity)
+    }
+
     func detailResult(for process: AppProcess) async -> ProcessDetailResult {
         await detailReader.readResult(for: process)
     }

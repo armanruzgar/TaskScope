@@ -207,10 +207,10 @@ struct ProcessDetail: Equatable, Sendable {
     var user: String
     var startTime: String
     var command: String
-    /// The command line (`ps args`), read only for the detail sheet the user
-    /// asked for. It can contain secrets, so it is never logged or persisted.
-    /// Nil when it could not be read for this process.
-    var arguments: String? = nil
+    /// The command line, read only for the detail sheet the user asked for,
+    /// with the row's identity checked around the read. It can contain
+    /// secrets, so it is never logged, persisted or exported.
+    var commandLine: CommandLineReadResult = .unavailable("The command line was not read.")
 
     /// `ps lstart` runs in UTC (see ShellCommandRunner) so identities survive
     /// time-zone changes; show it in the viewer's time zone.
