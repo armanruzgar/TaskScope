@@ -101,12 +101,17 @@ final class ProcessHistoryTests: XCTestCase {
         XCTAssertEqual(history.state, .paused)
     }
 
-    func testResumingFromZeroConsumersDiscardsSamplesFromBeforeThePause() async {
+    /// L11-14: reopening the window shows the samples still inside the time
+    /// window. Nothing was read while paused, so the first new sample starts a
+    /// new segment instead of joining them as if contiguous (the concern behind
+    /// the old rule that discarded them).
+    func testResumingFromZeroConsumersKeepsSamplesInsideTheWindowAsASeparateSegment() async {
         let inventory = HistoryInventory(results: [
             .success([process(pid: 1, cpu: 400, memory: 100)]),
             .success([process(pid: 2, cpu: 5, memory: 50)])
         ])
-        let history = ProcessHistory(inventory: inventory)
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let history = ProcessHistory(inventory: inventory, now: { clock })
 
         history.beginSampling(cadence: 60)
         for _ in 0..<1000 where history.samples.isEmpty {
@@ -118,13 +123,58 @@ final class ProcessHistoryTests: XCTestCase {
         XCTAssertEqual(history.state, .paused)
         XCTAssertEqual(history.samples.map(\.observedProcessCPU), [400], "Paused display keeps the last samples")
 
+        clock.addTimeInterval(120)
         history.beginSampling(cadence: 60)
-        XCTAssertEqual(history.samples, [], "Resuming clears samples from before the pause")
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [400], "Reopening shows what was collected")
+        for _ in 0..<1000 where history.samples.count < 2 {
+            await Task.yield()
+        }
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [400, 5])
+        XCTAssertEqual(history.samples.map(\.startsNewSegment), [false, true], "The pause is not drawn as data")
+        history.endSampling()
+    }
+
+    func testResumingAfterTheWindowDropsSamplesItNoLongerReaches() async {
+        let inventory = HistoryInventory(results: [
+            .success([process(pid: 1, cpu: 400, memory: 100)]),
+            .success([process(pid: 2, cpu: 5, memory: 50)])
+        ])
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let history = ProcessHistory(inventory: inventory, maxSamples: 6, now: { clock })
+
+        history.beginSampling(cadence: 10)
+        for _ in 0..<1000 where history.samples.isEmpty {
+            await Task.yield()
+        }
+        history.endSampling()
+        XCTAssertEqual(history.windowDuration, 60, "6 samples at 10 s")
+
+        clock.addTimeInterval(61)
+        history.beginSampling(cadence: 10)
+        XCTAssertEqual(history.samples, [], "Older than the window")
         for _ in 0..<1000 where history.samples.isEmpty {
             await Task.yield()
         }
         XCTAssertEqual(history.samples.map(\.observedProcessCPU), [5])
         history.endSampling()
+    }
+
+    func testTheWindowFollowsTheCadenceAndRecordingDropsSamplesOutsideIt() {
+        var clock = Date(timeIntervalSince1970: 1_000)
+        let history = ProcessHistory(inventory: HistoryInventory(results: []), maxSamples: 60, now: { clock })
+        XCTAssertEqual(history.windowDuration, 600, "10 minutes at the default 10 s")
+        history.updateConsumerCadence(2)
+        XCTAssertEqual(history.windowDuration, 120)
+        history.updateConsumerCadence(1)
+        XCTAssertEqual(history.cadence, 2, "The cadence has the poll's 2 s floor")
+
+        history.record(processes: [process(pid: 1, cpu: 1, memory: 1)])
+        clock.addTimeInterval(100)
+        history.record(processes: [process(pid: 1, cpu: 2, memory: 1)])
+        clock.addTimeInterval(30)
+        history.record(processes: [process(pid: 1, cpu: 3, memory: 1)])
+        XCTAssertEqual(history.samples.map(\.observedProcessCPU), [2, 3], "130 s back is outside a 120 s window")
+        XCTAssertEqual(history.samples.map(\.processCount), [1, 1])
     }
 
     func testAdditionalConsumerDoesNotDiscardSamples() async {

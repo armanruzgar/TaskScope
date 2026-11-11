@@ -1,13 +1,22 @@
 import Foundation
 
+/// CPU and memory history of every observed process, for the main window's
+/// header charts. It lives as long as the app, so reopening the window shows
+/// the samples still inside the time window; it samples only while a chart is
+/// visible.
 @MainActor
 final class ProcessHistory: ObservableObject {
     typealias Sleeper = @Sendable (TimeInterval) async -> Bool
 
     struct Sample: Equatable {
+        /// When the read finished; the charts place samples by it.
         var timestamp: Date
+        /// The sum of %CPU over the observed processes (100 is one core).
         var observedProcessCPU: Double
+        /// The sum of resident memory over the observed processes. Shared
+        /// pages count once per process, so it can exceed physical memory.
         var observedProcessMemoryMB: Double
+        /// How many processes the sums cover.
         var processCount: Int
         var startsNewSegment = false
     }
@@ -28,6 +37,8 @@ final class ProcessHistory: ObservableObject {
 
     @Published private(set) var samples: [Sample] = []
     @Published private(set) var state: SamplingState = .paused
+    /// The sampling interval the charts are read at, the watched-status interval.
+    @Published private(set) var cadence: TimeInterval = 10
 
     private let inventory: any ProcessInventoryProviding
     private let now: () -> Date
@@ -37,7 +48,6 @@ final class ProcessHistory: ObservableObject {
     private var samplingTask: Task<Void, Never>?
     private var samplingGeneration = 0
     private var consumerCount = 0
-    private var consumerCadence: TimeInterval = 10
     /// Set while ProcessManager polls: its scheduled reads then supply the
     /// samples, so the history's own timer stands down instead of reading the
     /// inventory again at an unrelated phase.
@@ -94,16 +104,25 @@ final class ProcessHistory: ObservableObject {
         }
     }
 
+    /// The time the charts cover: the buffer's sample count at the current
+    /// cadence, for example 10 minutes at the default 10 s.
+    var windowDuration: TimeInterval {
+        Double(maxSamples) * cadence
+    }
+
     func beginSampling(cadence: TimeInterval) {
         consumerCount += 1
-        consumerCadence = max(2, cadence)
+        self.cadence = max(2, cadence)
         guard consumerCount == 1 else { return }
-        // Resuming from zero consumers: samples kept from before the pause are
-        // stale and would be drawn joined to the new ones as if contiguous.
-        samples.removeAll()
+        // Resuming from zero consumers keeps the samples still inside the time
+        // window, so a reopened window shows them. Nothing was read while
+        // paused, so the next sample starts a new segment instead of being
+        // drawn joined to them as if contiguous.
+        pruneSamples(olderThan: now().addingTimeInterval(-windowDuration))
+        hasGap = !samples.isEmpty
         // Read once now even while polling, so a window opened between polls
         // does not wait up to a whole interval for its first sample.
-        start(cadence: consumerCadence)
+        start(cadence: self.cadence)
     }
 
     func endSampling() {
@@ -114,9 +133,9 @@ final class ProcessHistory: ObservableObject {
     }
 
     func updateConsumerCadence(_ cadence: TimeInterval) {
-        consumerCadence = max(2, cadence)
+        self.cadence = max(2, cadence)
         if consumerCount > 0, !pollingActive {
-            start(cadence: consumerCadence, sampleImmediately: false)
+            start(cadence: self.cadence, sampleImmediately: false)
         }
     }
 
@@ -127,7 +146,7 @@ final class ProcessHistory: ObservableObject {
         pollingActive = active
         // Becoming active needs no action here: a running loop ends by itself.
         guard !active, consumerCount > 0 else { return }
-        start(cadence: consumerCadence)
+        start(cadence: cadence)
     }
 
     /// Records a read made by the manager's poll tick while a consumer is
@@ -170,9 +189,10 @@ final class ProcessHistory: ObservableObject {
     func record(processes: [AppProcess]) {
         let cpu = processes.reduce(0.0) { $0 + $1.cpu }
         let memory = processes.reduce(0.0) { $0 + $1.memoryMB }
+        let timestamp = now()
         samples.append(
             Sample(
-                timestamp: now(),
+                timestamp: timestamp,
                 observedProcessCPU: cpu,
                 observedProcessMemoryMB: memory,
                 processCount: processes.count,
@@ -180,8 +200,18 @@ final class ProcessHistory: ObservableObject {
             )
         )
         hasGap = false
+        pruneSamples(olderThan: timestamp.addingTimeInterval(-windowDuration))
         if samples.count > maxSamples {
             samples.removeFirst(samples.count - maxSamples)
         }
+    }
+
+    /// Drops samples the charts' time window no longer reaches.
+    private func pruneSamples(olderThan cutoff: Date) {
+        guard let first = samples.firstIndex(where: { $0.timestamp >= cutoff }) else {
+            samples.removeAll()
+            return
+        }
+        if first > 0 { samples.removeFirst(first) }
     }
 }

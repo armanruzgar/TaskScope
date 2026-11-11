@@ -293,9 +293,9 @@ final class Batch10PresentationTests: XCTestCase {
         let state = ProcessHistory.SamplingState.unavailable("ps failed")
         let sample = ProcessHistory.Sample(timestamp: Date(), observedProcessCPU: 1, observedProcessMemoryMB: 2, processCount: 3)
         let chart = SparklineView(samples: [sample], keyPath: \.observedProcessCPU, color: .orange, label: "PROC CPU %", unit: "percent", samplingState: state)
-        XCTAssertEqual(try chart.inspect().vStack().accessibilityValue().string(), "Latest 1.0 percent, 1 sample, Unavailable")
+        XCTAssertEqual(try chart.inspect().vStack().accessibilityValue().string(), "Latest 1.0 percent, peak 1.0 percent, 1 sample, Unavailable")
         let live = SparklineView(samples: [sample], keyPath: \.observedProcessCPU, color: .orange, label: "PROC CPU %", unit: "percent")
-        XCTAssertEqual(try live.inspect().vStack().accessibilityValue().string(), "Latest 1.0 percent, 1 sample")
+        XCTAssertEqual(try live.inspect().vStack().accessibilityValue().string(), "Latest 1.0 percent, peak 1.0 percent, 1 sample")
         XCTAssertEqual(state.detail, "History unavailable: ps failed")
     }
 

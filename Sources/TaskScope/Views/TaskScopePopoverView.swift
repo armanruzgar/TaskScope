@@ -640,6 +640,7 @@ struct TaskScopePopoverView: View {
             ),
             samples: history.samples,
             samplingState: history.state,
+            historyWindow: history.windowDuration,
             showsMetrics: isExpandedWindow,
             showsOpenWindowButton: presentationStyle == .menuBarCompact && openFullWindow != nil,
             openFullWindow: openFullWindow,

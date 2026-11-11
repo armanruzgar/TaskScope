@@ -33,7 +33,8 @@ before installing.
   and Helpers actions; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
 - Create Prompt, Auto Stop, or Log Only rules on run time, sustained CPU or memory use, and command-line text, and review their event history.
-- View CPU and memory history and opt into watched-process notifications.
+- View the last minutes of total CPU and resident memory, with latest and peak
+  values, and opt into watched-process notifications.
 - Use Shortcuts, a configurable global hotkey, and optional Launch at Login.
 - Inspect permissions and installation health, and preview redacted support reports.
 

@@ -573,15 +573,24 @@ as ambiguous.
 
 ## History, notifications, and hotkeys
 
-The window's header charts (**PROC CPU %** and **PROC RSS**) sum the whole
-observed process inventory; the popover does not show them. They have Live,
-Paused, and Unavailable states and keep at most 60 samples in memory; they say
-when history is unavailable, and a failed read starts a new line segment.
-Sampling pauses when no metrics view is visible. While TaskScope polls, the
-charts reuse each refresh's process read instead of reading on their own
-timer, so samples follow the watched status interval; opening the window takes
-one sample at once. Changing the interval schedules the next sample without an
-immediate sample burst.
+The window's header charts sum the whole observed process inventory; the
+popover does not show them. **CPU SUM** adds every process's %CPU, where 100% is
+one core. **RSS SUM** adds every process's resident memory; memory that
+processes share counts once per process, so the sum can exceed the Mac's
+memory. Each chart shows its latest value and, below the line, its peak in the
+time window; the line is scaled to that peak and placed by time. The window
+holds 60 samples at the watched status interval, so the charts cover the last
+10 minutes at the default 10 s, and the span is shown beside them. Hover a chart
+for how many processes it covers. A failed read, or a pause, starts a new line
+segment. The charts say **History paused** or **History unavailable** when
+they are not live.
+
+Sampling pauses when no metrics view is visible. Reopening the window shows the
+samples still inside the time window, drawn apart from the new ones; older ones
+are dropped. While TaskScope polls, the charts reuse each refresh's process read
+instead of reading on their own timer, so samples follow the watched status
+interval; opening the window takes one sample at once. Changing the interval
+schedules the next sample without an immediate sample burst.
 
 Turn on **Notify on watched process changes** in **Settings > General**, and
 choose which presets notify with each preset's **Notify** switch in **Settings >

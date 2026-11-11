@@ -216,7 +216,7 @@ final class Batch06GuardTests: XCTestCase {
             let stack = try chart.inspect().find(ViewType.VStack.self)
             XCTAssertEqual(try stack.accessibilityLabel().string(), "CPU")
             let latest = 25.5.formatted(.number.precision(.fractionLength(1)))
-            XCTAssertEqual(try stack.accessibilityValue().string(), values.isEmpty ? "No samples" : "Latest \(latest) percent, 2 samples")
+            XCTAssertEqual(try stack.accessibilityValue().string(), values.isEmpty ? "No samples" : "Latest \(latest) percent, peak \(latest) percent, 2 samples")
         }
     }
 }

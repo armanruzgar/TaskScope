@@ -119,8 +119,9 @@ startup-verification preference plists in the user's normal or host-specific
 preferences directories and remove that test domain and its plists at cleanup.
 A temporary `CFFIXED_USER_HOME` alone does not isolate preferences.
 
-The process-history chart keeps at most 60 samples in memory and does not
-persist them. Pending prompts, current process inventory, and separate watched
+The process-history charts keep at most 60 samples, each a CPU sum, a memory
+sum, a process count and a time, in memory for as long as TaskScope runs, also
+while the window is closed, and do not persist them. Pending prompts, current process inventory, and separate watched
 and displayed-list observation timestamps are also transient. Rule edits that
 cancel an automatic stop before signalling do not add a failure event. Accepted
 requests retain their event history; edits that keep Auto Stop enabled and
@@ -283,9 +284,9 @@ deleting TaskScope's preferences.
   events and preserve the original payload in a `.rejectedMigrationBackup`
   slot. The store stays read-only until explicit reset commits recovered events
   and retained session history, and resumes durable logging.
-- Process chart history retains the newest 60 in-memory samples and disappears
-  when the app exits. Changing the cadence reschedules the next sample without
-  adding an immediate sample.
+- Process chart history retains the newest 60 in-memory samples, at most the
+  charts' time window old, and disappears when the app exits. Changing the
+  cadence reschedules the next sample without adding an immediate sample.
 - Other preferences remain until changed, reset, or deleted by the user.
 - Both recovery-backup families and their numbered slots remain until the
   preferences domain is removed or they are deliberately deleted. Reset does

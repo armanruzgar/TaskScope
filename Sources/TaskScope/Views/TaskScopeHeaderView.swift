@@ -5,6 +5,8 @@ struct TaskScopeHeaderView: View {
     var watchedStatusAvailability: WatchedStatusAvailability = .current
     var samples: [ProcessHistory.Sample]
     var samplingState: ProcessHistory.SamplingState
+    /// The time the history charts cover (`ProcessHistory.windowDuration`).
+    var historyWindow: TimeInterval = 600
     var showsMetrics: Bool
     var showsOpenWindowButton: Bool
     var openFullWindow: (() -> Void)?
@@ -43,29 +45,39 @@ struct TaskScopeHeaderView: View {
                         samples: samples,
                         keyPath: \.observedProcessCPU,
                         color: .orange,
-                        label: "PROC CPU %",
+                        label: "CPU SUM",
                         unit: "percent",
-                        samplingState: samplingState
+                        samplingState: samplingState,
+                        window: historyWindow,
+                        format: Self.percentText
                     )
-                        .frame(width: 70)
+                    .frame(width: 112)
+                    .help(cpuHelp)
                     SparklineView(
                         samples: samples,
                         keyPath: \.observedProcessMemoryMB,
                         color: .blue,
-                        label: "PROC RSS",
+                        label: "RSS SUM",
                         unit: "megabytes",
-                        samplingState: samplingState
+                        samplingState: samplingState,
+                        window: historyWindow,
+                        format: Self.memoryText
                     )
-                        .frame(width: 70)
+                    .frame(width: 112)
+                    .help(memoryHelp)
                 }
                 .opacity(samplingState.isUnavailable ? 0.5 : 1)
-                .help(samplingState.detail)
-                if samplingState.isUnavailable {
-                    Text("History unavailable")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .help(samplingState.detail)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("last \(SparklineView.spanText(historyWindow))")
+                        .help("The charts cover the last \(SparklineView.spanText(historyWindow)), sampled at the watched status interval.")
+                    // Live is the usual state; any other one is said, not only on hover.
+                    if samplingState != .sampling {
+                        Text("History \(samplingState.label.lowercased())")
+                            .help(samplingState.detail)
+                    }
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             }
 
             Spacer()
@@ -101,6 +113,34 @@ struct TaskScopeHeaderView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
+    }
+
+    /// The process count of the latest sample, for the charts' help.
+    private var coverage: String {
+        guard let count = samples.last?.processCount else { return "the observed processes" }
+        return count == 1 ? "1 observed process" : "\(count.formatted()) observed processes"
+    }
+
+    private var cpuHelp: String {
+        "Sum of %CPU over \(coverage); 100% is one core. The line is scaled to its peak in the window. \(samplingState.label)."
+    }
+
+    private var memoryHelp: String {
+        "Sum of the resident memory of \(coverage). Memory that processes share counts once per process, so the sum can exceed the Mac's memory. The line is scaled to its peak in the window. \(samplingState.label)."
+    }
+
+    /// "3.2%" below 10, "883%" above.
+    static func percentText(_ value: Double) -> String {
+        value < 10
+            ? "\(value.formatted(.number.precision(.fractionLength(1))))%"
+            : "\(value.formatted(.number.precision(.fractionLength(0))))%"
+    }
+
+    /// "512 MB", or "62.3 GB" from 1024 MB.
+    static func memoryText(_ megabytes: Double) -> String {
+        megabytes < 1024
+            ? "\(megabytes.formatted(.number.precision(.fractionLength(0)))) MB"
+            : "\((megabytes / 1024).formatted(.number.precision(.fractionLength(1)))) GB"
     }
 
     private var statusPill: some View {
