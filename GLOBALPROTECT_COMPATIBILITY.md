@@ -245,7 +245,7 @@ commit SHA. Any other content change requires a new tested revision. Preflight
 does not replace the full release's clean-worktree check.
 
 This deliberately incomplete template illustrates all required fields, using
-version 1.1.0 build 3 as an example. A real manifest names the `VERSION` and
+version 1.2.0 build 4 as an example. A real manifest names the `VERSION` and
 `BUILD_NUMBER` of the candidate actually tested, which must be raised above
 every released version. Replace the
 placeholders and every `not-tested` only after collecting the corresponding
@@ -255,8 +255,8 @@ evidence; copying it unchanged must fail:
 schema_version=1
 evidence_kind=authorized-lifecycle
 test_date=YYYY-MM-DD
-taskscope_version=1.1.0
-taskscope_build=3
+taskscope_version=1.2.0
+taskscope_build=4
 source_revision=FULL_TESTED_COMMIT_SHA
 bundle_id=YOUR_PRODUCTION_BUNDLE_ID
 signing_kind=OBSERVED_SIGNING_KIND
@@ -268,7 +268,7 @@ globalprotect_version=TESTED_GLOBALPROTECT_VERSION
 agent_layout=OBSERVED_AGENT_LAYOUT
 persistence_event=PERFORMED_EVENT
 coverage_gaps=not-tested
-manual_results=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/manual.md
+manual_results=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/manual.md
 result_baseline=not-tested
 result_keep_off=not-tested
 result_relaunch=not-tested
@@ -278,15 +278,15 @@ result_open=not-tested
 result_protected_service=not-tested
 result_vpn=not-tested
 result_managed_policy=not-tested
-report_baseline=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/baseline.txt
-report_keep_off=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/keep-off.txt
-report_relaunch=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/relaunch.txt
-report_persistence=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/persistence.txt
-report_keep_off_disabled=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/keep-off-disabled.txt
-report_open=Evidence/GlobalProtect/lifecycle/1.1.0-3/environment/open.txt
+report_baseline=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/baseline.txt
+report_keep_off=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/keep-off.txt
+report_relaunch=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/relaunch.txt
+report_persistence=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/persistence.txt
+report_keep_off_disabled=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/keep-off-disabled.txt
+report_open=Evidence/GlobalProtect/lifecycle/1.2.0-4/environment/open.txt
 ```
 
-Place the manifest itself directly in `1.1.0-3/`, for example
+Place the manifest itself directly in `1.2.0-4/`, for example
 `environment.evidence`; referenced artifacts may use subdirectories. Update the
 human evidence matrix and release notes to match the actual tested combinations.
 The gate validates the manifest, source binding, and presence of retained files.

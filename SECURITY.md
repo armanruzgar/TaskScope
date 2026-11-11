@@ -5,11 +5,12 @@
 | Version | Security support |
 | --- | --- |
 | `main` | Security fixes are made here. Active development; not a stable release |
-| 1.1.0 | The latest published release. It has no maintenance branch and gets no separate fixes; a fix for a problem in 1.1.0 is made on `main` |
+| 1.2.0 | The latest published release. It has no maintenance branch and gets no separate fixes; a fix for a problem in 1.2.0 is made on `main` |
+| 1.1.0 | Superseded by 1.2.0 and not supported |
 | 1.0.0 | Superseded by 1.1.0 and not supported |
 
-Both are source releases: their GitHub releases (tags `v1.0.0` and `v1.1.0`)
-contain GitHub-generated source archives and no app binary. A changelog entry or a
+All three are source releases: their GitHub releases (tags `v1.0.0`, `v1.1.0`
+and `v1.2.0`) contain GitHub-generated source archives and no app binary. A changelog entry or a
 local app bundle is not a published release. Say which version or commit you
 tested when you report a problem.
 

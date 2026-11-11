@@ -5,6 +5,15 @@ All notable changes to TaskScope are documented in this file. The project uses
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-11
+
+Source/development release that finishes the November 2026 audit and adds
+process command lines, sortable columns, a richer Process Detail, Pause and
+Resume, Keep Off for any preset, CPU, memory and command-line rule conditions,
+a menu-bar icon that shows state, and configuration backup. Build metadata is
+`1.2.0 (4)`. Like 1.0.0 and 1.1.0, it does not include a Developer ID-signed,
+notarized, universal, or public binary.
+
 ### Added
 
 - Added a **User** column and per-second network and disk columns (**NET KB/S** in / out, **DISK MB/S** read / write) to the window's process list. Account names come with the list read; rates are averaged since the previous refresh and show a dash until the second one. All three columns sort, and VoiceOver reads them. The window's minimum width is now 830 points.
@@ -329,6 +338,7 @@ does not include a Developer ID-signed, notarized, universal, or public binary.
 - Keep corrupt preset, rule, event, settings, and saved-selection backups from
   being clobbered by later reads.
 
-[Unreleased]: https://github.com/armanruzgar/TaskScope/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/armanruzgar/TaskScope/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/armanruzgar/TaskScope/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/armanruzgar/TaskScope/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/armanruzgar/TaskScope/releases/tag/v1.0.0

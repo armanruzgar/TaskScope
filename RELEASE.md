@@ -5,10 +5,10 @@ release is complete only when its tag, notes, artifacts, and documented claims
 match independently verified evidence. A changelog entry, local install, or
 staged app is not itself a published release.
 
-## Current 1.1.0 scope
+## Current 1.2.0 scope
 
-- Version: `1.1.0`
-- Build: `3` (the 1.0.0 tag carries build `2`; `script/release.sh` refuses a
+- Version: `1.2.0`
+- Build: `4` (the 1.1.0 tag carries build `3`; `script/release.sh` refuses a
   build number that is not greater than every `v*` tag's)
 - Deployment target: macOS 14
 - Verified packaging architecture: arm64 only
@@ -17,10 +17,11 @@ staged app is not itself a published release.
   the original repository, so commits from before 2026-10-17 have different
   SHAs; [Evidence/README.md](Evidence/README.md#commit-shas-in-older-records)
   maps the SHAs that older records cite
-- Releases: 1.1.0 (tag `v1.1.0`, 2026-11-10) is the latest source release;
-  1.0.0 is superseded. Because both tags exist, `script/release.sh` refuses
-  `VERSION` 1.0.0 and 1.1.0; before the next release, raise `VERSION` and move
-  the `[Unreleased]` changelog entries under a `## [<version>]` heading
+- Releases: 1.2.0 (tag `v1.2.0`, 2026-11-11) is the latest source release;
+  1.1.0 and 1.0.0 are superseded. Because their tags exist, `script/release.sh`
+  refuses `VERSION` 1.0.0, 1.1.0 and 1.2.0; before the next release, raise
+  `VERSION` and `BUILD_NUMBER` and move the `[Unreleased]` changelog entries
+  under a `## [<version>]` heading
 - Local bundle identifier: `com.local.TaskScope`
 - Possible local signatures: Apple Development or ad-hoc, both with the hardened
   runtime; only `--debug` builds add the `get-task-allow` debugging entitlement
