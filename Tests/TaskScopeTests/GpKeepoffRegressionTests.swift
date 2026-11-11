@@ -327,7 +327,8 @@ final class GpKeepoffRegressionTests: XCTestCase {
         ProcessLifecycleRuntime(userID: getuid(), fileExists: { _ in false }, launchAgentLabel: { _ in nil },
                                 runCommand: { command, _ in
             // Fixed job output is simulated, including another session's absent local jobs.
-            let inspected: GlobalProtectCompatibilityReport.Service = command.contains("system/") ? .pangpsd : .pangps
+            let inspected: GlobalProtectCompatibilityReport.Service = command.arguments.contains { $0.hasPrefix("system/") }
+                ? .pangpsd : .pangps
             if inspected == service {
                 return ShellCommandResult(command: command, stdout: "job = {\n\tpid = 4242\n}", stderr: "", exitCode: 0)
             }
@@ -364,11 +365,11 @@ final class GpKeepoffRegressionTests: XCTestCase {
     private func fakeRuntime(unknown: Bool) -> ProcessLifecycleRuntime {
         ProcessLifecycleRuntime(userID: getuid(), fileExists: { _ in true }, launchAgentLabel: { _ in nil },
                                 runCommand: { command, _ in
-            // Command strings are interpreted only by this fake; no shell is run.
-            if command == "/bin/launchctl print-disabled system" {
+            // Commands are interpreted only by this fake; nothing is run.
+            if command == .launchctl("print-disabled", "system") {
                 return ShellCommandResult(command: command, stdout: "disabled services = {\n}", stderr: "", exitCode: 0)
             }
-            if command.hasPrefix("/bin/launchctl print ") {
+            if command.isLaunchctl("print") {
                 return ShellCommandResult(command: command, stdout: unknown ? "" : "system/com.paloaltonetworks.gp.pangpsd = {\n state = running\n\tpid = 4242\n}",
                                           stderr: unknown ? "Access denied" : "", exitCode: unknown ? 1 : 0)
             }

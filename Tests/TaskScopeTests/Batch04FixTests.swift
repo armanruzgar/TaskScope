@@ -46,7 +46,7 @@ final class Batch04FixTests: XCTestCase {
         let disabled = await SystemProcessLifecycleService(runtime: disableFake.runtime).disableUserLaunchAgents(for: preset, preservingVPNService: false)
         XCTAssertEqual(disabled.jobs.map(\.state), [.failed])
         XCTAssertEqual(disabled.jobs.first?.detail, "Operation not permitted")
-        XCTAssertEqual(disableFake.commands, ["/bin/launchctl disable 'gui/501/batch04.agent'"])
+        XCTAssertEqual(disableFake.commands, [.launchctl("disable", "gui/501/batch04.agent")])
         let enableFake = harness([batch04Result("disabled services = {\n}"), refusal])
         let enabled = await SystemProcessLifecycleService(runtime: enableFake.runtime).enableUserLaunchAgents(for: preset)
         XCTAssertFalse(enabled.succeeded)
@@ -68,7 +68,7 @@ final class Batch04FixTests: XCTestCase {
         let failed = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: preset, runtime: fake.runtime)
         XCTAssertEqual(failed.jobs.first?.detail, "Bootstrap refused")
         XCTAssertFalse(failed.succeeded)
-        XCTAssertFalse(fake.commands.contains { $0.contains("kickstart") })
+        XCTAssertFalse(fake.commands.contains { $0.mentions("kickstart") })
         let unverified = harness([absent, batch04Result(), batch04Result(), batch04Result(), absent])
         let final = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: preset, runtime: unverified.runtime)
         XCTAssertEqual(final.jobs.first?.state, .failed)
@@ -86,7 +86,7 @@ final class Batch04FixTests: XCTestCase {
         let fake = harness([batch04Result(error: "Operation not permitted", code: 1)])
         let denied = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: preset, runtime: fake.runtime)
         XCTAssertFalse(denied.succeeded)
-        XCTAssertEqual(fake.commands, ["/bin/launchctl print 'gui/501/batch04.agent'"])
+        XCTAssertEqual(fake.commands, [.launchctl("print", "gui/501/batch04.agent")])
     }
 
     func testLoadedStateWinsOverBootstrapAndKickstartExitStatus() async {
@@ -218,7 +218,7 @@ final class Batch04FixTests: XCTestCase {
         let fake = harness([batch04Result(Self.realShapeRunningListing)])
         let result = await ProcessLifecycleController.unloadUserLaunchAgents(for: preset, preservingPIDs: [4242], runtime: fake.runtime)
         XCTAssertEqual(result.jobs.map(\.state), [.alreadyLoaded])
-        XCTAssertFalse(fake.commands.contains { $0.contains("bootout") })
+        XCTAssertFalse(fake.commands.contains { $0.mentions("bootout") })
     }
 
     func testOpaqueXPCBracesDoNotHideJobPIDAndUnverifiablePIDIsPreserved() async {
@@ -229,7 +229,7 @@ final class Batch04FixTests: XCTestCase {
             let result = await SystemProcessLifecycleService(runtime: fake.runtime).unloadUserLaunchAgents(for: preset, preservingPIDs: [42])
             XCTAssertFalse(result.didChangeState)
             XCTAssertEqual(fake.commands.count, 1)
-            XCTAssertFalse(fake.commands.contains { $0.contains("bootout") })
+            XCTAssertFalse(fake.commands.contains { $0.mentions("bootout") })
         }
     }
 
@@ -241,7 +241,9 @@ final class Batch04FixTests: XCTestCase {
         let fake = harness([loaded, batch04Result(), secondAbsent, loaded, batch04Result(), absent])
         let result = await ProcessLifecycleController.unloadUserLaunchAgents(for: two, runtime: fake.runtime)
         XCTAssertTrue(result.succeeded)
-        XCTAssertEqual(fake.commands.filter { $0.contains("bootout") }, ["/bin/launchctl bootout 'gui/501/batch04.second'", "/bin/launchctl bootout 'gui/501/batch04.agent'"])
+        XCTAssertEqual(fake.commands.filter { $0.isLaunchctl("bootout") }, [
+            .launchctl("bootout", "gui/501/batch04.second"), .launchctl("bootout", "gui/501/batch04.agent")
+        ])
     }
 
     func testOpenBundleMissingAndCommandFailuresRetainDetails() async {
@@ -292,34 +294,34 @@ final class Batch04FixTests: XCTestCase {
         let session = WatchedAppPreset.globalProtectSessionAgent
         for preserve in [true, false] {
             let fake = LifecycleRuntimeHarness(existingPaths: [], commandResults: [], respond: { command in
-                if command.contains(" print ") {
+                if command.isLaunchctl("print") {
                     return batch04Result(error: launchctlNotFoundMessage(command: command), code: 113)
                 }
                 return batch04Result()
             })
             let result = await SystemProcessLifecycleService(runtime: fake.runtime).disableUserLaunchAgents(for: .globalProtect, preservingVPNService: preserve)
             XCTAssertTrue(result.succeeded)
-            XCTAssertEqual(fake.commands.contains("/bin/launchctl print 'gui/501/\(session.label)'"), !preserve)
-            XCTAssertTrue(fake.commands.contains("/bin/launchctl disable 'gui/501/\(session.label)'"))
+            XCTAssertEqual(fake.commands.contains(.launchctl("print", "gui/501/\(session.label)")), !preserve)
+            XCTAssertTrue(fake.commands.contains(.launchctl("disable", "gui/501/\(session.label)")))
         }
         for allowPrompt in [false, true] {
             let fake = LifecycleRuntimeHarness(existingPaths: [daemon.plistPath], commandResults: [], respond: { command in
-                if command.contains("print-disabled") { return batch04Result("disabled services = {\n}") }
-                if command.contains("osascript") { return batch04Result(error: "0:1: execution error: User canceled. (-128)", code: 1) }
+                if command.isLaunchctl("print-disabled") { return batch04Result("disabled services = {\n}") }
+                if command.isAdministratorRequest { return batch04Result(error: "0:1: execution error: User canceled. (-128)", code: 1) }
                 return batch04Result(launchctlPrintOutput(pid: 42, target: "system/com.paloaltonetworks.gp.pangpsd"))
             })
             let result = await SystemProcessLifecycleService(runtime: fake.runtime).disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: allowPrompt)
             XCTAssertFalse(result.succeeded)
-            XCTAssertEqual(fake.commands.filter { $0.contains("osascript") }.count, allowPrompt ? 1 : 0)
+            XCTAssertEqual(fake.commands.filter { $0.isAdministratorRequest }.count, allowPrompt ? 1 : 0)
         }
         let enable = LifecycleRuntimeHarness(existingPaths: [], commandResults: [], respond: { command in
-            command.contains("print-disabled")
+            command.isLaunchctl("print-disabled")
                 ? batch04Result("disabled services = {\n\t\"com.paloaltonetworks.gp.pangpsd\" => disabled\n}")
                 : batch04Result(error: "0:1: execution error: User canceled. (-128)", code: 1)
         })
         let enabled = await SystemProcessLifecycleService(runtime: enable.runtime).enableSystemLaunchDaemons(for: .globalProtect)
         XCTAssertFalse(enabled.succeeded)
-        XCTAssertEqual(enable.commands.filter { $0.contains("osascript") }.count, 1)
+        XCTAssertEqual(enable.commands.filter { $0.isAdministratorRequest }.count, 1)
     }
 
     func testSystemReadinessRejectsWrongNameOwnerAndKernelPathAndRequiresPlistLabel() async {
@@ -333,7 +335,7 @@ final class Batch04FixTests: XCTestCase {
             XCTAssertEqual(readiness, .loadedButNotReady)
             let opened = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
             XCTAssertFalse(opened.succeeded)
-            XCTAssertFalse(fake.commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(fake.commands.contains { $0.isAdministratorRequest })
         }
         // A daemon that is not loaded is never bootstrapped from a plist whose
         // Label is not the job's.
@@ -342,7 +344,7 @@ final class Batch04FixTests: XCTestCase {
         let wrong = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: unloaded.runtime)
         XCTAssertFalse(wrong.succeeded)
         XCTAssertTrue(wrong.failureSummary?.contains("mismatched Label") == true)
-        XCTAssertFalse(unloaded.commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(unloaded.commands.contains { $0.isAdministratorRequest })
         // A daemon that is already running needs no privileged command, so the
         // plist Label does not block Open.
         let root = batch04Process(pid: 42, uid: 0, path: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
@@ -350,7 +352,7 @@ final class Batch04FixTests: XCTestCase {
             respond: { _ in batch04Result(launchctlPrintOutput(pid: 42, target: "system/com.paloaltonetworks.gp.pangpsd")) }, inventory: [root])
         let ready = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: running.runtime)
         XCTAssertEqual(ready.jobs.map(\.state), [.verified])
-        XCTAssertFalse(running.commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(running.commands.contains { $0.isAdministratorRequest })
     }
 
     func testInjectedRuntimeNeverReachesTheLiveGlobalProtectDisconnect() async {
@@ -368,7 +370,7 @@ final class Batch04FixTests: XCTestCase {
         XCTAssertEqual(ProcessLifecycleController.AdministratorStopOutcome(cancelled), .failed("exited with status \(ShellCommandRunner.cancelledExitCode)"))
         let job = daemon
         let fake = LifecycleRuntimeHarness(existingPaths: [job.plistPath], launchAgentLabels: [job.plistPath: job.label], commandResults: [], respond: { command in
-            command.contains("osascript") ? cancelled : batch04Result(error: "Could not find service \"\(job.label)\" in domain for system", code: 113)
+            command.isAdministratorRequest ? cancelled : batch04Result(error: "Could not find service \"\(job.label)\" in domain for system", code: 113)
         })
         let result = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
         XCTAssertEqual(result.jobs.first?.detail, "Command cancelled.")
@@ -378,7 +380,7 @@ final class Batch04FixTests: XCTestCase {
         for errorCode in [0, -128, -60006, -60005, -60007] {
             let job = daemon
             let fake = LifecycleRuntimeHarness(existingPaths: [job.plistPath], launchAgentLabels: [job.plistPath: job.label], commandResults: [], respond: { command in
-                if command.contains("osascript") { return batch04Result(error: errorCode == 0 ? "" : "0:1: execution error: User refused. (\(errorCode))", code: errorCode == 0 ? 0 : 1) }
+                if command.isAdministratorRequest { return batch04Result(error: errorCode == 0 ? "" : "0:1: execution error: User refused. (\(errorCode))", code: errorCode == 0 ? 0 : 1) }
                 return batch04Result(error: "Could not find service \"\(job.label)\" in domain", code: 113)
             })
             let result = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
@@ -387,8 +389,9 @@ final class Batch04FixTests: XCTestCase {
             if errorCode == 0 { XCTAssertTrue(detail.contains("Bootstrap was approved")) }
             else if [-128, -60006].contains(errorCode) { XCTAssertEqual(detail, "Administrator approval was cancelled; nothing was started.") }
             else { XCTAssertTrue(detail.contains("approval was denied")) }
-            XCTAssertEqual(fake.commands.filter { $0.contains("osascript") }.count, 1)
-            XCTAssertTrue(fake.commands.first { $0.contains("osascript") }?.contains("TaskScope needs administrator approval to start") == true)
+            XCTAssertEqual(fake.commands.filter { $0.isAdministratorRequest }.count, 1)
+            XCTAssertTrue(fake.commands.first { $0.isAdministratorRequest }?.administratorAppleScript?
+                .contains("TaskScope needs administrator approval to start") == true)
         }
     }
 
@@ -400,8 +403,8 @@ final class Batch04FixTests: XCTestCase {
             commandResults: [idle, idle, batch04Result(), batch04Result(launchctlPrintOutput(pid: 42))], inventory: [process])
         let result = await SystemProcessLifecycleService(runtime: fake.runtime).ensureSystemLaunchDaemons(for: .globalProtect)
         XCTAssertTrue(result.succeeded)
-        XCTAssertEqual(fake.commands.filter { $0.contains("kickstart") }, ["/bin/launchctl kickstart 'gui/501/\(job.label)'"])
-        XCTAssertFalse(fake.commands.contains { $0.contains("-k") || $0.contains("osascript") })
+        XCTAssertEqual(fake.commands.filter { $0.isLaunchctl("kickstart") }, [.launchctl("kickstart", "gui/501/\(job.label)")])
+        XCTAssertFalse(fake.commands.contains { $0.mentions("-k") || $0.isAdministratorRequest })
     }
 
     func testStopReportsChangedAgentsEvenWithoutProcessesAndDisclosesRemainingVPN() {

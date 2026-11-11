@@ -151,7 +151,7 @@ final class Batch04AccessibilityFixTests: XCTestCase {
     private func runningRuntime() -> ProcessLifecycleRuntime {
         let process = batch04Process(pid: 42, uid: 0, path: "/Applications/GlobalProtect.app/Contents/Resources/PanGPS")
         let fake = LifecycleRuntimeHarness(existingPaths: [], commandResults: [], respond: { command in
-            if command.contains("gui/") { return batch04Result(launchctlPrintOutput(pid: 42)) }
+            if command.arguments.contains(where: { $0.hasPrefix("gui/") }) { return batch04Result(launchctlPrintOutput(pid: 42)) }
             return batch04Result(error: "Could not find service \"com.paloaltonetworks.gp.pangpsd\" in domain", code: 113)
         }, inventory: [process])
         return fake.runtime

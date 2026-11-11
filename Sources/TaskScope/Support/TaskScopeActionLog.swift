@@ -29,15 +29,16 @@ enum TaskScopeActionLog {
 
     /// Logs a finished lifecycle command if it changed system state; reads such
     /// as `launchctl print` are not logged.
-    static func commandFinished(_ command: String, result: ShellCommandResult) {
+    static func commandFinished(_ command: ExternalCommand, result: ShellCommandResult) {
         guard let kind = loggedCommandKind(command) else { return }
+        let commandLine = command.description
         if result.exitCode == 0 {
             logger.notice(
-                "\(kind, privacy: .public) succeeded: \(command, privacy: .private)"
+                "\(kind, privacy: .public) succeeded: \(commandLine, privacy: .private)"
             )
         } else {
             logger.error(
-                "\(kind, privacy: .public) failed with exit status \(result.exitCode, privacy: .public): \(command, privacy: .private)"
+                "\(kind, privacy: .public) failed with exit status \(result.exitCode, privacy: .public): \(commandLine, privacy: .private)"
             )
         }
     }
@@ -45,13 +46,11 @@ enum TaskScopeActionLog {
     /// The commands worth a record: launchctl verbs that change a job, opening
     /// an app, and osascript, which TaskScope runs only to request
     /// administrator approval for a system service change.
-    static func loggedCommandKind(_ command: String) -> String? {
-        let words = command.split(separator: " ", maxSplits: 2).map(String.init)
-        guard let tool = words.first else { return nil }
-        switch tool {
+    static func loggedCommandKind(_ command: ExternalCommand) -> String? {
+        switch command.executable {
         case "/bin/launchctl":
-            guard words.count > 1, mutatingLaunchctlVerbs.contains(words[1]) else { return nil }
-            return "launchctl \(words[1])"
+            guard let verb = command.arguments.first, mutatingLaunchctlVerbs.contains(verb) else { return nil }
+            return "launchctl \(verb)"
         case "/usr/bin/osascript":
             return "Administrator request"
         case "/usr/bin/open":

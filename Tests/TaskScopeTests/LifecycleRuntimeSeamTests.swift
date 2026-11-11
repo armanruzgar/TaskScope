@@ -151,16 +151,16 @@ final class LifecycleRuntimeSeamTests: XCTestCase {
 
         recorder.clearCommands()
         _ = await service.unloadUserLaunchAgents(for: preset)
-        XCTAssertEqual(recorder.commands, ["/bin/launchctl print \(ShellCommandRunner.shellQuoted(agentTarget))"])
+        XCTAssertEqual(recorder.commands, [.launchctl("print", agentTarget)])
         recorder.clearCommands()
         _ = await service.unloadUserLaunchAgents(for: preset, preservingPIDs: [4242])
-        XCTAssertEqual(recorder.commands, ["/bin/launchctl print \(ShellCommandRunner.shellQuoted(agentTarget))"])
+        XCTAssertEqual(recorder.commands, [.launchctl("print", agentTarget)])
         recorder.clearCommands()
         _ = await service.disableUserLaunchAgents(for: preset, preservingVPNService: false)
-        XCTAssertEqual(recorder.commands.first, "/bin/launchctl disable \(ShellCommandRunner.shellQuoted(agentTarget))")
+        XCTAssertEqual(recorder.commands.first, .launchctl("disable", agentTarget))
         recorder.clearCommands()
         _ = await service.enableUserLaunchAgents(for: preset)
-        XCTAssertEqual(recorder.commands.first, "/bin/launchctl print-disabled \(ShellCommandRunner.shellQuoted("gui/\(recorder.runtime.userID)"))")
+        XCTAssertEqual(recorder.commands.first, .launchctl("print-disabled", "gui/\(recorder.runtime.userID)"))
         recorder.clearFileChecks()
         _ = await service.bootstrapUserLaunchAgents(for: preset)
         XCTAssertEqual(recorder.fileChecks, ["/Users/Shared/com.example.seam.plist"])
@@ -170,22 +170,22 @@ final class LifecycleRuntimeSeamTests: XCTestCase {
         XCTAssertEqual(recorder.fileChecks.first, WatchedAppPreset.globalProtectSessionAgent.plistPath)
         recorder.clearCommands()
         _ = await service.disableSystemLaunchDaemons(for: .globalProtect, allowAdministratorPrompt: false)
-        XCTAssertTrue(recorder.commands.contains("/bin/launchctl print-disabled system"))
+        XCTAssertTrue(recorder.commands.contains(.launchctl("print-disabled", "system")))
         recorder.clearCommands()
         recorder.clearFileChecks()
         _ = await service.enableSystemLaunchDaemons(for: .globalProtect)
         XCTAssertEqual(recorder.fileChecks.first, WatchedAppPreset.globalProtectSessionAgent.plistPath)
-        XCTAssertTrue(recorder.commands.contains("/bin/launchctl print-disabled system"))
+        XCTAssertTrue(recorder.commands.contains(.launchctl("print-disabled", "system")))
 
         recorder.clearCommands()
         let opened = await service.openAppBundle(at: preset.appPath)
         XCTAssertEqual(opened, .opened)
-        XCTAssertEqual(recorder.commands, ["/usr/bin/open \(ShellCommandRunner.shellQuoted(preset.appPath))"])
+        XCTAssertEqual(recorder.commands, [ExternalCommand("/usr/bin/open", [preset.appPath])])
 
         let disconnect = await service.disconnectGlobalProtectIfNeeded()
         XCTAssertEqual(disconnect, .disconnected)
 
-        XCTAssertTrue(recorder.allCommands.allSatisfy { !$0.contains("osascript") }, "No administrator request")
+        XCTAssertTrue(recorder.allCommands.allSatisfy { !$0.isAdministratorRequest }, "No administrator request")
         XCTAssertTrue(recorder.signals.isEmpty, "Nothing matched, so nothing was signalled")
     }
 
@@ -206,8 +206,8 @@ final class LifecycleRuntimeSeamTests: XCTestCase {
 private final class SeamRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private let appPath: String
-    private var recordedCommands: [String] = []
-    private var everyCommand: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
+    private var everyCommand: [ExternalCommand] = []
     private var recordedFileChecks: [String] = []
     private var recordedBundleChecks: [String] = []
     private var recordedSleeps: [UInt64] = []
@@ -218,8 +218,8 @@ private final class SeamRecorder: @unchecked Sendable {
         self.appPath = appPath
     }
 
-    var commands: [String] { lock.withLock { recordedCommands } }
-    var allCommands: [String] { lock.withLock { everyCommand } }
+    var commands: [ExternalCommand] { lock.withLock { recordedCommands } }
+    var allCommands: [ExternalCommand] { lock.withLock { everyCommand } }
     var fileChecks: [String] { lock.withLock { recordedFileChecks } }
     var bundleChecks: [String] { lock.withLock { recordedBundleChecks } }
     var sleeps: [UInt64] { lock.withLock { recordedSleeps } }
@@ -243,15 +243,13 @@ private final class SeamRecorder: @unchecked Sendable {
                     recordedCommands.append(command)
                     everyCommand.append(command)
                 }
-                if command.hasPrefix("/bin/launchctl print-disabled") || command.hasPrefix("/usr/bin/open ")
-                    || command.hasPrefix("/bin/launchctl disable") || command.hasPrefix("/bin/launchctl enable") {
+                if command.isLaunchctl("print-disabled", "disable", "enable") || command.executable == "/usr/bin/open" {
                     return ShellCommandResult(command: command, stdout: "", stderr: "", exitCode: 0)
                 }
-                let label = command.split(separator: "/").last.map(String.init) ?? ""
                 return ShellCommandResult(
                     command: command,
                     stdout: "",
-                    stderr: "Could not find service \"\(label.trimmingCharacters(in: CharacterSet(charactersIn: "'")))\" in domain",
+                    stderr: launchctlNotFoundMessage(command: command),
                     exitCode: 113
                 )
             },

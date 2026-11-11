@@ -19,13 +19,15 @@ final class AdminBootstrapShellSyntaxTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.count, 1)
         let osascriptCommand = try XCTUnwrap(
-            harness.commands.first { $0.contains("/usr/bin/osascript") },
+            harness.commands.first { $0.isAdministratorRequest },
             "ensureSystemLaunchDaemons never requested the admin bootstrap."
         )
 
+        // No shell stands between TaskScope and osascript: the AppleScript is
+        // its one `-e` argument, exactly as written.
         let appleScript = try XCTUnwrap(
-            Self.unshellQuotedArgument(after: "/usr/bin/osascript -e ", in: osascriptCommand),
-            "Could not recover the AppleScript argument from \(osascriptCommand)"
+            osascriptCommand.administratorAppleScript,
+            "The AppleScript must be osascript's only -e argument: \(osascriptCommand.argumentVector)"
         )
         let rootScript = try XCTUnwrap(
             Self.unAppleScriptString(
@@ -76,15 +78,6 @@ final class AdminBootstrapShellSyntaxTests: XCTestCase {
             stderr: stderr,
             exitCode: exitCode
         )
-    }
-
-    /// Inverse of `ShellCommandRunner.shellQuoted` for the argument that follows `prefix`.
-    private static func unshellQuotedArgument(after prefix: String, in command: String) -> String? {
-        guard command.hasPrefix(prefix) else { return nil }
-        let quoted = String(command.dropFirst(prefix.count))
-        guard quoted.hasPrefix("'"), quoted.hasSuffix("'"), quoted.count >= 2 else { return nil }
-        return String(quoted.dropFirst().dropLast())
-            .replacingOccurrences(of: "'\\''", with: "'")
     }
 
     /// Inverse of `ShellCommandRunner.appleScriptString` for the literal between the markers.
@@ -147,7 +140,7 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
     private let existingPaths: Set<String>
     private var commandResults: [ShellCommandResult]
     private let inventory: [AppProcess]
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
 
     init(
         existingPaths: Set<String>,
@@ -181,7 +174,7 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
                     if response.stderr == "Could not find service" {
                         response.stderr = launchctlNotFoundMessage(command: command)
                     }
-                    response.command = command
+                    response.command = command.description
                     return response
                 }
             },
@@ -197,7 +190,7 @@ private final class AdminBootstrapRuntimeHarness: @unchecked Sendable {
         )
     }
 
-    var commands: [String] {
+    var commands: [ExternalCommand] {
         lock.withLock { recordedCommands }
     }
 }

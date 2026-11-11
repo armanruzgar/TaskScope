@@ -8,7 +8,7 @@ final class Batch03LaunchctlTests: XCTestCase {
     // (e) launchctl failures for a user agent (fake runCommand; no shell runs)
     func testControlE1_launchctlDisableFailureIsReported() async {
         let harness = Batch03LaunchctlHarness(respond: { command in
-            command.hasPrefix("/bin/launchctl disable")
+            command.isLaunchctl("disable")
                 ? .init(command: command, stdout: "", stderr: "Not privileged to disable service.", exitCode: 1)
                 : .init(command: command, stdout: "", stderr: "", exitCode: 0)
         })
@@ -19,10 +19,10 @@ final class Batch03LaunchctlTests: XCTestCase {
 
     func testControlE2_launchctlBootstrapFailureIsReported() async {
         let harness = Batch03LaunchctlHarness(respond: { command in
-            if command.hasPrefix("/bin/launchctl print") {
+            if command.isLaunchctl("print", "print-disabled") {
                 return .init(command: command, stdout: "", stderr: "Could not find service \"example.agent\" in domain for user gui: 501", exitCode: 113)
             }
-            if command.hasPrefix("/bin/launchctl bootstrap") {
+            if command.isLaunchctl("bootstrap") {
                 return .init(command: command, stdout: "", stderr: "Bootstrap failed: 5: Input/output error", exitCode: 5)
             }
             return .init(command: command, stdout: "", stderr: "", exitCode: 0)
@@ -43,7 +43,7 @@ final class Batch03LaunchctlTests: XCTestCase {
         )
         XCTAssertEqual(result.jobs.map(\.state), [.failed])
         XCTAssertEqual(result.jobs.first?.detail, "Could not read a valid Label from /Library/LaunchAgents/example.plist.")
-        XCTAssertFalse(harness.commands.contains { $0.contains("bootstrap") })
+        XCTAssertFalse(harness.commands.contains { $0.isLaunchctl("bootstrap") })
     }
 
     private func agentPreset() -> WatchedAppPreset {
@@ -57,14 +57,14 @@ final class Batch03LaunchctlTests: XCTestCase {
 
 final class Batch03LaunchctlHarness: @unchecked Sendable {
     private let lock = NSLock()
-    private let respond: @Sendable (String) -> ShellCommandResult
-    private var recorded: [String] = []
+    private let respond: @Sendable (ExternalCommand) -> ShellCommandResult
+    private var recorded: [ExternalCommand] = []
 
-    init(respond: @escaping @Sendable (String) -> ShellCommandResult) {
+    init(respond: @escaping @Sendable (ExternalCommand) -> ShellCommandResult) {
         self.respond = respond
     }
 
-    var commands: [String] { lock.withLock { recorded } }
+    var commands: [ExternalCommand] { lock.withLock { recorded } }
 
     func runtime(label: String? = "example.agent") -> ProcessLifecycleRuntime {
         ProcessLifecycleRuntime(

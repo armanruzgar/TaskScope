@@ -215,21 +215,25 @@ final class Batch02ViewTests: XCTestCase {
 
 final class Batch02ActionLogTests: XCTestCase {
     func testOnlyCommandsThatChangeSystemStateAreLogged() {
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/bin/launchctl bootout 'gui/501/com.example'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.launchctl("bootout", "gui/501/com.example")),
                        "launchctl bootout")
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/bin/launchctl disable 'system/com.example'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.launchctl("disable", "system/com.example")),
                        "launchctl disable")
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/bin/launchctl bootstrap 'gui/501' '/x.plist'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.launchctl("bootstrap", "gui/501", "/x.plist")),
                        "launchctl bootstrap")
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/bin/launchctl kickstart 'gui/501/com.example'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.launchctl("kickstart", "gui/501/com.example")),
                        "launchctl kickstart")
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/usr/bin/osascript -e 'do shell script'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.administratorScript("/usr/bin/true", prompt: "Test")),
                        "Administrator request")
-        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind("/usr/bin/open '/Applications/Example.app'"),
+        XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(ExternalCommand("/usr/bin/open", ["/Applications/Example.app"])),
                        "Open application")
-        XCTAssertNil(TaskScopeActionLog.loggedCommandKind("/bin/launchctl print 'system/com.example'"))
-        XCTAssertNil(TaskScopeActionLog.loggedCommandKind("/bin/launchctl print-disabled system"))
-        XCTAssertNil(TaskScopeActionLog.loggedCommandKind("/bin/ps -axo pid"))
+        XCTAssertNil(TaskScopeActionLog.loggedCommandKind(.launchctl("print", "system/com.example")))
+        XCTAssertNil(TaskScopeActionLog.loggedCommandKind(.launchctl("print-disabled", "system")))
+        XCTAssertNil(TaskScopeActionLog.loggedCommandKind(ExternalCommand("/bin/ps", ["-axo", "pid"])))
+        // The verb is the first argument and the tool its exact path: a target
+        // that names a verb, or another program called launchctl, is not one.
+        XCTAssertNil(TaskScopeActionLog.loggedCommandKind(.launchctl("print", "bootout")))
+        XCTAssertNil(TaskScopeActionLog.loggedCommandKind(ExternalCommand("/tmp/launchctl", ["bootout", "gui/501/x"])))
     }
 
     /// A stop signal and a launchd change leave a Unified Log record after the
@@ -246,11 +250,11 @@ final class Batch02ActionLogTests: XCTestCase {
         XCTAssertEqual(DarwinProcessSignaler().deliver(SIGTERM, to: pid), .delivered)
         child.waitUntilExit()
         TaskScopeActionLog.commandFinished(
-            "/bin/launchctl bootout 'gui/501/com.example.batch02'",
+            .launchctl("bootout", "gui/501/com.example.batch02"),
             result: ShellCommandResult(command: "", stdout: "", stderr: "", exitCode: 0)
         )
         TaskScopeActionLog.commandFinished(
-            "/bin/launchctl print 'gui/501/com.example.batch02'",
+            .launchctl("print", "gui/501/com.example.batch02"),
             result: ShellCommandResult(command: "", stdout: "", stderr: "", exitCode: 0)
         )
 

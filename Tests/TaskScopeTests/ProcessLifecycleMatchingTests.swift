@@ -579,7 +579,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertTrue(batch.jobs[0].succeeded)
         XCTAssertTrue(batch.succeeded)
         XCTAssertTrue(batch.jobs[0].detail.contains("still unloaded and verified"))
-        XCTAssertTrue(harness.commands.contains { $0.contains("launchctl bootout") })
+        XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("bootout") })
         XCTAssertEqual(harness.timeouts, [15, 30, 15])
         XCTAssertEqual(harness.sleepDurations, [300_000_000])
     }
@@ -599,7 +599,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.first?.state, .failed)
         XCTAssertTrue(batch.jobs.first?.detail.contains("Operation not permitted") == true)
-        XCTAssertFalse(harness.commands.contains { $0.contains("launchctl bootout") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootout") })
     }
 
     func testAgentBootstrapExecutesAndVerifiesThroughInjectedRuntime() async throws {
@@ -622,13 +622,13 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.first?.state, .changed)
         XCTAssertEqual(
-            harness.commands.filter { $0.contains("/bin/launchctl") }.count,
+            harness.commands.filter { $0.executable == "/bin/launchctl" }.count,
             5
         )
-        XCTAssertTrue(harness.commands.contains { $0.contains("bootstrap") })
-        XCTAssertTrue(harness.commands.contains { $0.contains("kickstart") })
-        let enableIndex = try XCTUnwrap(harness.commands.firstIndex { $0.contains(" enable ") })
-        let bootstrapIndex = try XCTUnwrap(harness.commands.firstIndex { $0.contains(" bootstrap ") })
+        XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("bootstrap") })
+        XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("kickstart") })
+        let enableIndex = try XCTUnwrap(harness.commands.firstIndex { $0.isLaunchctl("enable") })
+        let bootstrapIndex = try XCTUnwrap(harness.commands.firstIndex { $0.isLaunchctl("bootstrap") })
         XCTAssertLessThan(enableIndex, bootstrapIndex, "enable must precede bootstrap")
     }
 
@@ -645,7 +645,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         let result = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: .globalProtect, runtime: harness.runtime)
         XCTAssertTrue(result.succeeded)
         XCTAssertEqual(result.jobs.first?.state, .verified)
-        XCTAssertFalse(harness.commands.contains { $0.contains(" bootstrap ") || $0.contains("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootstrap") || $0.mentions("kickstart") })
     }
 
     func testGlobalProtectUnknownInventoryCannotStartADuplicateUI() async {
@@ -658,7 +658,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         )
         let result = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: .globalProtect, runtime: harness.runtime)
         XCTAssertFalse(result.succeeded)
-        XCTAssertFalse(harness.commands.contains { $0.contains(" bootstrap ") || $0.contains("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootstrap") || $0.mentions("kickstart") })
     }
 
     func testGlobalProtectDoesNotTrustAnImpostorOrAnotherUsersUI() async {
@@ -674,7 +674,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             )
             let result = await ProcessLifecycleController.bootstrapUserLaunchAgents(for: .globalProtect, runtime: harness.runtime)
             XCTAssertTrue(result.succeeded)
-            XCTAssertTrue(harness.commands.contains { $0.contains(" bootstrap ") })
+            XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("bootstrap") })
         }
     }
 
@@ -697,8 +697,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.first?.state, .changed, batch.jobs.first?.detail ?? "")
         XCTAssertTrue(launchd.loaded)
-        let enableIndex = try XCTUnwrap(harness.commands.firstIndex { $0.contains(" enable ") })
-        let bootstrapIndex = try XCTUnwrap(harness.commands.firstIndex { $0.contains(" bootstrap ") })
+        let enableIndex = try XCTUnwrap(harness.commands.firstIndex { $0.isLaunchctl("enable") })
+        let bootstrapIndex = try XCTUnwrap(harness.commands.firstIndex { $0.isLaunchctl("bootstrap") })
         XCTAssertLessThan(enableIndex, bootstrapIndex)
     }
 
@@ -736,8 +736,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.first?.state, .failed)
         XCTAssertEqual(batch.jobs.first?.detail, "Operation not permitted")
-        XCTAssertFalse(harness.commands.contains { $0.contains(" bootstrap ") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootstrap") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") })
     }
 
     func testOpenAppBundleDoesNotForceASecondInstance() async {
@@ -752,7 +752,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         )
 
         XCTAssertTrue(opened.succeeded)
-        XCTAssertEqual(harness.commands, ["/usr/bin/open '/Applications/Example.app'"])
+        XCTAssertEqual(harness.commands, [ExternalCommand("/usr/bin/open", ["/Applications/Example.app"])])
     }
 
     /// On some GlobalProtect layouts the `pangpa` agent's Program is the main
@@ -773,7 +773,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertEqual(batch.jobs.first?.state, .alreadyLoaded)
         XCTAssertTrue(batch.succeeded)
         XCTAssertTrue(batch.jobs.first?.detail.contains("pid 42") == true)
-        XCTAssertFalse(harness.commands.contains { $0.contains("bootout") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootout") })
     }
 
     func testUnloadStillBootsOutAgentsThatDoNotRunAPreservedProcess() async {
@@ -793,7 +793,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         )
 
         XCTAssertEqual(batch.jobs.first?.state, .changed)
-        XCTAssertTrue(harness.commands.contains { $0.contains("bootout") })
+        XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("bootout") })
     }
 
     func testLoadedAgentIsLeftRunningWithoutRestart() async {
@@ -810,9 +810,9 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
 
         XCTAssertEqual(batch.jobs.first?.state, .alreadyLoaded)
         XCTAssertEqual(batch.jobs.first?.detail, "Already loaded; no restart needed.")
-        XCTAssertFalse(harness.commands.contains { $0.contains("bootstrap") })
-        XCTAssertFalse(harness.commands.contains { $0.contains(" enable ") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootstrap") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("enable") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") })
     }
 
     func testBackgroundKeepOffDisablesBothJobsButOnlyBootsOutInterface() async {
@@ -827,9 +827,9 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             for: .globalProtect, preservingVPNService: true, runtime: harness.runtime
         )
         XCTAssertTrue(batch.succeeded)
-        XCTAssertEqual(harness.commands.filter { $0.contains("launchctl disable") }.count, 2)
-        XCTAssertEqual(harness.commands.filter { $0.contains("bootout") }, [
-            "/bin/launchctl bootout 'gui/501/com.paloaltonetworks.gp.pangpa'"
+        XCTAssertEqual(harness.commands.filter { $0.isLaunchctl("disable") }.count, 2)
+        XCTAssertEqual(harness.commands.filter { $0.isLaunchctl("bootout") }, [
+            .launchctl("bootout", "gui/501/com.paloaltonetworks.gp.pangpa")
         ])
         XCTAssertTrue(batch.jobs.contains { $0.detail.contains("loaded VPN service was preserved") })
     }
@@ -860,7 +860,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             XCTAssertFalse(result.succeeded)
             XCTAssertEqual(clock.now, 15, accuracy: 0.001)
             XCTAssertEqual(harness.timeouts, [15, 15, 4.5])
-            XCTAssertFalse(harness.commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(harness.commands.contains { $0.isAdministratorRequest })
         }
     }
 
@@ -910,10 +910,10 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertEqual(
             harness.commands,
             [
-                "/bin/launchctl disable 'gui/501/example.agent'",
-                "/bin/launchctl print 'gui/501/example.agent'",
-                "/bin/launchctl bootout 'gui/501/example.agent'",
-                "/bin/launchctl print 'gui/501/example.agent'"
+                .launchctl("disable", "gui/501/example.agent"),
+                .launchctl("print", "gui/501/example.agent"),
+                .launchctl("bootout", "gui/501/example.agent"),
+                .launchctl("print", "gui/501/example.agent")
             ]
         )
     }
@@ -934,8 +934,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
                 : await ProcessLifecycleController.unloadUserLaunchAgents(for: preset, runtime: harness.runtime)
             XCTAssertTrue(batch.succeeded)
             XCTAssertEqual(batch.jobs.first?.state, .changed)
-            XCTAssertEqual(harness.commands.filter { $0.contains("bootout") }.count, 1)
-            XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") || $0.contains("kill") })
+            XCTAssertEqual(harness.commands.filter { $0.isLaunchctl("bootout") }.count, 1)
+            XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") || $0.mentions("kill") })
         }
     }
 
@@ -948,7 +948,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             for: presetWithAgent(plistPath: "/agents/example.plist"), runtime: harness.runtime
         )
         XCTAssertFalse(batch.succeeded)
-        XCTAssertEqual(harness.commands.filter { $0.contains("bootout") }.count, 1)
+        XCTAssertEqual(harness.commands.filter { $0.isLaunchctl("bootout") }.count, 1)
         XCTAssertLessThan(harness.commands.count, 70)
     }
 
@@ -966,10 +966,10 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertTrue(batch.succeeded)
         XCTAssertEqual(
             harness.commands,
-            ["/bin/launchctl print-disabled 'gui/501'", "/bin/launchctl enable 'gui/501/example.agent'"]
+            [.launchctl("print-disabled", "gui/501"), .launchctl("enable", "gui/501/example.agent")]
         )
-        XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("bootstrap") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("bootstrap") })
     }
 
     func testMissingOptionalAgentDoesNotBlockOpen() async {
@@ -1005,7 +1005,9 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             XCTAssertTrue(result.succeeded)
             XCTAssertEqual(result.jobs.first?.label, job.label)
             XCTAssertTrue(result.jobs.first?.detail.contains("Login-session") == true)
-            XCTAssertFalse(harness.commands.contains { $0.contains("osascript") || $0.contains("system/") || $0.contains("kickstart") })
+            XCTAssertFalse(harness.commands.contains {
+                $0.isAdministratorRequest || $0.mentions("system/") || $0.mentions("kickstart")
+            })
         }
     }
 
@@ -1025,12 +1027,14 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertTrue(result.succeeded)
         XCTAssertEqual(result.jobs.first?.state, .changed)
         XCTAssertEqual(harness.commands.prefix(4), [
-            "/bin/launchctl print 'gui/501/\(job.label)'",
-            "/bin/launchctl enable 'gui/501/\(job.label)'",
-            "/bin/launchctl bootstrap 'gui/501' '\(job.plistPath)'",
-            "/bin/launchctl kickstart 'gui/501/\(job.label)'"
+            .launchctl("print", "gui/501/\(job.label)"),
+            .launchctl("enable", "gui/501/\(job.label)"),
+            .launchctl("bootstrap", "gui/501", job.plistPath),
+            .launchctl("kickstart", "gui/501/\(job.label)")
         ])
-        XCTAssertFalse(harness.commands.contains { $0.contains("osascript") || $0.contains("kickstart -k") })
+        XCTAssertFalse(harness.commands.contains {
+            $0.isAdministratorRequest || ($0.isLaunchctl("kickstart") && $0.arguments.contains("-k"))
+        })
     }
 
     func testSessionServiceReadinessRejectsWrongOwnerPIDAndExecutableWithoutSystemFallback() async {
@@ -1047,7 +1051,7 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
             )
             let result = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: harness.runtime)
             XCTAssertFalse(result.succeeded, invalid)
-            XCTAssertFalse(harness.commands.contains { $0.contains("osascript") || $0.contains("system/") })
+            XCTAssertFalse(harness.commands.contains { $0.isAdministratorRequest || $0.mentions("system/") })
         }
     }
 
@@ -1073,9 +1077,9 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertEqual(batch.jobs.first?.state, .failed)
         XCTAssertTrue(batch.jobs.first?.detail.contains("never restarts") == true)
         XCTAssertFalse(harness.sleepDurations.isEmpty, "readiness must be re-polled before failing")
-        XCTAssertFalse(harness.commands.contains { $0.contains("/usr/sbin/lsof") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("/usr/bin/osascript") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("/usr/sbin/lsof") })
+        XCTAssertFalse(harness.commands.contains { $0.isAdministratorRequest })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") })
     }
 
     /// Readiness is launchd's pid plus a fresh inventory. An unprivileged `lsof`
@@ -1101,10 +1105,10 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         XCTAssertEqual(batch.jobs.first?.state, .verified)
         XCTAssertEqual(
             harness.commands,
-            ["/bin/launchctl print 'system/com.paloaltonetworks.gp.pangpsd'"]
+            [.launchctl("print", "system/com.paloaltonetworks.gp.pangpsd")]
         )
-        XCTAssertFalse(harness.commands.contains { $0.contains("lsof") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("lsof") })
+        XCTAssertFalse(harness.commands.contains { $0.isAdministratorRequest })
     }
 
     func testDaemonReadinessRejectsSameNameProcessWhosePIDIsNotLaunchdJobPID() async {
@@ -1125,8 +1129,8 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         )
 
         XCTAssertEqual(batch.jobs.first?.state, .failed)
-        XCTAssertFalse(harness.commands.contains { $0.contains("/usr/sbin/lsof") })
-        XCTAssertFalse(harness.commands.contains { $0.contains("/usr/bin/osascript") })
+        XCTAssertFalse(harness.commands.contains { $0.mentions("/usr/sbin/lsof") })
+        XCTAssertFalse(harness.commands.contains { $0.isAdministratorRequest })
     }
 
     /// The privileged script bootstraps only a daemon launchd does not have
@@ -1151,10 +1155,11 @@ final class ProcessLifecycleMatchingTests: XCTestCase {
         )
 
         XCTAssertEqual(batch.jobs.first?.state, .changed)
-        let adminCommand = try XCTUnwrap(harness.commands.first { $0.contains("/usr/bin/osascript") })
-        XCTAssertFalse(adminCommand.contains("kickstart"))
-        XCTAssertTrue(adminCommand.contains("launchctl bootstrap system"))
-        XCTAssertFalse(harness.commands.contains { $0.contains("kickstart") })
+        let adminCommand = try XCTUnwrap(harness.commands.first { $0.isAdministratorRequest })
+        let appleScript = try XCTUnwrap(adminCommand.administratorAppleScript, "\(adminCommand.argumentVector)")
+        XCTAssertFalse(appleScript.contains("kickstart"))
+        XCTAssertTrue(appleScript.contains("launchctl bootstrap system"))
+        XCTAssertFalse(harness.commands.contains { $0.mentions("kickstart") })
 
         let script = ProcessLifecycleController.adminBootstrapScript(
             for: WatchedAppPreset.globalProtectSystemDaemon
@@ -1276,18 +1281,18 @@ private final class DisabledJobLaunchd: @unchecked Sendable {
     private var enabled = false
     private(set) var loaded = false
 
-    func respond(to command: String) -> ShellCommandResult {
+    func respond(to command: ExternalCommand) -> ShellCommandResult {
         lock.withLock {
-            if command.contains(" print ") {
+            if command.isLaunchctl("print") {
                 return loaded
                     ? ShellCommandResult(command: command, stdout: launchctlPrintOutput(pid: 42), stderr: "", exitCode: 0)
                     : ShellCommandResult(command: command, stdout: "", stderr: launchctlNotFoundMessage(command: command), exitCode: 113)
             }
-            if command.contains(" enable ") {
+            if command.isLaunchctl("enable") {
                 enabled = true
                 return ShellCommandResult(command: command, stdout: "", stderr: "", exitCode: 0)
             }
-            if command.contains(" bootstrap ") {
+            if command.isLaunchctl("bootstrap") {
                 guard enabled else {
                     return ShellCommandResult(
                         command: command,
@@ -1299,7 +1304,7 @@ private final class DisabledJobLaunchd: @unchecked Sendable {
                 loaded = true
                 return ShellCommandResult(command: command, stdout: "", stderr: "", exitCode: 0)
             }
-            if command.contains(" kickstart ") {
+            if command.isLaunchctl("kickstart") {
                 return ShellCommandResult(command: command, stdout: "", stderr: "", exitCode: loaded ? 0 : 1)
             }
             return ShellCommandResult(command: command, stdout: "", stderr: "unexpected command", exitCode: 1)
@@ -1312,12 +1317,12 @@ final class LifecycleRuntimeHarness: @unchecked Sendable {
     private let existingPaths: Set<String>
     private let launchAgentLabels: [String: String]
     private var commandResults: [ShellCommandResult]
-    private let respond: (@Sendable (String) -> ShellCommandResult)?
+    private let respond: (@Sendable (ExternalCommand) -> ShellCommandResult)?
     private var inventoryResults: [Result<[AppProcess], ProcessInventoryError>]
     private let executablePathsAtSignal: [Int32: String]
     private var signalResults: [Bool]
     private var recordedInventoryLoads = 0
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
     private var recordedTimeouts: [TimeInterval] = []
     private var recordedSleepDurations: [UInt64] = []
     private var recordedSignals: [(Int32, Int32)] = []
@@ -1326,7 +1331,7 @@ final class LifecycleRuntimeHarness: @unchecked Sendable {
         existingPaths: Set<String>,
         launchAgentLabels: [String: String] = [:],
         commandResults: [ShellCommandResult],
-        respond: (@Sendable (String) -> ShellCommandResult)? = nil,
+        respond: (@Sendable (ExternalCommand) -> ShellCommandResult)? = nil,
         inventory: [AppProcess] = [],
         inventoryResults: [Result<[AppProcess], ProcessInventoryError>]? = nil,
         executablePathsAtSignal: [Int32: String]? = nil,
@@ -1372,7 +1377,7 @@ final class LifecycleRuntimeHarness: @unchecked Sendable {
                     if response.stderr == "Could not find service" {
                         response.stderr = launchctlNotFoundMessage(command: command)
                     }
-                    response.command = command
+                    response.command = command.description
                     return response
                 }
             },
@@ -1422,7 +1427,7 @@ final class LifecycleRuntimeHarness: @unchecked Sendable {
         lock.withLock { recordedInventoryLoads }
     }
 
-    var commands: [String] {
+    var commands: [ExternalCommand] {
         lock.withLock { recordedCommands }
     }
 
@@ -1463,7 +1468,7 @@ final class Batch01LifecycleLabelTests: XCTestCase {
                 XCTAssertEqual(result.jobs.map(\.state), [.failed], label)
                 XCTAssertTrue(result.failureSummary?.contains("label") == true, label)
             }
-            XCTAssertTrue(harness.commands.allSatisfy { $0.contains("print-disabled") }, label)
+            XCTAssertTrue(harness.commands.allSatisfy { $0.isLaunchctl("print-disabled") }, label)
             XCTAssertTrue(harness.signals.isEmpty, label)
         }
     }

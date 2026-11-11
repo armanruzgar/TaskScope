@@ -109,11 +109,12 @@ Required invariants:
   administrator `osascript` request) in their own process group: the runner
   spawns each command as the leader of a new group, with `/dev/null` as
   standard input and no other inherited descriptor except standard output and
-  error. A command given as an argument vector (so far, the compatibility
-  self-check's `launchctl` and `sw_vers` reads) is spawned directly, without a
-  shell: its program path must be absolute and is never looked up in `PATH`,
-  and an argument containing a NUL character is refused rather than cut short.
-  The other commands are still one string run by `/bin/zsh -f -c`.
+  error. A command given as an argument vector (every `launchctl`, `open`, and
+  administrator `osascript` command, and the compatibility self-check's reads)
+  is spawned directly, without a shell: its program path must be absolute and
+  is never looked up in `PATH`, and an argument containing a NUL character is
+  refused rather than cut short. The process list, Process Detail, and command
+  line reads (`ps` and `nettop`) are still one string run by `/bin/zsh -f -c`.
   Only when a command is cancelled or times out does it send that group
   `SIGTERM`, then `SIGKILL` repeatedly until no member is left, for at most
   750 ms; the result is reported only after that, and a group that could not
@@ -325,6 +326,13 @@ Required invariants:
 - name TaskScope, the GlobalProtect system VPN service, and the requested
   change in every administrator prompt; report a cancelled, denied, or timed-out
   request as such, and after a timeout let launchd's state decide the result;
+- run each administrator request as `/usr/bin/osascript -e` with the
+  AppleScript as its one argument and no shell in between. The AppleScript is
+  fixed text around two string literals, the root script and the prompt, with
+  quotes, backslashes, and line breaks escaped. The root script is the only
+  shell code TaskScope runs: `do shell script` runs it with `/bin/sh` as root,
+  and every value in it is a fixed launchd target or plist path in single
+  quotes;
 - disable before bootout so launchd cannot immediately respawn the service;
 - check both the disabled override and absence of the loaded job after stopping;
   after a successful administrator stop, allow up to 30 seconds for shutdown,

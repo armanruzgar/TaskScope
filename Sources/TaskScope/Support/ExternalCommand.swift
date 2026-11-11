@@ -21,6 +21,17 @@ struct ExternalCommand: Hashable, Sendable, CustomStringConvertible {
         ExternalCommand("/bin/launchctl", arguments)
     }
 
+    /// Shows macOS's administrator prompt with `prompt`, then runs `script` as
+    /// root with `/bin/sh` (AppleScript's `do shell script`). The AppleScript is
+    /// osascript's single `-e` argument, so no shell reads it on the way: the
+    /// only quoting left is the script's own, inside one AppleScript string
+    /// literal, and the script must quote every value it names.
+    static func administratorScript(_ script: String, prompt: String) -> ExternalCommand {
+        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(script))"
+            + " with administrator privileges with prompt \(ShellCommandRunner.appleScriptString(prompt))"
+        return ExternalCommand("/usr/bin/osascript", ["-e", appleScript])
+    }
+
     /// The complete argument vector, `argv[0]` first.
     var argumentVector: [String] {
         [executable] + arguments

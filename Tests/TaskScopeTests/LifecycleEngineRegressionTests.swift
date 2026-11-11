@@ -115,8 +115,8 @@ final class LifecycleEngineRegressionTests: XCTestCase {
             let result = await ProcessLifecycleController.enableUserLaunchAgents(for: examplePreset, runtime: harness.runtime)
             XCTAssertEqual(result.jobs.first?.state, state)
             XCTAssertEqual(result.didChangeState, value == "true")
-            XCTAssertTrue(harness.commands.contains { $0.contains("launchctl enable ") })
-            XCTAssertFalse(harness.commands.contains { $0.contains("bootstrap") || $0.contains("kickstart") })
+            XCTAssertTrue(harness.commands.contains { $0.isLaunchctl("enable") })
+            XCTAssertFalse(harness.commands.contains { $0.isLaunchctl("bootstrap", "kickstart") })
         }
     }
 
@@ -137,7 +137,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
                     : await ProcessLifecycleController.unloadUserLaunchAgents(for: examplePreset, runtime: harness.runtime)
                 XCTAssertTrue(result.succeeded, result.failureSummary ?? "")
                 XCTAssertEqual(result.jobs.first?.state, .changed)
-                XCTAssertEqual(harness.commands.filter { $0.contains("bootout") }.count, 1)
+                XCTAssertEqual(harness.commands.filter { $0.isLaunchctl("bootout") }.count, 1)
                 XCTAssertEqual(harness.sleepDurations.filter { $0 == 500_000_000 }.count, delayedReads)
             }
         }
@@ -320,7 +320,7 @@ private final class CommandRuntime: @unchecked Sendable {
     private let bootoutFailure: Bool
     private var delayedReads: Int
     private var bootoutRequested = false
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
     private var recordedSleeps: [UInt64] = []
 
     init(disabledTable: String = "disabled services = {\n}", bootoutFailure: Bool = false, delayedReads: Int = 0) {
@@ -339,28 +339,28 @@ private final class CommandRuntime: @unchecked Sendable {
         )
     }
 
-    var commands: [String] { lock.withLock { recordedCommands } }
+    var commands: [ExternalCommand] { lock.withLock { recordedCommands } }
     var sleepDurations: [UInt64] { lock.withLock { recordedSleeps } }
 
-    private func run(_ command: String) -> ShellCommandResult {
+    private func run(_ command: ExternalCommand) -> ShellCommandResult {
         lock.withLock {
             recordedCommands.append(command)
             var output = ""
             var error = ""
             var code: Int32 = 0
-            if command.contains("print-disabled") {
+            if command.isLaunchctl("print-disabled") {
                 output = disabledTable
-            } else if command.contains(" bootout ") {
+            } else if command.isLaunchctl("bootout") {
                 bootoutRequested = true
                 if bootoutFailure { error = "Operation now in progress"; code = 36 }
-            } else if command.contains(" print ") {
+            } else if command.isLaunchctl("print") {
                 if bootoutRequested && delayedReads == 0 {
                     error = launchctlNotFoundMessage(command: command); code = 113
                 } else {
                     output = launchctlPrintOutput(pid: 42)
                     if bootoutRequested { delayedReads -= 1 }
                 }
-            } else if !command.contains(" enable ") && !command.contains(" disable ") {
+            } else if !command.isLaunchctl("enable", "disable") {
                 error = "Unexpected fake command"; code = 1
             }
             return ShellCommandResult(command: command, stdout: output, stderr: error, exitCode: code)

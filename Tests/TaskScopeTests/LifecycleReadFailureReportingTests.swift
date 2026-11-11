@@ -141,7 +141,7 @@ final class LifecycleReadFailureReportingTests: XCTestCase {
 private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
     private let lock = NSLock()
     private let inventoryResult: Result<[AppProcess], ProcessInventoryError>
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
     private var recordedSleepDurations: [UInt64] = []
     private var recordedInventoryLoads = 0
 
@@ -183,7 +183,7 @@ private final class P8LifecycleRuntimeHarness: @unchecked Sendable {
         )
     }
 
-    var commands: [String] {
+    var commands: [ExternalCommand] {
         lock.withLock { recordedCommands }
     }
 

@@ -175,16 +175,16 @@ final class LifecycleMissingPlistReportingTests: XCTestCase {
 private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
     private let lock = NSLock()
     private let existingPaths: Set<String>
-    private let respond: (@Sendable (String) -> ShellCommandResult)?
+    private let respond: (@Sendable (ExternalCommand) -> ShellCommandResult)?
     private var queuedResults: [ShellCommandResult]
     private var inventory: [AppProcess]
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
     private var recordedSleepDurations: [UInt64] = []
     private var recordedSignals: [(signal: Int32, pid: Int32)] = []
 
     init(
         existingPaths: Set<String>,
-        respond: (@Sendable (String) -> ShellCommandResult)? = nil,
+        respond: (@Sendable (ExternalCommand) -> ShellCommandResult)? = nil,
         queuedResults: [ShellCommandResult] = [],
         inventory: [AppProcess] = []
     ) {
@@ -219,7 +219,7 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
                     if response.stderr == "Could not find service" {
                         response.stderr = launchctlNotFoundMessage(command: command)
                     }
-                    response.command = command
+                    response.command = command.description
                     return response
                 }
             },
@@ -247,7 +247,7 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
         )
     }
 
-    var commands: [String] {
+    var commands: [ExternalCommand] {
         lock.withLock { recordedCommands }
     }
 
@@ -263,7 +263,7 @@ private final class P7LifecycleRuntimeHarness: @unchecked Sendable {
         ShellCommandResult(command: "fake", stdout: stdout, stderr: stderr, exitCode: exitCode)
     }
 
-    static func notLoaded(_ command: String) -> ShellCommandResult {
+    static func notLoaded(_ command: ExternalCommand) -> ShellCommandResult {
         ShellCommandResult(
             command: command,
             stdout: "",

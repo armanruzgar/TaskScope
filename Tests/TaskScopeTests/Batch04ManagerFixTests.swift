@@ -15,7 +15,7 @@ final class Batch04ManagerFixTests: XCTestCase {
             let result = await manager.openApp(preset)
             XCTAssertEqual(result.status, .failed)
             XCTAssertTrue(result.message.contains("Missing plist"), result.message)
-            XCTAssertFalse(fake.commands.contains { $0.contains("/usr/bin/open") })
+            XCTAssertFalse(fake.commands.contains { $0.executable == "/usr/bin/open" })
             XCTAssertEqual(manager.lifecycleReport?.jobs.filter { $0.state == .missing }.count, 1)
         }
     }

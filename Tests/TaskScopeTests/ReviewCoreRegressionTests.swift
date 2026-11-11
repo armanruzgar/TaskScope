@@ -352,9 +352,9 @@ private actor Commands {
                                 sendSignal: { _, _ in XCTFail("Unexpected signal"); return false },
                                 isProcessAlive: { _ in false }, sleep: { await self.sleep($0) }, systemUptime: { 0 }, isAppBundle: { _ in false })
     }
-    func run(_ command: String, _ timeout: TimeInterval) -> ShellCommandResult {
-        if command.contains("launchctl print ") { prints += 1 }
-        let bootout = command.contains("launchctl bootout ")
+    func run(_ command: ExternalCommand, _ timeout: TimeInterval) -> ShellCommandResult {
+        if command.isLaunchctl("print") { prints += 1 }
+        let bootout = command.isLaunchctl("bootout")
         return ShellCommandResult(command: command, stdout: bootout ? "" : output,
                                   stderr: bootout && bootoutCode != 0 ? "Operation not permitted" : "",
                                   exitCode: bootout ? bootoutCode : 0)

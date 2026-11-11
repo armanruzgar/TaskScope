@@ -10,7 +10,8 @@ struct ProcessLifecycleRuntime: Sendable {
     var fileExists: @Sendable (String) -> Bool
     /// The `Label` of the plist at a path, or nil when it cannot be read.
     var launchAgentLabel: @Sendable (String) -> String?
-    var runCommand: @Sendable (String, TimeInterval) async -> ShellCommandResult
+    /// Runs one fixed tool, never through a shell.
+    var runCommand: @Sendable (ExternalCommand, TimeInterval) async -> ShellCommandResult
     var loadProcessInventory: @Sendable () async -> Result<[AppProcess], ProcessInventoryError>
     var executablePathForPID: @Sendable (Int32) -> String?
     var sendSignal: @Sendable (Int32, Int32) -> Bool

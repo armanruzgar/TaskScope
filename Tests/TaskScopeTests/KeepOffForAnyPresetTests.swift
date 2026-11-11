@@ -138,7 +138,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         XCTAssertEqual(Set(world.signalledPIDs), [501, 502])
         XCTAssertEqual(manager.lifecycleReport?.title, "Example Keep Off")
         world.assertNothingPrivileged()
-        XCTAssertTrue(world.commands.contains("/bin/launchctl disable \(ShellCommandRunner.shellQuoted("gui/\(getuid())/com.example.updater"))"))
+        XCTAssertTrue(world.commands.contains(.launchctl("disable", "gui/\(getuid())/com.example.updater")))
 
         // It came back: background enforcement stops it again, the same way.
         world.restore([
@@ -351,22 +351,28 @@ private final class KeepOffWorld: @unchecked Sendable {
     private let lock = NSLock()
     private var rows: [AppProcess]
     private var signals: [Int32] = []
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
 
     init(rows: [AppProcess]) {
         self.rows = rows
     }
 
     var signalledPIDs: [Int32] { lock.withLock { signals } }
-    var commands: [String] { lock.withLock { recordedCommands } }
+    var commands: [ExternalCommand] { lock.withLock { recordedCommands } }
     func clearSignals() { lock.withLock { signals.removeAll() } }
     func restore(_ newRows: [AppProcess]) { lock.withLock { rows = newRows } }
 
     func assertNothingPrivileged(file: StaticString = #filePath, line: UInt = #line) {
         let commands = commands
-        XCTAssertFalse(commands.contains { $0.contains("osascript") }, "\(commands)", file: file, line: line)
-        XCTAssertFalse(commands.contains { $0.contains("system/") || $0.hasSuffix(" system") }, "\(commands)", file: file, line: line)
-        XCTAssertTrue(commands.allSatisfy { $0.contains("gui/\(getuid())") }, "\(commands)", file: file, line: line)
+        XCTAssertFalse(commands.contains { $0.isAdministratorRequest }, "\(commands)", file: file, line: line)
+        XCTAssertFalse(
+            commands.contains { $0.arguments.contains { $0.contains("system/") || $0 == "system" } },
+            "\(commands)", file: file, line: line
+        )
+        XCTAssertTrue(
+            commands.allSatisfy { $0.arguments.contains { $0.contains("gui/\(getuid())") } },
+            "\(commands)", file: file, line: line
+        )
     }
 
     var inventory: any ProcessInventoryProviding { KeepOffWorldInventory(world: self) }
@@ -380,7 +386,7 @@ private final class KeepOffWorld: @unchecked Sendable {
             launchAgentLabel: { _ in nil },
             runCommand: { [self] command, _ in
                 lock.withLock { recordedCommands.append(command) }
-                if command.hasPrefix("/bin/launchctl disable") {
+                if command.isLaunchctl("disable") {
                     return ShellCommandResult(command: command, stdout: "", stderr: "", exitCode: 0)
                 }
                 return ShellCommandResult(

@@ -20,7 +20,7 @@ struct SupportDiagnosticsCollector {
                 state = .unknown
             } else {
                 let result = await runtime.runCommand(
-                    "/bin/launchctl print \(ShellCommandRunner.shellQuoted("gui/\(runtime.userID)/\(job.label)"))",
+                    .launchctl("print", "gui/\(runtime.userID)/\(job.label)"),
                     5
                 )
                 // Cancellation/timeouts cannot establish that a job is absent,

@@ -11,7 +11,7 @@ struct GlobalProtectServiceObservation: Equatable, Sendable {
         func state(for service: GlobalProtectCompatibilityReport.Service) async -> State {
             let domain = service.isSystem ? "system" : "gui/\(runtime.userID)"
             let inspection = await runtime.runCommand(
-                "/bin/launchctl print \(ShellCommandRunner.shellQuoted("\(domain)/\(service.label)"))", 15
+                .launchctl("print", "\(domain)/\(service.label)"), 15
             )
             switch GlobalProtectCompatibilityChecker.loadedState(inspection, service: service) {
             case .notLoaded:
@@ -55,7 +55,7 @@ extension ProcessLifecycleController {
         let daemonInstalled = runtime.fileExists(job.plistPath)
         if preservesLoadedDaemon || !daemonInstalled {
             let inspection = await runtime.runCommand(
-                "/bin/launchctl print \(ShellCommandRunner.shellQuoted("system/\(job.label)"))", 15
+                .launchctl("print", "system/\(job.label)"), 15
             )
             let notLoaded = GlobalProtectCompatibilityChecker.loadedState(inspection, service: .pangpsd) == .notLoaded
             if preservesLoadedDaemon, !notLoaded {
@@ -253,19 +253,15 @@ extension ProcessLifecycleController {
     ) async -> ShellCommandResult {
         // The prompt names who asks and why; the dialog otherwise shows only
         // the stock "osascript wants to make changes" text.
-        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(script))"
-            + " with administrator privileges with prompt \(ShellCommandRunner.appleScriptString(prompt))"
         // The daemon declares ExitTimeOut=20; allow time for authorization plus
         // launchd's graceful shutdown. No direct signal is sent to PanGPS.
-        return await runtime.runCommand(
-            "/usr/bin/osascript -e \(ShellCommandRunner.shellQuoted(appleScript))", 90
-        )
+        return await runtime.runCommand(.administratorScript(script, prompt: prompt), 90)
     }
 
     private static func systemDisabledState(
         _ job: SystemLaunchDaemonJob, timeout: TimeInterval = 15, runtime: ProcessLifecycleRuntime
     ) async -> GlobalProtectCompatibilityReport.DisabledState {
-        let result = await runtime.runCommand("/bin/launchctl print-disabled system", timeout)
+        let result = await runtime.runCommand(.launchctl("print-disabled", "system"), timeout)
         return GlobalProtectCompatibilityChecker.disabledState(result, label: job.label)
     }
 
@@ -280,7 +276,7 @@ extension ProcessLifecycleController {
         let printRemaining = deadline.map { $0 - runtime.systemUptime() } ?? 15
         guard printRemaining > 0, !Task.isCancelled else { return "System stop verification did not complete." }
         let result = await runtime.runCommand(
-            "/bin/launchctl print \(ShellCommandRunner.shellQuoted("system/\(job.label)"))", min(printRemaining, 15)
+            .launchctl("print", "system/\(job.label)"), min(printRemaining, 15)
         )
         guard GlobalProtectCompatibilityChecker.loadedState(result, service: .pangpsd) == .notLoaded else {
             return "The system VPN service is still loaded or its state could not be verified."

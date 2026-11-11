@@ -366,6 +366,58 @@ final class ShellCommandRunnerArgvTests: XCTestCase {
         XCTAssertFalse(result.stdout.contains("survived"), "\(result)")
     }
 
+    // MARK: - Administrator requests
+
+    /// The AppleScript is osascript's one `-e` argument, with the root script
+    /// and the prompt each in one AppleScript string literal: quotes and
+    /// backslashes escaped, line breaks written as `\n`.
+    func testAdministratorRequestIsOsascriptWithTheAppleScriptAsOneArgument() {
+        let command = ExternalCommand.administratorScript(
+            "/bin/launchctl enable 'system/com.example' || exit $?\nif true; then\n  echo \"done\"\nfi",
+            prompt: #"TaskScope needs "approval" (C:\Temp)."#
+        )
+
+        XCTAssertEqual(command.executable, "/usr/bin/osascript")
+        XCTAssertEqual(command.arguments, [
+            "-e",
+            #"do shell script "/bin/launchctl enable 'system/com.example' || exit $?\nif true; then\n  echo \"done\"\nfi""#
+                + #" with administrator privileges with prompt "TaskScope needs \"approval\" (C:\\Temp).""#,
+        ])
+    }
+
+    /// Removing the shell changes nothing osascript receives: for the real
+    /// root scripts, the old shell-quoted command line and the new argument
+    /// vector deliver the same bytes. A harmless stand-in prints what it was
+    /// given; osascript itself never runs.
+    func testAdministratorRequestDeliversTheSameAppleScriptAsTheShellQuotedForm() async {
+        let job = WatchedAppPreset.globalProtectSystemDaemon
+        let scripts = [
+            ProcessLifecycleController.adminBootstrapScript(for: job),
+            ProcessLifecycleController.adminDisableScript(for: job),
+            ProcessLifecycleController.adminDisableScript(for: job, preservingLoadedDaemon: true),
+            "/bin/launchctl enable \(ShellCommandRunner.shellQuoted("system/\(job.label)"))",
+        ]
+        for script in scripts {
+            let request = ExternalCommand.administratorScript(
+                script, prompt: "TaskScope needs administrator approval (\(job.label))."
+            )
+            let appleScript = request.arguments[1]
+            let oldCommandLine = "/usr/bin/printf '[%s]' -e \(ShellCommandRunner.shellQuoted(appleScript))"
+
+            let throughShell = await ShellCommandRunner.run(
+                executable: "/bin/zsh", arguments: ["-f", "-c", oldCommandLine], timeout: 10
+            )
+            let direct = await ShellCommandRunner.run(
+                executable: "/usr/bin/printf", arguments: ["[%s]"] + request.arguments, timeout: 10
+            )
+
+            XCTAssertEqual(throughShell.exitCode, 0, "\(throughShell)")
+            XCTAssertEqual(direct.exitCode, 0, "\(direct)")
+            XCTAssertEqual(direct.stdout, "[-e][\(appleScript)]")
+            XCTAssertEqual(direct.stdout, throughShell.stdout, "The shell form and the argument vector must agree")
+        }
+    }
+
     // MARK: - Helpers
 
     /// The group leader starts a descendant that ignores TERM, writes

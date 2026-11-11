@@ -24,7 +24,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertEqual(state.disabled, disabled)
             XCTAssertTrue(state.loaded)
             let commands = await harness.commands
-            XCTAssertFalse(commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
         }
     }
 
@@ -34,7 +34,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         runtime.fileExists = { _ in true }
         let run = runtime.runCommand
         runtime.runCommand = { command, timeout in
-            if command.hasPrefix("/bin/launchctl print ") {
+            if command.isLaunchctl("print") {
                 return ShellCommandResult(command: command, stdout: "", stderr: "Access denied", exitCode: 1)
             }
             return await run(command, timeout)
@@ -44,7 +44,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         )
         XCTAssertFalse(result.succeeded)
         let commands = await harness.commands
-        XCTAssertFalse(commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
     }
 
     func testAdministratorStopWaitsForDelayedDaemonExitAndBoundsFailure() async {
@@ -60,7 +60,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertEqual(result.succeeded, delayedProbes == 3)
             XCTAssertEqual(clock.now, delayedProbes == 3 ? 1.5 : 30, accuracy: 0.001)
             let commands = await harness.commands
-            XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
+            XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 1)
             XCTAssertLessThan(commands.count, 130)
         }
     }
@@ -72,7 +72,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         let run = runtime.runCommand
         runtime.runCommand = { command, timeout in
             let commands = await harness.commands
-            if commands.contains(where: { $0.contains("osascript") }) {
+            if commands.contains(where: { $0.isAdministratorRequest }) {
                 clock.advance(min(12, timeout))
             }
             return await run(command, timeout)
@@ -104,8 +104,11 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertFalse(final.disabled)
         XCTAssertTrue(final.loaded)
         let commands = await harness.commands
-        XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 2)
-        XCTAssertFalse(commands.contains { $0.contains("kickstart") || $0.contains("/bin/rm") || $0.contains("/bin/mv") || $0.contains("kill ") })
+        XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 2)
+        XCTAssertFalse(commands.contains {
+            $0.mentions("kickstart") || $0.mentions("/bin/rm") || $0.mentions("/bin/mv")
+                || $0.isLaunchctl("kill") || $0.mentions("kill ")
+        })
     }
 
     func testCancelledBootstrapPreservesDisableOverrideWithOnePrompt() async {
@@ -118,10 +121,10 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertTrue(state.disabled)
         XCTAssertFalse(state.loaded)
         let commands = await harness.commands
-        let adminCommands = commands.filter { $0.contains("osascript") }
+        let adminCommands = commands.filter { $0.isAdministratorRequest }
         XCTAssertEqual(adminCommands.count, 1)
-        XCTAssertTrue(adminCommands.first?.contains("launchctl enable") == true)
-        XCTAssertTrue(adminCommands.first?.contains("launchctl bootstrap") == true)
+        XCTAssertTrue(adminCommands.first?.administratorAppleScript?.contains("launchctl enable") == true)
+        XCTAssertTrue(adminCommands.first?.administratorAppleScript?.contains("launchctl bootstrap") == true)
     }
 
     func testLoadedDaemonClearsOverrideWithoutBootstrapping() async {
@@ -136,8 +139,8 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertFalse(state.disabled)
         XCTAssertTrue(state.loaded)
         let commands = await harness.commands
-        XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
-        XCTAssertFalse(commands.contains { $0.contains("bootstrap") })
+        XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 1)
+        XCTAssertFalse(commands.contains { $0.mentions("bootstrap") })
     }
 
     func testBackgroundEnforcementNeverPromptsOrMutatesSystemState() async {
@@ -149,7 +152,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
                 )
                 XCTAssertEqual(result.succeeded, disabled && !loaded)
                 let commands = await harness.commands
-                XCTAssertFalse(commands.contains { $0.contains("osascript") })
+                XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
                 let state = await harness.state
                 XCTAssertEqual(state.disabled, disabled)
                 XCTAssertEqual(state.loaded, loaded)
@@ -196,7 +199,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertTrue(state.disabled)
             XCTAssertEqual(state.loaded, !exits)
             let commands = await harness.commands
-            XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
+            XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 1)
         }
     }
 
@@ -218,10 +221,10 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertTrue(detail.hasSuffix("Choose Open to restore GlobalProtect or Apply Keep Off to retry."), detail)
             // A definitive refusal needs one inspection, not a disappearance wait.
             let commands = await harness.commands
-            let admin = try XCTUnwrap(commands.firstIndex { $0.hasPrefix("/usr/bin/osascript") })
+            let admin = try XCTUnwrap(commands.firstIndex { $0.isAdministratorRequest })
             XCTAssertEqual(Array(commands[(admin + 1)...]), [
-                "/bin/launchctl print-disabled system",
-                "/bin/launchctl print 'system/com.paloaltonetworks.gp.pangpsd'"
+                .launchctl("print-disabled", "system"),
+                .launchctl("print", "system/com.paloaltonetworks.gp.pangpsd")
             ])
             let state = await harness.state
             XCTAssertFalse(state.disabled)
@@ -245,7 +248,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertFalse(stopped.succeeded)
             XCTAssertFalse(enabled.succeeded)
             let commands = await harness.commands
-            XCTAssertFalse(commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
         }
     }
 
@@ -257,7 +260,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             var runtime = ServiceHarness(disabled: true, loaded: false).runtime
             let original = runtime.runCommand
             runtime.runCommand = { command, timeout in
-                if command.hasPrefix("/bin/launchctl print ") { return probe }
+                if command.isLaunchctl("print") { return probe }
                 return await original(command, timeout)
             }
             let result = await ProcessLifecycleController.disableSystemLaunchDaemons(
@@ -276,7 +279,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertFalse(stopped.succeeded)
             XCTAssertEqual(stopped.jobs.first?.detail, "The system service plist is missing or its label does not match. Nothing was disabled; restoration could not be guaranteed.")
             let commands = await harness.commands
-            XCTAssertFalse(commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
         }
     }
 
@@ -287,11 +290,11 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         )
         XCTAssertTrue(stopped.succeeded)
         var commands = await harness.commands
-        XCTAssertFalse(commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
         _ = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: harness.runtime)
         _ = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: harness.runtime)
         commands = await harness.commands
-        XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
+        XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 1)
         let state = await harness.state
         XCTAssertFalse(state.loaded, "Turning Keep Off off must not launch anything")
     }
@@ -331,7 +334,9 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertTrue(state.disabled)
         XCTAssertFalse(state.loaded)
         let commands = await harness.commands
-        XCTAssertFalse(commands.contains { $0.contains("osascript") || $0.contains("launchctl enable") || $0.contains("bootstrap") })
+        XCTAssertFalse(commands.contains {
+            $0.isAdministratorRequest || $0.isLaunchctl("enable") || $0.mentions("bootstrap")
+        })
     }
 
     func testInvalidSessionPlistCannotClaimPasswordlessRestoration() async {
@@ -343,7 +348,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             let result = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: runtime)
             XCTAssertFalse(result.succeeded)
             let commands = await harness.commands
-            XCTAssertFalse(commands.contains { $0.contains("osascript") })
+            XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
             let state = await harness.state
             XCTAssertTrue(state.disabled)
         }
@@ -362,11 +367,11 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             )
             XCTAssertTrue(result.succeeded)
             let commands = await harness.commands
-            let command = try XCTUnwrap(commands.first { $0.hasPrefix("/usr/bin/osascript") })
-            let disable = try XCTUnwrap(command.range(of: "/bin/launchctl disable "))
-            let bootout = try XCTUnwrap(command.range(of: "/bin/launchctl bootout "))
+            let appleScript = try XCTUnwrap(commands.first { $0.isAdministratorRequest }?.administratorAppleScript)
+            let disable = try XCTUnwrap(appleScript.range(of: "/bin/launchctl disable "))
+            let bootout = try XCTUnwrap(appleScript.range(of: "/bin/launchctl bootout "))
             XCTAssertLessThan(disable.lowerBound, bootout.lowerBound, "Disable must precede bootout")
-            XCTAssertTrue(command.contains(" || exit $?"),
+            XCTAssertTrue(appleScript.contains(" || exit $?"),
                           "Disable failure must stop the privileged script")
         }
     }
@@ -381,7 +386,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
                 XCTAssertTrue(script.hasPrefix("if /bin/launchctl print"))
                 XCTAssertTrue(script.components(separatedBy: "launchctl disable")[0].contains("exit 1"))
             }
-            let result = await ShellCommandRunner.run("/bin/sh -n -c \(ShellCommandRunner.shellQuoted(script))", timeout: 5)
+            let result = await ShellCommandRunner.run(executable: "/bin/sh", arguments: ["-n", "-c", script], timeout: 5)
             XCTAssertTrue(result.succeeded, result.stderr)
         }
     }
@@ -416,7 +421,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             }
             \(script)
             """
-            let result = await ShellCommandRunner.run("/bin/sh -c \(ShellCommandRunner.shellQuoted(program))", timeout: 5)
+            let result = await ShellCommandRunner.run(executable: "/bin/sh", arguments: ["-c", program], timeout: 5)
             XCTAssertEqual(result.exitCode, scenario.exit, "\(scenario)")
             XCTAssertEqual(result.stdout.trimmingCharacters(in: .newlines), scenario.stdout, "\(scenario)")
         }
@@ -460,7 +465,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         let opened = await ProcessLifecycleController.ensureSystemLaunchDaemons(for: .globalProtect, runtime: runtime)
         XCTAssertTrue(opened.succeeded)
         let commands = await fake.commands
-        XCTAssertFalse(commands.contains { $0.contains("system/") || $0.contains("osascript") })
+        XCTAssertFalse(commands.contains { $0.mentions("system/") || $0.isAdministratorRequest })
         let state = await fake.state
         XCTAssertTrue(state.disabled)
         XCTAssertFalse(state.loaded)
@@ -480,8 +485,8 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertEqual(stopped.succeeded, disabled)
             if !disabled { XCTAssertTrue(stopped.failureSummary?.contains("approval may not have been given") == true) }
             let commands = await fake.commands
-            XCTAssertEqual(commands.filter { $0.contains("osascript") }.count, 1)
-            XCTAssertTrue(commands.first { $0.contains("osascript") }?.contains("with prompt") == true)
+            XCTAssertEqual(commands.filter { $0.isAdministratorRequest }.count, 1)
+            XCTAssertTrue(commands.first { $0.isAdministratorRequest }?.administratorAppleScript?.contains("with prompt") == true)
         }
         let fake = ServiceHarness(disabled: true, loaded: false, adminFailure: .timedOut)
         let enabled = await ProcessLifecycleController.enableSystemLaunchDaemons(for: .globalProtect, runtime: fake.runtime)
@@ -499,7 +504,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
             XCTAssertFalse(refused.failureSummary?.contains("login-session") == true)
             for harness in [absent, loaded] {
                 let commands = await harness.commands
-                XCTAssertFalse(commands.contains { $0.contains("osascript") })
+                XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
             }
         }
     }
@@ -510,7 +515,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertEqual(enabled.jobs.map(\.state), [.changed])
         XCTAssertTrue(enabled.jobs.first?.detail.contains("after the administrator request timed out") == true)
         let commands = await fake.commands
-        XCTAssertTrue(commands.first { $0.contains("osascript") }?.contains("with prompt") == true)
+        XCTAssertTrue(commands.first { $0.isAdministratorRequest }?.administratorAppleScript?.contains("with prompt") == true)
     }
 
     func testBatch04SessionOnlyInstallNeedsNoSystemDisableOverrideOrPrompt() async {
@@ -523,7 +528,7 @@ final class GlobalProtectServiceControlTests: XCTestCase {
         XCTAssertEqual(stopped.jobs.first?.state, .alreadyUnloaded)
         XCTAssertTrue(stopped.jobs.first?.detail.contains("No system VPN daemon is installed or loaded") == true)
         let commands = await fake.commands
-        XCTAssertFalse(commands.contains { $0.contains("osascript") })
+        XCTAssertFalse(commands.contains { $0.isAdministratorRequest })
     }
 
 }
@@ -534,7 +539,7 @@ private actor ServiceHarness {
     enum AdminFailure { case cancelled, denied, disableFailed, bootoutFailed, bootoutNonzeroAfterExit, enableIgnored, timedOut, timedOutAfterChange }
     var sessionLoaded: Bool
     var state: (disabled: Bool, loaded: Bool)
-    var commands: [String] = []
+    var commands: [ExternalCommand] = []
     let adminFailure: AdminFailure?
     let plistLabel: String?
     let disabledProbe: ShellCommandResult?
@@ -572,13 +577,13 @@ private actor ServiceHarness {
         )
     }
 
-    func run(_ command: String) -> ShellCommandResult {
+    func run(_ command: ExternalCommand) -> ShellCommandResult {
         commands.append(command)
-        if command == "/bin/launchctl print-disabled system" {
+        if command == .launchctl("print-disabled", "system") {
             return disabledProbe ?? result("disabled services = {\n\"\(Self.label)\" => \(state.disabled ? "disabled" : "enabled")\n}")
         }
-        if command.hasPrefix("/bin/launchctl print ") {
-            if command.contains("gui/501/com.paloaltonetworks.gp.pangps") {
+        if command.isLaunchctl("print") {
+            if command.arguments.last == "gui/501/com.paloaltonetworks.gp.pangps" {
                 return sessionLoaded ? result(launchctlPrintOutput(pid: 42))
                     : result("", error: "Could not find service \"com.paloaltonetworks.gp.pangps\" in domain", code: 113)
             }
@@ -589,7 +594,8 @@ private actor ServiceHarness {
             return state.loaded ? result(launchctlPrintOutput(pid: 42))
                 : result("", error: "Could not find service \"\(Self.label)\" in domain for system", code: 113)
         }
-        if command.hasPrefix("/usr/bin/osascript") {
+        // The fake reads the root script from osascript's one `-e` argument.
+        if let script = command.administratorAppleScript {
             if adminFailure == .timedOut { return result("", code: ShellCommandRunner.timedOutExitCode) }
             // osascript's own report of a refused authorization.
             if adminFailure == .cancelled {
@@ -598,7 +604,7 @@ private actor ServiceHarness {
             if adminFailure == .denied {
                 return result("", error: "0:242: execution error: The administrator user name or password was incorrect. (-60005)", code: 1)
             }
-            if command.contains("launchctl disable") {
+            if script.contains("launchctl disable") {
                 if adminFailure == .disableFailed {
                     return result("", error: "0:242: execution error: Could not disable service: Operation not permitted (1)", code: 1)
                 }
@@ -609,24 +615,24 @@ private actor ServiceHarness {
                     return result("", code: ShellCommandRunner.timedOutExitCode)
                 }
                 // `do shell script` returns stdout only when the script exits 0.
-                let phase = command.contains("echo TASKSCOPE_SYSTEM_DISABLED") ? "TASKSCOPE_SYSTEM_DISABLED" : ""
+                let phase = script.contains("echo TASKSCOPE_SYSTEM_DISABLED") ? "TASKSCOPE_SYSTEM_DISABLED" : ""
                 switch adminFailure {
                 case .bootoutFailed:
-                    return bootoutFailure(5, "Input/output error", phase: phase, command: command)
+                    return bootoutFailure(5, "Input/output error", phase: phase, script: script)
                 case .bootoutNonzeroAfterExit:
                     stopAcknowledged = true
                     state.loaded = delayedStopProbes > 0
-                    return bootoutFailure(36, "Operation now in progress", phase: phase, command: command)
+                    return bootoutFailure(36, "Operation now in progress", phase: phase, script: script)
                 default:
                     stopAcknowledged = true
                     state.loaded = delayedStopProbes > 0
                     return result(phase)
                 }
-            } else if command.contains("launchctl bootstrap") {
+            } else if script.contains("launchctl bootstrap") {
                 state.disabled = false
                 state.loaded = true
                 stopAcknowledged = false
-            } else if command.contains("launchctl enable"), adminFailure != .enableIgnored {
+            } else if script.contains("launchctl enable"), adminFailure != .enableIgnored {
                 state.disabled = false
                 if adminFailure == .timedOutAfterChange { return result("", code: ShellCommandRunner.timedOutExitCode) }
             }
@@ -637,8 +643,8 @@ private actor ServiceHarness {
 
     /// A script that captures bootout's status still exits 0 and returns its
     /// output; one that exits with that status surfaces only the error.
-    func bootoutFailure(_ status: Int32, _ reason: String, phase: String, command: String) -> ShellCommandResult {
-        if command.contains("TASKSCOPE_BOOTOUT_EXIT=") {
+    func bootoutFailure(_ status: Int32, _ reason: String, phase: String, script: String) -> ShellCommandResult {
+        if script.contains("TASKSCOPE_BOOTOUT_EXIT=") {
             return result("\(phase)\rTASKSCOPE_BOOTOUT_EXIT=\(status)")
         }
         return result("", error: "0:242: execution error: Boot-out failed: \(status): \(reason) (\(status))", code: 1)

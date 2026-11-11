@@ -113,7 +113,7 @@ final class SupportDiagnosticsTests: XCTestCase {
         XCTAssertFalse(result.appBundleFound)
         XCTAssertTrue(result.userLaunchAgents.allSatisfy { !$0.plistFound })
         XCTAssertEqual(harness.commands, preset.userLaunchAgentJobs.map {
-            "/bin/launchctl print \(ShellCommandRunner.shellQuoted("gui/501/\($0.label)"))"
+            .launchctl("print", "gui/501/\($0.label)")
         })
     }
 
@@ -130,7 +130,7 @@ final class SupportDiagnosticsTests: XCTestCase {
         let result = await SupportDiagnosticsCollector(runtime: harness.runtime)
             .inspectPreset(preset, keepOffRequested: false)
         XCTAssertEqual(result.userLaunchAgents.map(\.state), [.unknown, .unknown, .loaded])
-        XCTAssertEqual(harness.commands, ["/bin/launchctl print 'gui/501/com.acme.agent'"])
+        XCTAssertEqual(harness.commands, [.launchctl("print", "gui/501/com.acme.agent")])
     }
 
     /// T05-9: presence is read for the preset's own app path and each job's
@@ -333,10 +333,10 @@ final class SupportDiagnosticsTests: XCTestCase {
 private final class DiagnosticsInspectionHarness: @unchecked Sendable {
     private let lock = NSLock()
     private var results: [ShellCommandResult]
-    private var recordedCommands: [String] = []
+    private var recordedCommands: [ExternalCommand] = []
     private let existingPaths: Set<String>
     private var recordedPathQueries: [String] = []
-    var commands: [String] { lock.withLock { recordedCommands } }
+    var commands: [ExternalCommand] { lock.withLock { recordedCommands } }
     var pathQueries: [String] { lock.withLock { recordedPathQueries } }
     init(results: [ShellCommandResult], existingPaths: Set<String> = []) {
         self.results = results

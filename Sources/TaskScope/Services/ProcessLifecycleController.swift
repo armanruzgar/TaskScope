@@ -160,7 +160,7 @@ enum ProcessLifecycleController {
                 continue
             }
 
-            let command = "/bin/launchctl bootout \(ShellCommandRunner.shellQuoted(target))"
+            let command = ExternalCommand.launchctl("bootout", target)
             let result = await runtime.runCommand(command, launchAgentBootoutTimeout)
             let after = await inspectAfterBootout(target, label: job.label, commandResult: result, runtime: runtime)
             let didUnload = after == .notLoaded
@@ -210,7 +210,7 @@ enum ProcessLifecycleController {
             }
             let target = "gui/\(uid)/\(job.label)"
             let disable = await runtime.runCommand(
-                "/bin/launchctl disable \(ShellCommandRunner.shellQuoted(target))",
+                .launchctl("disable", target),
                 15
             )
             guard disable.succeeded else {
@@ -248,7 +248,7 @@ enum ProcessLifecycleController {
                 ))
             case .loaded:
                 let bootout = await runtime.runCommand(
-                    "/bin/launchctl bootout \(ShellCommandRunner.shellQuoted(target))",
+                    .launchctl("bootout", target),
                     launchAgentBootoutTimeout
                 )
                 let after = await inspectAfterBootout(target, label: job.label, commandResult: bootout, runtime: runtime)
@@ -283,7 +283,7 @@ enum ProcessLifecycleController {
         let uid = runtime.userID
         var results: [LifecycleJobResult] = []
         let disabledOverrides = await runtime.runCommand(
-            "/bin/launchctl print-disabled \(ShellCommandRunner.shellQuoted("gui/\(uid)"))",
+            .launchctl("print-disabled", "gui/\(uid)"),
             15
         )
 
@@ -306,7 +306,7 @@ enum ProcessLifecycleController {
             }
             let target = "gui/\(uid)/\(job.label)"
             let result = await runtime.runCommand(
-                "/bin/launchctl enable \(ShellCommandRunner.shellQuoted(target))",
+                .launchctl("enable", target),
                 15
             )
             results.append(LifecycleJobResult(
@@ -423,7 +423,7 @@ enum ProcessLifecycleController {
             }
 
             let enable = await runtime.runCommand(
-                "/bin/launchctl enable \(ShellCommandRunner.shellQuoted(target))",
+                .launchctl("enable", target),
                 15
             )
             guard enable.succeeded else {
@@ -436,7 +436,7 @@ enum ProcessLifecycleController {
             }
 
             let bootstrap = await runtime.runCommand(
-                "/bin/launchctl bootstrap \(ShellCommandRunner.shellQuoted("gui/\(uid)")) \(ShellCommandRunner.shellQuoted(job.plistPath))",
+                .launchctl("bootstrap", "gui/\(uid)", job.plistPath),
                 15
             )
             // A nonzero bootstrap is not a verdict: the job may have been loaded
@@ -454,7 +454,7 @@ enum ProcessLifecycleController {
             }
 
             let kickstart = await runtime.runCommand(
-                "/bin/launchctl kickstart \(ShellCommandRunner.shellQuoted(target))",
+                .launchctl("kickstart", target),
                 15
             )
             // launchd's state decides the result, not kickstart's exit status, so
@@ -586,7 +586,7 @@ enum ProcessLifecycleController {
             let remaining = deadline - runtime.systemUptime()
             guard remaining > 0, !Task.isCancelled else { break }
             let inspection = await runtime.runCommand(
-                "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))", min(remaining, 15)
+                .launchctl("print", target), min(remaining, 15)
             )
             // A loaded job whose complete listing shows no pid is idle (for
             // example after PanGPS exited 0). Start it once. A plain kickstart,
@@ -594,7 +594,7 @@ enum ProcessLifecycleController {
             if !requestedStart, inspection.succeeded, LaunchctlJobListing.hasNoRunningPID(inspection.stdout) {
                 requestedStart = true
                 let start = await runtime.runCommand(
-                    "/bin/launchctl kickstart \(ShellCommandRunner.shellQuoted(target))", min(remaining, 15)
+                    .launchctl("kickstart", target), min(remaining, 15)
                 )
                 guard start.succeeded else {
                     let reason = commandFailure(start, fallback: start.failureDescription)
@@ -653,7 +653,7 @@ enum ProcessLifecycleController {
     ) async -> AppBundleOpenResult {
         guard runtime.fileExists(path) else { return .failed("The app bundle is missing.") }
         let result = await runtime.runCommand(
-            "/usr/bin/open \(ShellCommandRunner.shellQuoted(path))",
+            ExternalCommand("/usr/bin/open", [path]),
             15
         )
         if result.succeeded { return .opened }
@@ -668,7 +668,7 @@ enum ProcessLifecycleController {
         runtime: ProcessLifecycleRuntime
     ) async -> (inspection: LaunchJobInspection, pid: Int32?, hasNoRunningPID: Bool) {
         let result = await runtime.runCommand(
-            "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))",
+            .launchctl("print", target),
             15
         )
         return (
@@ -723,7 +723,7 @@ enum ProcessLifecycleController {
         let deadline = runtime.systemUptime() + timeout
         let target = "system/\(job.label)"
         let inspection = await runtime.runCommand(
-            "/bin/launchctl print \(ShellCommandRunner.shellQuoted(target))",
+            .launchctl("print", target),
             timeout
         )
         switch launchJobInspection(from: inspection, label: job.label) {
@@ -802,12 +802,7 @@ enum ProcessLifecycleController {
         // The prompt names who asks and why; the dialog otherwise shows only
         // the stock "osascript wants to make changes" text.
         let prompt = "TaskScope needs administrator approval to start the GlobalProtect system VPN service (\(job.label))."
-        let appleScript = "do shell script \(ShellCommandRunner.appleScriptString(rootCommand))"
-            + " with administrator privileges with prompt \(ShellCommandRunner.appleScriptString(prompt))"
-        return await runtime.runCommand(
-            "/usr/bin/osascript -e \(ShellCommandRunner.shellQuoted(appleScript))",
-            60
-        )
+        return await runtime.runCommand(.administratorScript(rootCommand, prompt: prompt), 60)
     }
 
     /// Names a refused approval plainly instead of showing osascript's raw
