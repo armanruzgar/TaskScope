@@ -98,11 +98,12 @@ final class AutoStopRuleLifecycleTests: XCTestCase {
             XCTAssertEqual(store.events.map(\.outcome), [action == .kill ? .stopped : .logged, .dismissed])
             XCTAssertTrue(store.pendingPrompts.isEmpty)
 
-            // The synchronous compatibility evaluator follows the same policy.
+            // Saving resets a Log Only rule's occurrences (it logs again), while
+            // an unchanged Auto Stop rule retains its handled occurrence.
             XCTAssertTrue(store.update(rule))
-            var callbacks = 0
-            store.evaluate(runningProcesses: [appProcess(pid: 41, elapsed: "10:00")]) { _, _ in callbacks += 1 }
-            XCTAssertEqual(callbacks, action == .kill ? 0 : 1, "An unchanged Auto Stop rule retains its handled occurrence")
+            await store.evaluateNow()
+            XCTAssertEqual(attempts, action == .kill ? 1 : 0, "An unchanged Auto Stop rule retains its handled occurrence")
+            XCTAssertEqual(store.events.filter { $0.outcome == .logged }.count, action == .silent ? 2 : 0)
         }
     }
 

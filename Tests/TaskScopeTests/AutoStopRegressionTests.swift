@@ -41,15 +41,12 @@ final class AutoStopRegressionTests: XCTestCase {
         }
     }
 
-    func testCompatibilityEvaluatorUsesTheSameOwnerAndSelfScope() {
-        let store = makeStore()
+    func testSinglePassUsesTheSameOwnerAndSelfScope() async {
+        let store = makeStore(processes: [process(pid: 41), process(pid: 42, uid: nil),
+                                          process(pid: 43, uid: getuid() + 1), process(pid: getpid())])
         XCTAssertTrue(store.add(rule(action: .prompt)))
-        var attempts: [Int32] = []
-        store.evaluate(runningProcesses: [process(pid: 41), process(pid: 42, uid: nil),
-                                          process(pid: 43, uid: getuid() + 1), process(pid: getpid())]) {
-            _, target in attempts.append(target.pid)
-        }
-        XCTAssertEqual(attempts, [41])
+        await store.evaluateNow()
+        XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [41])
     }
 
     func testUnrelatedRuleEditDoesNotAccelerateAcceptedStopRetry() async {

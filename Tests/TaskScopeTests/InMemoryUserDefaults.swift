@@ -5,8 +5,8 @@ import Foundation
 /// overwrite each other's fixtures and no test leaves a preferences file
 /// behind. Values are kept as the property-list copies cfprefsd would hand
 /// back, and a value that is not a property list stops the test, as it would
-/// stop the app.
-final class InMemoryUserDefaults: UserDefaults {
+/// stop the app. Not final, so a test can observe writes (Batch08FixTests).
+class InMemoryUserDefaults: UserDefaults {
     private final class Storage: @unchecked Sendable {
         let lock = NSLock()
         var values: [String: Any] = [:]

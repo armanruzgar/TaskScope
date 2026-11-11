@@ -71,7 +71,15 @@ final class AutoStopRulesStore: ObservableObject {
     private struct PendingExit {
         var prompt: AutoStopPrompt
         var canRetry: Bool
+        /// A confirmed Stop Now records one failure if the process is still
+        /// running one engine cadence after the request was accepted.
+        var reportsStillRunning = false
         var firstAcceptedAt: ContinuousClock.Instant
+
+        /// A stop the user confirmed from a prompt. It is never re-signalled,
+        /// so it carries no authority, and its exit is tracked as history
+        /// even after the rule is edited, switched off or deleted.
+        var isConfirmedStop: Bool { prompt.rule.action == .prompt }
     }
 
     private let rulesPersistence: RecoveringCodableStorage<[AutoStopRule]>
@@ -199,6 +207,7 @@ final class AutoStopRulesStore: ObservableObject {
         inFlightActions.values.forEach { $0.task.cancel() }
     }
 
+    /// Test convenience; Settings reads the two read-only flags below.
     var hasUnreadableData: Bool {
         !allowsRulesPersistence || !allowsEventsPersistence
     }
@@ -230,8 +239,8 @@ final class AutoStopRulesStore: ObservableObject {
         saveEvents()
     }
 
-    /// Compatibility entry point for callers that explicitly choose to reset both
-    /// independently protected payloads.
+    /// Test convenience that resets both independently protected payloads;
+    /// Settings resets each one with its own button.
     func resetAfterCorruption() {
         resetRulesAfterCorruption()
         resetEventsAfterCorruption()
@@ -241,8 +250,7 @@ final class AutoStopRulesStore: ObservableObject {
     func add(_ rule: AutoStopRule) -> Bool {
         guard !rejectUnknownRule(rule) else { return false }
         guard !rejectRulesIfReadOnly() else { return false }
-        let normalized = validated(rule)
-        guard let normalized else { return false }
+        guard let normalized = validatedForEditing(rule, replacing: nil) else { return false }
         guard !rules.contains(where: {
             $0.processName.caseInsensitiveCompare(normalized.processName) == .orderedSame
         }) else {
@@ -265,7 +273,7 @@ final class AutoStopRulesStore: ObservableObject {
         guard !rejectUnknownRule(rule) else { return false }
         guard !rejectRulesIfReadOnly() else { return false }
         guard let index = rules.firstIndex(where: { $0.id == rule.id }),
-              let normalized = validated(rule) else {
+              let normalized = validatedForEditing(rule, replacing: rules[index]) else {
             return false
         }
         guard !rules.contains(where: {
@@ -277,15 +285,25 @@ final class AutoStopRulesStore: ObservableObject {
         }
         validationError = nil
         let sample = recordUptime()
-        let retained = Set(automaticProcesses.compactMap { occurrence, process in
+        var retained = Set(automaticProcesses.compactMap { occurrence, process in
             occurrence.ruleID == rule.id && qualifiesForAutomaticStop(normalized, process: process, at: sample)
                 ? occurrence : nil
         })
+        // A confirmed Stop Now stays handled until its process exits, whatever
+        // the edit: the user already answered for that occurrence, and its
+        // signal was accepted, so it must neither prompt nor be signalled again.
+        retained.formUnion(pendingExits.compactMap { occurrence, pending in
+            occurrence.ruleID == rule.id && pending.isConfirmedStop ? occurrence : nil
+        })
+        let untracked = pendingExits.compactMap { occurrence, pending in
+            occurrence.ruleID == rule.id && !retained.contains(occurrence) ? pending : nil
+        }
         rules[index] = normalized
         handledOccurrences = handledOccurrences.filter { $0.ruleID != rule.id || retained.contains($0) }
         reportedFailures = reportedFailures.filter { $0.ruleID != rule.id || retained.contains($0) }
         pendingExits = pendingExits.filter { $0.key.ruleID != rule.id || retained.contains($0.key) }
         automaticProcesses = automaticProcesses.filter { $0.key.ruleID != rule.id || retained.contains($0.key) }
+        recordUntrackedExits(untracked)
         // Editing or disabling a rule must retire its live prompts too, exactly as
         // `remove(_:)` does; otherwise a disabled rule's alert stays actionable.
         // Dismissed occurrences are kept on purpose (see `dismissedOccurrences`).
@@ -306,6 +324,7 @@ final class AutoStopRulesStore: ObservableObject {
         guard !rejectRulesIfReadOnly() else { return false }
         var copy = rule
         copy.id = UUID()
+        copy.isEnabled = false
         copy.processName = uniqueName(basedOn: rule.processName)
         return add(copy)
     }
@@ -317,7 +336,7 @@ final class AutoStopRulesStore: ObservableObject {
             return false
         }
         let removedIDs = Set(offsets.compactMap { rules.indices.contains($0) ? rules[$0].id : nil })
-        rules.remove(atOffsets: offsets)
+        rules.remove(atOffsets: IndexSet(offsets.filter { rules.indices.contains($0) }))
         forgetOccurrences(forRuleIDs: removedIDs)
         validationError = nil
         return true
@@ -335,13 +354,36 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
     private func forgetOccurrences(forRuleIDs removedIDs: Set<UUID>) {
+        let untracked = pendingExits.compactMap { occurrence, pending in
+            removedIDs.contains(occurrence.ruleID) && !pending.isConfirmedStop ? pending : nil
+        }
         handledOccurrences = handledOccurrences.filter { !removedIDs.contains($0.ruleID) }
         reportedFailures = reportedFailures.filter { !removedIDs.contains($0.ruleID) }
         dismissedOccurrences = dismissedOccurrences.filter { !removedIDs.contains($0.ruleID) }
-        pendingExits = pendingExits.filter { !removedIDs.contains($0.key.ruleID) }
+        // A confirmed Stop Now's exit is still recorded once it happens; it is
+        // history and needs no rule (see `PendingExit.isConfirmedStop`).
+        pendingExits = pendingExits.filter { !removedIDs.contains($0.key.ruleID) || $0.value.isConfirmedStop }
         automaticProcesses = automaticProcesses.filter { !removedIDs.contains($0.key.ruleID) }
         pendingPrompts.removeAll { removedIDs.contains($0.rule.id) }
+        recordUntrackedExits(untracked)
     }
+
+    /// An accepted Auto Stop whose rule was switched off, deleted, or edited so
+    /// that it no longer applies loses its retry and its exit tracking, because
+    /// a retired rule has no authority left. Close its "waiting for the process
+    /// to exit" record so the history does not wait forever. A spent retry
+    /// already ended with its own failure record, and a retry still in flight
+    /// records its own outcome.
+    private func recordUntrackedExits(_ untracked: [PendingExit]) {
+        let closing = EventBatch()
+        for pending in untracked where pending.canRetry {
+            record(pending.prompt, outcome: .stopRequested, detail: Self.untrackedExitDetail, batch: closing)
+        }
+        flush(closing)
+    }
+
+    private static let untrackedExitDetail =
+        "The rule changed or was removed before the process exited; its exit will not be tracked."
 
     /// Starts the engine with a handler that receives the kind of stop it is
     /// being asked to perform, so it can apply the matching authority check.
@@ -356,7 +398,7 @@ final class AutoStopRulesStore: ObservableObject {
         updateEnginePolling()
     }
 
-    /// Convenience for handlers that do not distinguish the action kind.
+    /// Test convenience for handlers that do not distinguish the action kind.
     func start(
         cadence: TimeInterval = 10,
         actionHandler: @escaping (AutoStopRule, AppProcess) async -> ProcessActionResult
@@ -366,14 +408,6 @@ final class AutoStopRulesStore: ObservableObject {
         }
     }
 
-    func restart(
-        cadence: TimeInterval,
-        actionHandler: @escaping (AutoStopRule, AppProcess) async -> ProcessActionResult
-    ) {
-        stop()
-        start(cadence: cadence, actionHandler: actionHandler)
-    }
-
     func stop() {
         pollingController.stop()
         inFlightActions.values.forEach { $0.task.cancel() }
@@ -381,9 +415,16 @@ final class AutoStopRulesStore: ObservableObject {
         isEngineRunning = false
     }
 
+    /// Polling is needed while a rule is enabled, and also while a confirmed
+    /// stop waits for its process to exit, so that exit is still recorded after
+    /// the user switches off or deletes the last rule.
+    private var needsPolling: Bool {
+        rules.contains(where: \.isEnabled) || pendingExits.values.contains(where: \.isConfirmedStop)
+    }
+
     private func updateEnginePolling() {
         guard isEngineRunning else { return }
-        guard rules.contains(where: { $0.isEnabled }) else {
+        guard needsPolling else {
             pollingController.stop()
             engineError = nil
             return
@@ -449,7 +490,15 @@ final class AutoStopRulesStore: ObservableObject {
             // The signal was accepted; the exit is observed on a later tick. A
             // confirmed prompt is never re-signalled automatically.
             handledOccurrences.insert(prompt.id)
-            pendingExits[prompt.id] = PendingExit(prompt: prompt, canRetry: false, firstAcceptedAt: monotonicNow())
+            pendingExits[prompt.id] = PendingExit(
+                prompt: prompt,
+                canRetry: false,
+                reportsStillRunning: true,
+                firstAcceptedAt: monotonicNow()
+            )
+            // The last enabled rule may have been switched off while the signal
+            // was in flight, which stopped polling; resume it to see this exit.
+            if !rules.contains(where: \.isEnabled) { updateEnginePolling() }
             record(
                 prompt,
                 outcome: .stopRequested,
@@ -479,11 +528,13 @@ final class AutoStopRulesStore: ObservableObject {
         record(claimed, outcome: .dismissed, detail: "Dismissed; this process occurrence will not prompt again.")
     }
 
+    /// Test convenience; the alert claims a specific prompt (see `claimPrompt`).
     func stopCurrentPrompt() async {
         guard let prompt = currentPrompt, let claimed = claimPrompt(prompt) else { return }
         await finishStop(claimed)
     }
 
+    /// Test convenience; the alert dismisses a specific prompt.
     func dismissCurrentPrompt() {
         guard let prompt = currentPrompt else { return }
         dismissPrompt(prompt)
@@ -498,30 +549,6 @@ final class AutoStopRulesStore: ObservableObject {
         return true
     }
 
-    /// Compatibility entry point for focused callers; app enforcement uses `evaluateNow`.
-    func evaluate(
-        runningProcesses: [AppProcess],
-        onAction: @escaping (AutoStopRule, AppProcess) -> Void
-    ) {
-        let activeRules = rules.filter(\.isEnabled)
-        let sample = recordUptime()
-        for process in runningProcesses {
-            guard let runtime = ruleRuntime(of: process, at: sample) else { continue }
-            for rule in activeRules where matches(rule, process: process) {
-                let occurrence = AutoStopOccurrence(ruleID: rule.id, processIdentity: process.identity)
-                guard runtime >= TimeInterval(rule.runtimeMinutes) * 60,
-                      !handledOccurrences.contains(occurrence),
-                      (rule.action != .prompt || !dismissedOccurrences.contains(occurrence)) else {
-                    continue
-                }
-                handledOccurrences.insert(occurrence)
-                if rule.action == .kill { automaticProcesses[occurrence] = process }
-                onAction(rule, process)
-            }
-        }
-        pruneEndedOccurrences(runningProcesses)
-    }
-
     /// A rule captured before an `await` may have been edited, disabled, or
     /// deleted while the action was in flight; `rules` is the only authority once
     /// we resume, and the whole captured value must still be present.
@@ -529,19 +556,39 @@ final class AutoStopRulesStore: ObservableObject {
         rule.isEnabled && rules.contains(rule)
     }
 
+    /// An automatic stop found due during a pass, dispatched after every
+    /// prompt and Log Only event of that pass has been handled.
+    private struct DueStop {
+        var rule: AutoStopRule
+        var process: AppProcess
+        var occurrence: AutoStopOccurrence
+        var isRetry: Bool
+    }
+
     private func evaluate(_ processes: [AppProcess]) async {
+        // Resolve ended and moved occurrences first. A handled mark then already
+        // follows a moved executable (same PID and start time) to its new
+        // identity, so the loop below cannot act on that occurrence twice.
+        let observations = EventBatch()
+        pruneEndedOccurrences(processes, batch: observations)
+        if isEngineRunning, !needsPolling {
+            // Polling outlived the last enabled rule only to see a confirmed
+            // stop's process exit, and none is left to watch.
+            pollingController.stop()
+        }
+
+        // This loop never suspends, so no rule can change while it runs.
         let activeRules = rules.filter(\.isEnabled)
         let sample = recordUptime()
+        var dueStops: [DueStop] = []
         for process in processes {
             guard let runtime = ruleRuntime(of: process, at: sample) else { continue }
             for rule in activeRules where matches(rule, process: process) && isStillActive(rule) {
-                guard !Task.isCancelled else { return }
                 let occurrence = AutoStopOccurrence(ruleID: rule.id, processIdentity: process.identity)
                 guard runtime >= TimeInterval(rule.runtimeMinutes) * 60,
                       (rule.action != .prompt || !dismissedOccurrences.contains(occurrence)) else {
                     continue
                 }
-                let prompt = AutoStopPrompt(id: occurrence, rule: rule, process: process)
 
                 if rule.action == .kill { automaticProcesses[occurrence] = process }
                 // A queued prompt shows the process as it is now, not as it was
@@ -560,35 +607,27 @@ final class AutoStopRulesStore: ObservableObject {
                           pending.firstAcceptedAt.duration(to: monotonicNow()) >= .seconds(engineCadence) else {
                         continue
                     }
-                    pendingExits[occurrence] = PendingExit(prompt: pending.prompt, canRetry: false, firstAcceptedAt: pending.firstAcceptedAt)
-                    await performAutomaticStop(
-                        rule: rule,
-                        process: process,
-                        occurrence: occurrence,
-                        prompt: prompt,
-                        isRetry: true
-                    )
+                    dueStops.append(DueStop(rule: rule, process: process, occurrence: occurrence, isRetry: true))
                     continue
                 }
 
-                handledOccurrences.insert(occurrence)
+                let prompt = AutoStopPrompt(id: occurrence, rule: rule, process: process)
                 switch rule.action {
                 case .prompt:
+                    handledOccurrences.insert(occurrence)
                     pendingPrompts.append(prompt)
                 case .kill:
-                    await performAutomaticStop(
-                        rule: rule,
-                        process: process,
-                        occurrence: occurrence,
-                        prompt: prompt,
-                        isRetry: false
-                    )
+                    // Marked handled only when it is dispatched below, so a pass
+                    // that ends before reaching it leaves it to the next pass.
+                    dueStops.append(DueStop(rule: rule, process: process, occurrence: occurrence, isRetry: false))
                 case .silent:
+                    handledOccurrences.insert(occurrence)
                     if !record(
                         prompt,
                         outcome: .logged,
                         detail: "Runtime threshold reached.",
-                        requiresDurability: true
+                        requiresDurability: true,
+                        batch: observations
                     ) {
                         // A log-only occurrence has not completed until its event is
                         // durably recorded. Retry after the event recovery gate is reset.
@@ -597,7 +636,34 @@ final class AutoStopRulesStore: ObservableObject {
                 }
             }
         }
-        pruneEndedOccurrences(processes)
+        // One save for the whole pass. `flush` also un-handles any Log Only
+        // occurrence whose event could not be saved.
+        flush(observations)
+
+        // An automatic stop can wait on the process-operation gate behind another
+        // mutation (a preset stop, or Keep GlobalProtect Off waiting for an
+        // administrator), so stops run only after every other rule was served.
+        for stop in dueStops {
+            guard !Task.isCancelled else { return }
+            // An earlier stop's suspension lets rules change. A changed rule no
+            // longer authorizes this stop; the next pass evaluates the new value.
+            guard isStillActive(stop.rule) else { continue }
+            if stop.isRetry {
+                guard let pending = pendingExits[stop.occurrence], pending.canRetry else { continue }
+                pendingExits[stop.occurrence]?.canRetry = false
+            } else {
+                guard handledOccurrences.insert(stop.occurrence).inserted else { continue }
+            }
+            // A stop records at most one event and saves it at once, so the
+            // history stays current while a later stop waits on the gate.
+            await performAutomaticStop(
+                rule: stop.rule,
+                process: stop.process,
+                occurrence: stop.occurrence,
+                prompt: AutoStopPrompt(id: stop.occurrence, rule: stop.rule, process: stop.process),
+                isRetry: stop.isRetry
+            )
+        }
     }
 
     private func performAutomaticStop(
@@ -638,7 +704,19 @@ final class AutoStopRulesStore: ObservableObject {
         if !isActive {
             handledOccurrences.remove(occurrence)
             pendingExits[occurrence] = nil
-            guard result == .stopped || result == .requestedStillRunning else { return }
+            guard result == .stopped || result == .requestedStillRunning else {
+                // A retry follows an accepted first request whose record says it
+                // is waiting for the exit; the retired rule tracks nothing more,
+                // so close that record (see `recordUntrackedExits`).
+                if isRetry {
+                    if result == .stale {
+                        record(prompt, outcome: .stopped, detail: "Exited after the stop request.")
+                    } else {
+                        record(prompt, outcome: .stopRequested, detail: Self.untrackedExitDetail)
+                    }
+                }
+                return
+            }
         }
 
         switch result {
@@ -702,7 +780,7 @@ final class AutoStopRulesStore: ObservableObject {
         }
     }
 
-    private func pruneEndedOccurrences(_ processes: [AppProcess]) {
+    private func pruneEndedOccurrences(_ processes: [AppProcess], batch: EventBatch) {
         let runningProcesses = processes.filter { !$0.hasExited }
         let runningIdentities = Set(runningProcesses.map(\.identity))
         automaticProcesses = automaticProcesses.filter { runningIdentities.contains($0.key.processIdentity) }
@@ -718,33 +796,65 @@ final class AutoStopRulesStore: ObservableObject {
         let carried = handledOccurrences.filter {
             runningIdentities.contains($0.processIdentity) || !unanswered.contains($0)
         }
-        let changed = carried.filter { !runningIdentities.contains($0.processIdentity) }
-        let replacementOccurrences = Set(changed.compactMap(currentOccurrence))
         handledOccurrences = Set(carried.compactMap(currentOccurrence))
         reportedFailures = Set(reportedFailures.compactMap(currentOccurrence))
         dismissedOccurrences = Set(dismissedOccurrences.compactMap(currentOccurrence))
+        // A confirmed stop is never re-signalled, but one engine cadence after it
+        // was accepted a process that is still running gets one failure record,
+        // so the history does not say "waiting" for as long as it runs.
+        for (occurrence, pending) in pendingExits where pending.reportsStillRunning
+            && runningIdentities.contains(occurrence.processIdentity)
+            && pending.firstAcceptedAt.duration(to: monotonicNow()) >= .seconds(engineCadence) {
+            pendingExits[occurrence]?.reportsStillRunning = false
+            record(pending.prompt, outcome: .failed,
+                   detail: "Still running after the confirmed stop request. Use Force Stop if it must exit.", batch: batch)
+        }
+        // A different start time on the same PID means the captured lifetime
+        // ended and the kernel reused its PID. Only the same lifetime with a
+        // moved or unreadable executable is an identity change.
         for (occurrence, pending) in pendingExits
         where !runningIdentities.contains(occurrence.processIdentity) {
             pendingExits[occurrence] = nil
-            if currentByPID[occurrence.processIdentity.pid] != nil {
+            if currentOccurrence(occurrence) != nil {
                 record(pending.prompt, outcome: .failed,
-                       detail: "Process identity changed; exit could not be confirmed and automatic stopping will not retry.")
+                       detail: "Process identity changed; exit could not be confirmed and stopping will not retry.", batch: batch)
             } else {
-                record(pending.prompt, outcome: .stopped, detail: "Exited after the stop request.")
+                record(pending.prompt, outcome: .stopped, detail: "Exited after the stop request.", batch: batch)
             }
         }
         for prompt in pendingPrompts where !runningIdentities.contains(prompt.id.processIdentity) {
-            if currentByPID[prompt.process.pid] != nil {
-                record(prompt, outcome: .failed, detail: "Process identity changed before the prompt was handled; nothing was stopped.")
+            if currentOccurrence(prompt.id) != nil {
+                record(prompt, outcome: .failed, detail: "Process identity changed before the prompt was handled; nothing was stopped.", batch: batch)
             } else {
-                record(prompt, outcome: .processEnded, detail: "Process ended before the prompt was handled.")
+                record(prompt, outcome: .processEnded, detail: "Process ended before the prompt was handled.", batch: batch)
             }
         }
         pendingPrompts.removeAll {
             !runningIdentities.contains($0.id.processIdentity)
-                || replacementOccurrences.contains($0.id)
                 || dismissedOccurrences.contains($0.id)
         }
+    }
+
+    /// Events recorded together (one engine pass, or one rule change) and saved
+    /// once: every save re-encodes, merges and rewrites the whole log.
+    private final class EventBatch {
+        var entries: [(event: AutoStopEvent, durableOccurrence: AutoStopOccurrence?)] = []
+    }
+
+    /// Publishes a batch newest first and saves the log once. When the save
+    /// fails, a Log Only occurrence has not completed (see `record`), so its
+    /// event is dropped and the occurrence is retried on a later pass; other
+    /// events stay in memory, as an unsaved single event does.
+    private func flush(_ batch: EventBatch) {
+        guard !batch.entries.isEmpty else { return }
+        let previous = events
+        events = Array((batch.entries.reversed().map(\.event) + previous).prefix(eventLimit))
+        let durable = batch.entries.compactMap(\.durableOccurrence)
+        if !saveEvents(), !durable.isEmpty {
+            handledOccurrences.subtract(durable)
+            events = Array((batch.entries.reversed().filter { $0.durableOccurrence == nil }.map(\.event) + previous).prefix(eventLimit))
+        }
+        batch.entries.removeAll()
     }
 
     @discardableResult
@@ -752,7 +862,8 @@ final class AutoStopRulesStore: ObservableObject {
         _ prompt: AutoStopPrompt,
         outcome: AutoStopEvent.Outcome,
         detail: String,
-        requiresDurability: Bool = false
+        requiresDurability: Bool = false,
+        batch: EventBatch? = nil
     ) -> Bool {
         guard !requiresDurability || allowsEventsPersistence else { return false }
         let event = AutoStopEvent(
@@ -763,6 +874,11 @@ final class AutoStopRulesStore: ObservableObject {
             outcome: outcome,
             detail: detail
         )
+        if let batch {
+            // Published and saved by `flush`, which also enforces durability.
+            batch.entries.append((event, requiresDurability ? prompt.id : nil))
+            return true
+        }
         events.insert(event, at: 0)
         if events.count > eventLimit {
             events.removeLast(events.count - eventLimit)
@@ -874,6 +990,18 @@ final class AutoStopRulesStore: ObservableObject {
         }
     }
 
+    /// `validated` plus the checks for a rule the user adds or edits; see
+    /// `AutoStopRuleValidation.validateForEditing`.
+    private func validatedForEditing(_ rule: AutoStopRule, replacing stored: AutoStopRule?) -> AutoStopRule? {
+        switch AutoStopRuleValidation.validateForEditing(rule, replacing: stored) {
+        case .success(let normalized):
+            return normalized
+        case .failure(let error):
+            validationError = error.message
+            return nil
+        }
+    }
+
     private func uniqueName(basedOn name: String) -> String {
         var suffix = 2
         var candidate = "\(name) Copy"
@@ -886,12 +1014,15 @@ final class AutoStopRulesStore: ObservableObject {
 
     private func normalizeRules() {
         guard !isNormalizing else { return }
-        var seen: Set<String> = []
-        let normalized = rules.compactMap { rule -> AutoStopRule? in
-            guard let valid = validated(rule) else { return nil }
-            let key = valid.processName.lowercased()
-            guard seen.insert(key).inserted else { return nil }
-            return valid
+        var normalized: [AutoStopRule] = []
+        for rule in rules {
+            // The comparison `add`, `update` and the engine use, so a rule they
+            // accepted is never dropped here.
+            guard let valid = validated(rule),
+                  !normalized.contains(where: {
+                      $0.processName.caseInsensitiveCompare(valid.processName) == .orderedSame
+                  }) else { continue }
+            normalized.append(valid)
         }
         guard normalized != rules else { return }
         isNormalizing = true

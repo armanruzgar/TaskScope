@@ -20,7 +20,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         super.tearDown()
     }
 
-    func testRejectedStoredRulesAreBackedUpFilteredAndLockedUntilReset() throws {
+    func testRejectedStoredRulesAreBackedUpFilteredAndLockedUntilReset() async throws {
         let rulesKey = "rules"
         let safe = AutoStopRule(
             processName: " Safe ",
@@ -41,7 +41,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         let original = try JSONEncoder().encode([safe, invalid, duplicate])
         defaults.set(original, forKey: rulesKey)
 
-        let store = makeRulesStore(rulesKey: rulesKey)
+        let store = makeRulesStore(rulesKey: rulesKey, inventory: PersistenceRecoveryInventory(processes: [process(name: "Unsafe"), process(name: "Safe")]))
 
         XCTAssertEqual(store.rules.map(\.processName), ["Safe"])
         XCTAssertTrue(store.isRulesReadOnlyAfterRecovery)
@@ -50,10 +50,8 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
             original
         )
 
-        var callbackNames: [String] = []
-        store.evaluate(runningProcesses: [process(name: "Unsafe"), process(name: "Safe")]) { rule, _ in
-            callbackNames.append(rule.processName)
-        }
+        await store.evaluateNow()
+        let callbackNames = store.pendingPrompts.map(\.rule.processName)
         XCTAssertEqual(callbackNames, ["Safe"], "only the valid rule may act; the zero-minute path-bound kill rule must be rejected")
 
         let recovered = try XCTUnwrap(store.rules.first)
@@ -80,7 +78,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         XCTAssertEqual(persisted.map(\.processName), ["Safe", "Other"])
     }
 
-    func testOverflowingStoredRuntimeIsRejectedBeforeEvaluation() throws {
+    func testOverflowingStoredRuntimeIsRejectedBeforeEvaluation() async throws {
         let rulesKey = "rules"
         let unsafe = AutoStopRule(
             processName: "Unsafe",
@@ -91,7 +89,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         let original = try JSONEncoder().encode([unsafe])
         defaults.set(original, forKey: rulesKey)
 
-        let store = makeRulesStore(rulesKey: rulesKey)
+        let store = makeRulesStore(rulesKey: rulesKey, inventory: PersistenceRecoveryInventory(processes: [process(name: "Unsafe")]))
 
         XCTAssertTrue(store.rules.isEmpty)
         XCTAssertTrue(store.isRulesReadOnlyAfterRecovery)
@@ -103,9 +101,9 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         valid.runtimeMinutes = 1
         XCTAssertTrue(store.add(valid))
         var actedRules: [AutoStopRule] = []
-        store.evaluate(runningProcesses: [process(name: "Unsafe")]) { rule, _ in
-            actedRules.append(rule)
-        }
+        store.start { rule, _ in actedRules.append(rule); return .stopped }
+        store.stop()
+        await store.evaluateNow()
         XCTAssertEqual(actedRules, [valid])
     }
 

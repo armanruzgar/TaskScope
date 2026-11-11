@@ -60,11 +60,55 @@ enum AutoStopRuleValidation {
         return .success(normalized)
     }
 
+    /// Extra checks for a rule the user adds or edits: a process name is never a
+    /// path, and an executable path is never a directory, because the engine
+    /// could never match either. They are deliberately not part of `validate`,
+    /// so stored rules are not sent to recovery at load, and an edit that keeps
+    /// a stored rule's name and path (switching it off, for example) still saves.
+    static func validateForEditing(
+        _ rule: AutoStopRule,
+        replacing stored: AutoStopRule? = nil
+    ) -> Result<AutoStopRule, Failure> {
+        validate(rule).flatMap { normalized in
+            if let stored,
+               stored.processName == normalized.processName,
+               stored.executablePath == normalized.executablePath {
+                return .success(normalized)
+            }
+            guard !normalized.processName.contains("/") else {
+                return .failure(Failure(message: "Enter the process name (for example node); put a path in Executable path."))
+            }
+            if let path = normalized.executablePath, isDirectory(path) {
+                let suggestion = Bundle(path: path)?.executableURL.map { " Use \($0.path)." } ?? " Choose the executable file inside the directory."
+                return .failure(Failure(message: "Executable path points to a directory." + suggestion))
+            }
+            return .success(normalized)
+        }
+    }
+
+    /// A non-blocking note for an executable path that cannot match anything
+    /// yet. A missing file is not refused, because a rule may target a binary
+    /// that is installed later.
+    static func pathWarning(_ path: String?) -> String? {
+        guard let path = path?.trimmingCharacters(in: .whitespacesAndNewlines),
+              path.hasPrefix("/") else { return nil }
+        if isDirectory(path) {
+            return "Executable path points to a directory, so this rule never matches."
+        }
+        guard !FileManager.default.fileExists(atPath: path) else { return nil }
+        return "Executable path does not exist. This rule will match only after the executable is installed at that path."
+    }
+
+    private static func isDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
     static func validateStored(
         _ candidates: [AutoStopRule]
     ) -> (rules: [AutoStopRule], rejectedCount: Int) {
         var accepted: [AutoStopRule] = []
-        var seenNames: Set<String> = []
+        var seenIDs: Set<UUID> = []
         var rejectedCount = 0
 
         for candidate in candidates {
@@ -74,11 +118,18 @@ enum AutoStopRuleValidation {
             if safelyMigrated.action == .kill, safelyMigrated.executablePath == nil {
                 safelyMigrated.isEnabled = false
             }
+            // Every mutation addresses rules by id, so a repeated id is rejected
+            // like a repeated name. Names are compared exactly as `add`, `update`
+            // and the engine compare them.
             guard case .success(let normalized) = validate(safelyMigrated),
-                  seenNames.insert(normalized.processName.lowercased()).inserted else {
+                  !seenIDs.contains(normalized.id),
+                  !accepted.contains(where: {
+                      $0.processName.caseInsensitiveCompare(normalized.processName) == .orderedSame
+                  }) else {
                 rejectedCount += 1
                 continue
             }
+            seenIDs.insert(normalized.id)
             accepted.append(normalized)
         }
         return (accepted, rejectedCount)

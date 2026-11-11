@@ -53,6 +53,10 @@ struct AutoStopRuleEditorSheet: View {
 
             Toggle("Enabled", isOn: $draft.isEnabled)
 
+            if let warning = AutoStopRuleValidation.pathWarning(draft.executablePath) {
+                Text(warning).font(.caption).foregroundStyle(.orange)
+            }
+
             if let validationError {
                 Text(validationError)
                     .font(.caption)

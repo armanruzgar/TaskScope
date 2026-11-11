@@ -9,11 +9,11 @@ enum AutoStopActionHandlerFactory {
         processManager: ProcessManager,
         rules: AutoStopRulesStore
     ) -> AutoStopActionHandler {
-        { rule, process, kind in
+        { [weak rules] rule, process, kind in
             await processManager.terminate(
                 process,
                 isAuthorized: {
-                    rules.authorizes(rule, kind: kind)
+                    rules?.authorizes(rule, kind: kind) ?? false
                 }
             )
         }

@@ -33,34 +33,42 @@ final class AutoStopRulesStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.rules, [rule])
     }
 
-    func testRealRuntimeImmediatelyQualifiesAfterColdStart() {
-        let store = makeStore()
+    func testRealRuntimeImmediatelyQualifiesAfterColdStart() async {
+        let process = appProcess(pid: 42, elapsed: "10:00")
+        let store = makeStore(inventory: StubInventory(processes: [process]))
         let rule = AutoStopRule(
             processName: "Example",
             executablePath: "/Applications/Example.app/Example",
             runtimeMinutes: 1,
             action: .kill
         )
-        let process = appProcess(pid: 42, elapsed: "10:00")
         store.add(rule)
 
         var actions: [(AutoStopRule, AppProcess)] = []
-        store.evaluate(runningProcesses: [process]) { actions.append(($0, $1)) }
+        store.start { rule, process in actions.append((rule, process)); return .stopped }
+        store.stop()
+        await store.evaluateNow()
 
         XCTAssertEqual(actions.map(\.0), [rule])
         XCTAssertEqual(actions.map(\.1.pid), [42])
     }
 
-    func testOccurrenceUsesStableIdentityAndOnlyTriggersOnce() {
-        let store = makeStore()
+    func testOccurrenceUsesStableIdentityAndOnlyTriggersOnce() async {
+        let inventory = Batch08Inventory()
+        let store = makeStore(inventory: inventory)
         store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt))
         let first = appProcess(pid: 42, elapsed: "02:00", startTime: "first")
         let replacement = appProcess(pid: 42, elapsed: "02:00", startTime: "second")
         var identities: [ProcessIdentity] = []
 
-        store.evaluate(runningProcesses: [first]) { _, process in identities.append(process.identity) }
-        store.evaluate(runningProcesses: [first]) { _, process in identities.append(process.identity) }
-        store.evaluate(runningProcesses: [replacement]) { _, process in identities.append(process.identity) }
+        await inventory.set([first])
+        await store.evaluateNow()
+        identities.append(contentsOf: store.pendingPrompts.map(\.process.identity))
+        await store.evaluateNow()
+        XCTAssertEqual(store.pendingPrompts.count, 1)
+        await inventory.set([replacement])
+        await store.evaluateNow()
+        identities.append(contentsOf: store.pendingPrompts.map(\.process.identity))
 
         XCTAssertEqual(identities, [first.identity, replacement.identity])
     }
@@ -182,8 +190,9 @@ final class AutoStopRulesStoreTests: XCTestCase {
         XCTAssertNil(appProcess(pid: 1, elapsed: "1-24:00:00").runtimeSeconds)
     }
 
-    func testAutomaticStopMatchesTheTrustedExecutablePath() {
-        let store = makeStore()
+    func testAutomaticStopMatchesTheTrustedExecutablePath() async {
+        let inventory = Batch08Inventory()
+        let store = makeStore(inventory: inventory)
         let rule = AutoStopRule(
             processName: "Example",
             executablePath: "/Applications/Example.app/Contents/MacOS/Example",
@@ -205,9 +214,10 @@ final class AutoStopRulesStoreTests: XCTestCase {
         )
         var matchedPIDs: [Int32] = []
 
-        store.evaluate(runningProcesses: [impostor, trusted]) { _, process in
-            matchedPIDs.append(process.pid)
-        }
+        await inventory.set([impostor, trusted])
+        store.start { _, process in matchedPIDs.append(process.pid); return .stopped }
+        store.stop()
+        await store.evaluateNow()
 
         XCTAssertEqual(matchedPIDs, [41])
     }
@@ -290,7 +300,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
 
     /// `/opt/homebrew/bin/node` is a symlink; the kernel reports the Cellar
     /// binary as the executable. The rule must match through the link.
-    func testRulePathMatchesTheKernelPathThroughASymlink() throws {
+    func testRulePathMatchesTheKernelPathThroughASymlink() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("taskscope-symlink-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -300,7 +310,8 @@ final class AutoStopRulesStoreTests: XCTestCase {
         let link = directory.appendingPathComponent("linked-tool")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
-        let store = makeStore()
+        let inventory = Batch08Inventory()
+        let store = makeStore(inventory: inventory)
         XCTAssertTrue(store.add(AutoStopRule(
             processName: "RealTool",
             executablePath: link.path,
@@ -318,9 +329,10 @@ final class AutoStopRulesStoreTests: XCTestCase {
             executablePath: kernelPath
         )
         var matched: [Int32] = []
-        store.evaluate(runningProcesses: [running]) { _, process in
-            matched.append(process.pid)
-        }
+        await inventory.set([running])
+        store.start { _, process in matched.append(process.pid); return .stopped }
+        store.stop()
+        await store.evaluateNow()
 
         XCTAssertEqual(matched, [41])
         XCTAssertTrue(AutoStopRuleValidation.pathsMatch(link.path, real.path))
@@ -334,33 +346,37 @@ final class AutoStopRulesStoreTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: upgraded)
         try FileManager.default.removeItem(at: real)
         let upgradedPath = AutoStopRuleValidation.canonicalPath(upgraded.path)
-        let reloaded = makeStore()
-        reloaded.evaluate(runningProcesses: [appProcess(
+        let reloaded = makeStore(inventory: StubInventory(processes: [appProcess(
             pid: 42, command: upgradedPath, elapsed: "10:00", executablePath: upgradedPath
-        )]) { _, process in matched.append(process.pid) }
+        )]))
+        reloaded.start { _, process in matched.append(process.pid); return .stopped }
+        reloaded.stop()
+        await reloaded.evaluateNow()
 
         XCTAssertEqual(reloaded.rules[0].executablePath, link.standardizedFileURL.path)
         XCTAssertEqual(matched, [41, 42])
     }
 
-    func testPreviouslyResolvedStoredRuleStillMatchesItsExecutable() throws {
+    func testPreviouslyResolvedStoredRuleStillMatchesItsExecutable() async throws {
         let rule = AutoStopRule(
             processName: "Example", executablePath: "/opt/homebrew/Cellar/example/1/bin/Example",
             runtimeMinutes: 1, action: .kill
         )
         userDefaults.set(try JSONEncoder().encode([rule]), forKey: key)
-        let store = makeStore()
+        let store = makeStore(inventory: StubInventory(processes: [appProcess(
+            pid: 41, command: try XCTUnwrap(rule.executablePath), elapsed: "10:00"
+        )]))
         var matched: [Int32] = []
 
-        store.evaluate(runningProcesses: [appProcess(
-            pid: 41, command: try XCTUnwrap(rule.executablePath), elapsed: "10:00"
-        )]) { _, process in matched.append(process.pid) }
+        store.start { _, process in matched.append(process.pid); return .stopped }
+        store.stop()
+        await store.evaluateNow()
 
         XCTAssertEqual(store.rules, [rule])
         XCTAssertEqual(matched, [41])
     }
 
-    func testUndecodableRulesAreRejectedWhileValidRulesRemainEnforced() throws {
+    func testUndecodableRulesAreRejectedWhileValidRulesRemainEnforced() async throws {
         let valid = AutoStopRule(
             processName: "Example", executablePath: "/Applications/Example.app/Example",
             runtimeMinutes: 1, action: .kill
@@ -373,7 +389,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
          {"processName":42}, \(otherJSON), \(validJSON)]
         """.utf8)
         userDefaults.set(original, forKey: key)
-        let store = makeStore()
+        let store = makeStore(inventory: StubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")]))
 
         XCTAssertEqual(store.rules, [valid, other])
         XCTAssertTrue(store.rulesRecoveryMessage?.contains("Rejected 4") == true)
@@ -383,9 +399,9 @@ final class AutoStopRulesStoreTests: XCTestCase {
         XCTAssertFalse(store.remove(valid))
         XCTAssertFalse(store.add(AutoStopRule(processName: "New", runtimeMinutes: 1, action: .prompt)))
         var matched: [Int32] = []
-        store.evaluate(runningProcesses: [appProcess(pid: 41, elapsed: "10:00")]) { _, process in
-            matched.append(process.pid)
-        }
+        store.start { _, process in matched.append(process.pid); return .stopped }
+        store.stop()
+        await store.evaluateNow()
         XCTAssertEqual(matched, [41])
         XCTAssertEqual(userDefaults.data(forKey: key), original)
         XCTAssertEqual(makeStore().rules, [valid, other])

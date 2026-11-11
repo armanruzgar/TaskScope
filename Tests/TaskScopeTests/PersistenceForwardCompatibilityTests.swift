@@ -36,7 +36,6 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
             }
             store.stop()
             await store.evaluateNow()
-            store.evaluate(runningProcesses: [process]) { _, _ in callbacks += 1 }
             XCTAssertEqual(callbacks, 0)
             XCTAssertTrue(store.pendingPrompts.isEmpty)
             XCTAssertTrue(store.events.isEmpty)

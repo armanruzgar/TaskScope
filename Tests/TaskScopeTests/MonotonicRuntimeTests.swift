@@ -54,17 +54,16 @@ final class MonotonicRuntimeTests: XCTestCase {
         }
     }
 
-    func testCompatibilityEvaluatorUsesTheMonotonicRuntime() {
+    func testSinglePassUsesTheMonotonicRuntime() async {
         clock = UptimeSample(uptime: ns(10_000), asleep: 0)
-        let store = makeStore()
-        XCTAssertTrue(store.add(rule(action: .prompt)))
         let stepped = process(elapsed: "02:00:00", start: .uptimeNanoseconds(ns(10_000 - 300)))
-        var attempts = 0
-        store.evaluate(runningProcesses: [stepped]) { _, _ in attempts += 1 }
-        XCTAssertEqual(attempts, 0)
+        let store = makeStore(processes: [stepped])
+        XCTAssertTrue(store.add(rule(action: .prompt)))
+        await store.evaluateNow()
+        XCTAssertTrue(store.pendingPrompts.isEmpty)
         clock.uptime += ns(55 * 60)
-        store.evaluate(runningProcesses: [stepped]) { _, _ in attempts += 1 }
-        XCTAssertEqual(attempts, 1)
+        await store.evaluateNow()
+        XCTAssertEqual(store.pendingPrompts.count, 1)
     }
 
     func testSleepObservedAfterStartCountsTowardRuntime() async {

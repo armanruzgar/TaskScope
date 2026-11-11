@@ -483,6 +483,9 @@ struct SettingsView: View {
 
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(rule.processName).fontWeight(.medium)
+                                if let warning = AutoStopRuleValidation.pathWarning(rule.executablePath) {
+                                    Text(warning).font(.caption).foregroundStyle(.orange)
+                                }
                                 if rule.hasUnknownFields {
                                     Text("Requires a newer build — disabled and read-only")
                                         .font(.caption).foregroundStyle(.secondary)
@@ -560,6 +563,9 @@ struct SettingsView: View {
                 Text("Required for Auto Stop; optional for Prompt and Log Only.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                if let warning = AutoStopRuleValidation.pathWarning(newRuleExecutablePath) {
+                    Text(warning).font(.caption).foregroundStyle(.orange)
+                }
                 Stepper(
                     value: $newRuleMinutes,
                     in: 1...AutoStopRulesStore.maximumRuntimeMinutes,

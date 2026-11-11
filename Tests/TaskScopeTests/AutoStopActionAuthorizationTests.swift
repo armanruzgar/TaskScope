@@ -141,6 +141,38 @@ final class AutoStopActionAuthorizationTests: XCTestCase {
         XCTAssertTrue(store.events.isEmpty, "no outcome may be recorded against the retired rule value")
     }
 
+    func testProductionHandlerDoesNotRetainStoreOrManagerAfterStop() async {
+        let inventory = StubInventory(processes: [])
+        let signaler = RecordingSignaler(alivePids: [], exitsOnTerminate: true)
+        var manager: ProcessManager? = makeManager(inventory: inventory, signaler: signaler)
+        var store: AutoStopRulesStore? = makeStore(inventory: inventory)
+        weak let weakManager = manager
+        weak let weakStore = store
+        store?.start(perform: AutoStopActionHandlerFactory.make(processManager: manager!, rules: store!))
+        store?.stop()
+        store = nil
+        manager = nil
+        await settle()
+        XCTAssertNil(weakStore)
+        XCTAssertNil(weakManager)
+    }
+
+    func testRetainedProductionHandlerFailsClosedAfterStoreIsReleased() async {
+        let inventory = StubInventory(processes: [appProcess(pid: 41, elapsed: "10:00")])
+        let signaler = RecordingSignaler(alivePids: [41], exitsOnTerminate: true)
+        let manager = makeManager(inventory: inventory, signaler: signaler)
+        var store: AutoStopRulesStore? = makeStore(inventory: inventory)
+        let rule = AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt)
+        XCTAssertTrue(store!.add(rule))
+        let handler = AutoStopActionHandlerFactory.make(processManager: manager, rules: store!)
+        weak let weakStore = store
+        store = nil
+        XCTAssertNil(weakStore)
+        let result = await handler(rule, appProcess(pid: 41, elapsed: "10:00"), .confirmedPrompt)
+        XCTAssertEqual(result, .rejected)
+        XCTAssertTrue(signaler.sent.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func makeManager(
