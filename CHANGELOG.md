@@ -143,5 +143,5 @@ does not include a Developer ID-signed, notarized, universal, or public binary.
 - Keep corrupt preset, rule, event, settings, and saved-selection backups from
   being clobbered by later reads.
 
-[Unreleased]: https://github.com/38st/TaskScope/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/38st/TaskScope/releases/tag/v1.0.0
+[Unreleased]: https://github.com/armanruzgar/TaskScope/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/armanruzgar/TaskScope/releases/tag/v1.0.0

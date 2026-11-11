@@ -405,6 +405,9 @@ final class WatchedAppsStore: ObservableObject {
         guard !listItems.contains(where: { $0.contains(",") }) else {
             return (nil, "Helper and protected process names and launch agent labels and paths cannot contain commas.")
         }
+        // Before path normalization: realpath reads a path only up to an
+        // embedded NUL and could hide it.
+        if let error = PresetFieldValidation.error(in: value) { return (nil, error) }
         guard !value.displayName.isEmpty, !value.mainProcessName.isEmpty else {
             return (nil, "Display name and main process name are required.")
         }
@@ -439,6 +442,8 @@ final class WatchedAppsStore: ObservableObject {
             job.processName = job.processName.trimmingCharacters(in: .whitespacesAndNewlines)
             return job
         }
+        // realpath can resolve the app path to a different spelling.
+        if let error = PresetFieldValidation.error(in: value) { return (nil, error) }
         let killable = Set(([value.mainProcessName] + value.helperProcessNames).map { $0.lowercased() })
         let protected = Set(value.protectedProcessNames.map { $0.lowercased() })
         guard killable.isDisjoint(with: protected) else {

@@ -11,7 +11,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.PersistenceReports.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
     }
 
     override func tearDown() {

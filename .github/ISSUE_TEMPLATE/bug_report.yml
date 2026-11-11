@@ -8,8 +8,8 @@ body:
     attributes:
       value: |
         Thanks for the report. Remove private process names, command lines, paths, and organization details before submitting.
-        For suspected vulnerabilities, use [private reporting](https://github.com/38st/TaskScope/security/advisories/new) instead of this public form.
-        See [Support](https://github.com/38st/TaskScope/blob/main/SUPPORT.md) for recovery steps and redacted diagnostics.
+        For suspected vulnerabilities, use [private reporting](https://github.com/armanruzgar/TaskScope/security/advisories/new) instead of this public form.
+        See [Support](https://github.com/armanruzgar/TaskScope/blob/main/SUPPORT.md) for recovery steps and redacted diagnostics.
   - type: input
     id: version
     attributes:

@@ -126,6 +126,12 @@ enum ProcessLifecycleController {
         var results: [LifecycleJobResult] = []
 
         for job in jobs.reversed() {
+            guard PresetFieldValidation.isValidLaunchAgentLabel(job.label) else {
+                results.append(LifecycleJobResult(
+                    label: job.label, state: .failed, detail: PresetFieldValidation.launchAgentLabelError
+                ))
+                continue
+            }
             let target = "gui/\(uid)/\(job.label)"
             let plistExists = runtime.fileExists(job.plistPath)
             let status = await inspectLaunchJob(target, runtime: runtime)
@@ -205,6 +211,12 @@ enum ProcessLifecycleController {
         var results: [LifecycleJobResult] = []
 
         for job in jobs.reversed() {
+            guard PresetFieldValidation.isValidLaunchAgentLabel(job.label) else {
+                results.append(LifecycleJobResult(
+                    label: job.label, state: .failed, detail: PresetFieldValidation.launchAgentLabelError
+                ))
+                continue
+            }
             let target = "gui/\(uid)/\(job.label)"
             let disable = await runtime.runCommand(
                 "/bin/launchctl disable \(ShellCommandRunner.shellQuoted(target))",
@@ -285,6 +297,12 @@ enum ProcessLifecycleController {
         )
 
         for job in jobs {
+            guard PresetFieldValidation.isValidLaunchAgentLabel(job.label) else {
+                results.append(LifecycleJobResult(
+                    label: job.label, state: .failed, detail: PresetFieldValidation.launchAgentLabelError
+                ))
+                continue
+            }
             let before = GlobalProtectCompatibilityChecker.disabledState(disabledOverrides, label: job.label)
             let enabledDetail: String
             switch before {
@@ -338,6 +356,12 @@ enum ProcessLifecycleController {
         var results: [LifecycleJobResult] = []
 
         for job in jobs {
+            guard PresetFieldValidation.isValidLaunchAgentLabel(job.label) else {
+                results.append(LifecycleJobResult(
+                    label: job.label, state: .failed, detail: PresetFieldValidation.launchAgentLabelError
+                ))
+                continue
+            }
             guard runtime.fileExists(job.plistPath) else {
                 results.append(LifecycleJobResult(
                     label: job.label,

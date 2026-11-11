@@ -47,12 +47,18 @@ enum TaskScopeLaunchContext: Equatable {
         return finalizeInteractiveLaunch ? .interactive : .pending
     }
 
+    /// A URL keeps a launch that is still starting in the background even if it
+    /// was activated, because Launch Services activates a cold URL launch
+    /// before it delivers the URL. An App Intent or entity query never demotes
+    /// a launch the user activated or reopened, in any phase.
     static func receivingAutomation(
         current: TaskScopeLaunchContext,
         phase: TaskScopeLaunchPhase,
-        hasInteractiveSignal: Bool = true
+        source: TaskScopeAutomationSource,
+        hasInteractiveSignal: Bool
     ) -> TaskScopeLaunchContext {
         guard current != .startupVerification else { return current }
+        if source == .intent, hasInteractiveSignal { return current }
         return phase == .starting || (current == .interactive && !hasInteractiveSignal)
             ? .urlAutomation : current
     }
@@ -68,6 +74,11 @@ enum TaskScopeLaunchContext: Equatable {
     var performsRuntimeBootstrap: Bool {
         self != .startupVerification
     }
+}
+
+enum TaskScopeAutomationSource: Equatable, Sendable {
+    case url
+    case intent
 }
 
 enum TaskScopeLaunchPhase: Equatable, Sendable {

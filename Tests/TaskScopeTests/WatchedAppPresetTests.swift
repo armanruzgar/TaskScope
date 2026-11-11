@@ -11,7 +11,7 @@ final class WatchedAppPresetTests: XCTestCase {
         let preset = try form.makePreset(existing: nil).get()
         XCTAssertEqual(preset.displayName, "Example")
         let suite = "TaskScope.FormTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(InMemoryUserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(store.add(preset))

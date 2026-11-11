@@ -5,10 +5,10 @@ import ViewInspector
 
 @MainActor
 final class ReviewCoreRegressionTests: XCTestCase {
-    nonisolated(unsafe) private var suites: [String] = []
+    nonisolated(unsafe) private var suites: [(name: String, defaults: UserDefaults)] = []
 
     override func tearDown() {
-        for suite in suites { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        for suite in suites { suite.defaults.removePersistentDomain(forName: suite.name) }
         suites.removeAll()
         super.tearDown()
     }
@@ -196,8 +196,9 @@ final class ReviewCoreRegressionTests: XCTestCase {
 
     private func defaults() -> UserDefaults {
         let suite = "TaskScope.ReviewCore.\(UUID())"
-        suites.append(suite)
-        return UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
+        suites.append((suite, defaults))
+        return defaults
     }
 
     private func store(_ inventory: any ProcessInventoryProviding) -> AutoStopRulesStore {

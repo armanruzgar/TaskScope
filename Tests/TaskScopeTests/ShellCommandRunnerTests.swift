@@ -253,7 +253,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             guard let shell = probe.childPID, shell > 0 else {
                 return XCTFail("The runner must probe exactly one child PID")
             }
-            await assertProcessDisappears(-shell)
+            await Self.assertProcessDisappears(-shell)
 
             // `>` creates the marker before printf writes to it, and with the
             // group gone nothing can write to it any more. A missing or empty
@@ -263,7 +263,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             }
             let pids = try processIdentifiers(in: report)
             XCTAssertEqual(pids.group, shell, "The descendant must report the shell as its parent")
-            await assertProcessDisappears(pids.descendant)
+            await Self.assertProcessDisappears(pids.descendant)
             return
         }
         XCTFail("None of \(attempts) attempts reported a descendant before the timeout")
@@ -289,8 +289,8 @@ final class ShellCommandRunnerTests: XCTestCase {
         XCTAssertEqual(result.exitCode, -2)
         XCTAssertTrue(result.stderr.hasSuffix("Command cancelled."))
         XCTAssertLessThan(Date().timeIntervalSince(cancelled), 2)
-        await assertProcessDisappears(-pids.group)
-        await assertProcessDisappears(pids.descendant)
+        await Self.assertProcessDisappears(-pids.group)
+        await Self.assertProcessDisappears(pids.descendant)
     }
 
     func testCancellationBeforeRunDoesNotLaunchCommand() async {
@@ -480,7 +480,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     /// thread right before an async test returns, which hid a surviving
     /// descendant in about one run in five.
     @MainActor
-    private func assertProcessDisappears(
+    private static func assertProcessDisappears(
         _ pid: Int32,
         file: StaticString = #filePath,
         line: UInt = #line

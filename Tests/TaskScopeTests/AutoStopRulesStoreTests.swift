@@ -11,7 +11,7 @@ final class AutoStopRulesStoreTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        userDefaults = UserDefaults(suiteName: suiteName)!
+        userDefaults = InMemoryUserDefaults(suiteName: suiteName)!
         userDefaults.removePersistentDomain(forName: suiteName)
         currentDate = Date(timeIntervalSince1970: 1_000)
     }

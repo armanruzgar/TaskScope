@@ -4,7 +4,7 @@ import XCTest
 /// Recovery gates preserve unreadable primary payloads until explicit reset.
 @MainActor
 final class StorePersistenceGateTests: XCTestCase {
-    private let suiteName = "TaskScope.StorePersistenceGateTests"
+    private let suiteName = "TaskScope.StorePersistenceGateTests.\(UUID().uuidString)"
     private let rulesKey = "auto-stop-rules-p11-tests"
     private let eventsKey = "auto-stop-events-p11-tests"
     private let selectionsKey = "saved-selections-p11-tests"
@@ -12,7 +12,7 @@ final class StorePersistenceGateTests: XCTestCase {
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 

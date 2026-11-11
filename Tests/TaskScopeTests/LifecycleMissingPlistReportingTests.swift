@@ -186,9 +186,9 @@ final class P7MissingPlistReportsFailureTests: XCTestCase {
 
     private func emptyDefaults() -> UserDefaults {
         let suite = "TaskScope.LifecycleEngine.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         addTeardownBlock {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            defaults.removePersistentDomain(forName: suite)
         }
         return defaults
     }

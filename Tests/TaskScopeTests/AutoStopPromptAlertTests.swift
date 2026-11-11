@@ -222,7 +222,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
 
     private func makeStores(inventory: PromptInventory) -> PromptStores {
         let suiteName = "TaskScope.AutoStopPromptAlertTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return PromptStores(
             suiteName: suiteName,

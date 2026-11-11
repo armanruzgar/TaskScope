@@ -28,24 +28,34 @@ struct WatchedPresetEntity: AppEntity {
 }
 
 struct WatchedPresetCatalog: Sendable {
-    private let suiteName: String?
+    private let objectForKey: @Sendable (String) -> Any?
     private let key: String
 
     init(
         suiteName: String? = nil,
         key: String = WatchedAppsStore.defaultPersistenceKey
     ) {
-        self.suiteName = suiteName
+        objectForKey = { key in
+            let defaults = suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
+            return defaults.object(forKey: key)
+        }
         self.key = key
     }
 
+    /// Reads the stored presets through `objectForKey`, for tests that keep
+    /// their settings in memory.
+    init(key: String, objectForKey: @escaping @Sendable (String) -> Any?) {
+        self.key = key
+        self.objectForKey = objectForKey
+    }
+
     func entities() -> [WatchedPresetEntity] {
-        let userDefaults = suiteName.flatMap(UserDefaults.init(suiteName:)) ?? .standard
+        let object = objectForKey(key)
         let presets: [WatchedAppPreset]
-        if let data = userDefaults.data(forKey: key),
+        if let data = object as? Data,
            let decoded = try? JSONDecoder().decode(PartiallyDecodedArray<WatchedAppPreset>.self, from: data) {
             presets = WatchedAppsStore.validatedPresets(decoded.elements).presets
-        } else if userDefaults.object(forKey: key) == nil {
+        } else if object == nil {
             presets = [.globalProtect]
         } else {
             // Match WatchedAppsStore's corruption policy: do not silently replace

@@ -1586,7 +1586,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
     func testSettingsRecoveryUIRequiresExplicitReset() throws {
         let suiteName = "TaskScope.SettingsRecoveryUI.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let corrupt = Data([0xFF, 0x04])
@@ -1701,7 +1701,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
     private func makeStores(inventory: any ProcessInventoryProviding) -> UIStores {
         let suiteName = "TaskScope.UI.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
+        let defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return UIStores(
             suiteName: suiteName,

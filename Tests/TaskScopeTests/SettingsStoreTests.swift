@@ -3,13 +3,13 @@ import XCTest
 
 @MainActor
 final class SettingsStoreTests: XCTestCase {
-    private let suiteName = "TaskScope.SettingsStoreTests"
+    private let suiteName = "TaskScope.SettingsStoreTests.\(UUID().uuidString)"
     private let key = "settings-tests"
     nonisolated(unsafe) private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 

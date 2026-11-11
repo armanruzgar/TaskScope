@@ -15,7 +15,7 @@ final class MonotonicRuntimeTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.MonotonicRuntime.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
     }
 
     override func tearDown() {

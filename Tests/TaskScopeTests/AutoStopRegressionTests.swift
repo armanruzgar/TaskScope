@@ -15,7 +15,7 @@ final class AutoStopRegressionTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.AutoStop.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
     }
 
     override func tearDown() {

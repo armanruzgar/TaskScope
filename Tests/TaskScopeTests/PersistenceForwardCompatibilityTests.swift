@@ -9,7 +9,7 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.PersistenceForwardCompatibilityTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
     }
 
     override func tearDown() {

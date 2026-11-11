@@ -117,6 +117,22 @@ final class SupportDiagnosticsTests: XCTestCase {
         })
     }
 
+    /// L02-1: `gui/501//x` names the whole login domain, whose listing exits 0.
+    /// A label launchctl would misread is reported as unknown, never inspected.
+    func testInvalidLabelsAreReportedUnknownWithoutRunningLaunchctl() async {
+        var preset = Self.privatePreset
+        preset.userLaunchAgentJobs = ["/x", "com.acme.agent/updater", "com.acme.agent"].map {
+            .init(label: $0, plistPath: "/Users/alice/agent.plist")
+        }
+        let harness = DiagnosticsInspectionHarness(results: [
+            .init(command: "", stdout: "gui/501/com.acme.agent = {", stderr: "", exitCode: 0)
+        ])
+        let result = await SupportDiagnosticsCollector(runtime: harness.runtime)
+            .inspectPreset(preset, keepOffRequested: false)
+        XCTAssertEqual(result.userLaunchAgents.map(\.state), [.unknown, .unknown, .loaded])
+        XCTAssertEqual(harness.commands, ["/bin/launchctl print 'gui/501/com.acme.agent'"])
+    }
+
     func testCanonicalIdentityCannotBeSpoofedByNameOrUUID() async {
         let collector = SupportDiagnosticsCollector(runtime: DiagnosticsInspectionHarness(results: []).runtime)
         let builtIn = await collector.inspectPreset(.globalProtect, keepOffRequested: false)

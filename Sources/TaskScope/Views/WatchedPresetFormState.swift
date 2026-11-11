@@ -60,7 +60,7 @@ final class WatchedPresetFormState: ObservableObject {
         }
 
         let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return .success(WatchedAppPreset(
+        let preset = WatchedAppPreset(
             id: existing?.id ?? UUID(),
             displayName: trimmedDisplayName.isEmpty ? mainProcess : trimmedDisplayName,
             mainProcessName: mainProcess,
@@ -70,7 +70,11 @@ final class WatchedPresetFormState: ObservableObject {
             userLaunchAgentJobs: jobs,
             systemLaunchDaemonJobs: existing?.systemLaunchDaemonJobs ?? [],
             notificationsEnabled: existing?.notificationsEnabled ?? true
-        ))
+        )
+        if let error = PresetFieldValidation.error(in: preset) {
+            return .failure(ValidationError(message: error))
+        }
+        return .success(preset)
     }
 
     struct ValidationError: Error, Equatable {

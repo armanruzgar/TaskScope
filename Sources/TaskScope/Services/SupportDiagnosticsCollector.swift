@@ -14,6 +14,10 @@ struct SupportDiagnosticsCollector {
             let state: SupportDiagnosticsReport.LaunchAgent.State
             if Task.isCancelled {
                 state = .unknown
+            } else if !PresetFieldValidation.isValidLaunchAgentLabel(job.label) {
+                // launchctl reads such a label as another service or as the whole
+                // login domain, and would answer as if the job were loaded.
+                state = .unknown
             } else {
                 let result = await runtime.runCommand(
                     "/bin/launchctl print \(ShellCommandRunner.shellQuoted("gui/\(runtime.userID)/\(job.label)"))",

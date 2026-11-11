@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a vulnerability privately
-    url: https://github.com/38st/TaskScope/security/advisories/new
+    url: https://github.com/armanruzgar/TaskScope/security/advisories/new
     about: Use GitHub private reporting for suspected vulnerabilities; do not post sensitive details in a public issue.
   - name: Support
-    url: https://github.com/38st/TaskScope/blob/main/SUPPORT.md
+    url: https://github.com/armanruzgar/TaskScope/blob/main/SUPPORT.md
     about: Read support options and troubleshooting guidance.

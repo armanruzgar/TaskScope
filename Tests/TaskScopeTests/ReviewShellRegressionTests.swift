@@ -27,10 +27,10 @@ final class ReviewShellRegressionTests: XCTestCase {
 
     func testIntentQueriesDoNotPublishDefaultsForWrongTypePresets() async throws {
         let suite = "TaskScope.ReviewShell.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let defaults = try XCTUnwrap(InMemoryUserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let key = WatchedAppsStore.defaultPersistenceKey
-        let query = WatchedPresetEntityQuery(catalog: WatchedPresetCatalog(suiteName: suite))
+        let query = WatchedPresetEntityQuery(catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: defaults.objectReader))
         for payload: Any in ["unreadable", ["unexpected": "dictionary"], ["unexpected", "array"]] {
             defaults.set(payload, forKey: key)
             let suggested = try await query.suggestedEntities()

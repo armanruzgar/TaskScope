@@ -163,30 +163,63 @@ final class LaunchContextTests: XCTestCase {
         XCTAssertEqual(
             TaskScopeLaunchContext.receivingAutomation(
                 current: .interactive,
-                phase: .starting
+                phase: .starting, source: .url, hasInteractiveSignal: true
             ),
             .urlAutomation
         )
         XCTAssertEqual(
             TaskScopeLaunchContext.receivingAutomation(
                 current: .interactive,
-                phase: .running
+                phase: .running, source: .url, hasInteractiveSignal: true
             ),
             .interactive
         )
         XCTAssertEqual(
             TaskScopeLaunchContext.receivingAutomation(
                 current: .loginItem,
-                phase: .running
+                phase: .running, source: .url, hasInteractiveSignal: true
             ),
             .loginItem
         )
         XCTAssertEqual(
             TaskScopeLaunchContext.receivingAutomation(
                 current: .startupVerification,
-                phase: .starting
+                phase: .starting, source: .url, hasInteractiveSignal: true
             ),
             .startupVerification
+        )
+    }
+
+    /// A01-1: an intent or entity query demotes only a launch nobody activated,
+    /// also while the launch is still starting.
+    func testIntentOrQueryDemotesOnlyALaunchWithoutInteractiveSignal() {
+        for phase in [TaskScopeLaunchPhase.starting, .running] {
+            XCTAssertEqual(
+                TaskScopeLaunchContext.receivingAutomation(
+                    current: .interactive, phase: phase, source: .intent, hasInteractiveSignal: true
+                ),
+                .interactive,
+                "An activated or reopened launch stays interactive"
+            )
+            XCTAssertEqual(
+                TaskScopeLaunchContext.receivingAutomation(
+                    current: .interactive, phase: phase, source: .intent, hasInteractiveSignal: false
+                ),
+                .urlAutomation,
+                "A launch nobody activated is treated as an automation launch"
+            )
+        }
+        XCTAssertEqual(
+            TaskScopeLaunchContext.receivingAutomation(
+                current: .pending, phase: .starting, source: .intent, hasInteractiveSignal: false
+            ),
+            .urlAutomation
+        )
+        XCTAssertEqual(
+            TaskScopeLaunchContext.receivingAutomation(
+                current: .loginItem, phase: .running, source: .intent, hasInteractiveSignal: false
+            ),
+            .loginItem
         )
     }
 }

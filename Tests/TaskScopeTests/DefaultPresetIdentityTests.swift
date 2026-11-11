@@ -8,13 +8,13 @@ import XCTest
 /// Shortcut bound to the built-in watched app cannot resolve after a relaunch.
 @MainActor
 final class P9DefaultPresetIdentityTests: XCTestCase {
-    private let suiteName = "TaskScope.P9DefaultPresetIdentityTests"
+    private let suiteName = "TaskScope.P9DefaultPresetIdentityTests.\(UUID().uuidString)"
     private let key = "watched-presets-p9-tests"
-    nonisolated(unsafe) private var defaults: UserDefaults!
+    nonisolated(unsafe) private var defaults: InMemoryUserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -46,7 +46,7 @@ final class P9DefaultPresetIdentityTests: XCTestCase {
     /// handed out by `WatchedPresetCatalog` must be backed by bytes on disk, or the binding
     /// a user creates today is dangling tomorrow.
     func testIdentifierPublishedToShortcutsIsBackedByStoredBytes() throws {
-        let catalog = WatchedPresetCatalog(suiteName: suiteName, key: key)
+        let catalog = WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader)
         let boundID = try XCTUnwrap(catalog.entities().first?.id)
 
         // A normal launch: the menu-bar app constructs its store against the same suite.

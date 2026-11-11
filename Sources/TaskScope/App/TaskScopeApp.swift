@@ -112,6 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private(set) var launchPhase = TaskScopeLaunchPhase.starting
     private var interactiveLaunchTask: Task<Void, Never>?
     private var automaticWindowSuppressionTask: Task<Void, Never>?
+    private var pendingShortcutParameterRefresh: (@MainActor () -> Void)?
 
     override convenience init() {
         self.init(launchSession: .shared, commandBus: .shared,
@@ -128,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         super.init()
         if launchSession.allowsRuntime {
             commandBus.onIntentExecution = { [weak self] in
-                self?.prepareForIncomingAutomationCommand()
+                self?.prepareForIncomingAutomationCommand(source: .intent)
             }
         }
     }
@@ -138,7 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         terminationHandler.start()
         resolveLaunchContext(finalizeInteractiveLaunch: false)
         runtime.registerURLHandler { [weak self] in
-            self?.prepareForIncomingAutomationCommand()
+            self?.prepareForIncomingAutomationCommand(source: .url)
         }
         if launchContext.suppressesAutomaticWindowPresentation {
             runtime.setActivationPolicy(.accessory)
@@ -167,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if launchContext.suppressesAutomaticWindowPresentation {
             finalizeBackgroundLaunch()
             launchPhase = .running
+            publishPendingShortcutParametersIfReady()
         } else {
             scheduleInteractiveLaunch()
         }
@@ -178,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         terminationHandler.stop()
         interactiveLaunchTask?.cancel()
         automaticWindowSuppressionTask?.cancel()
+        pendingShortcutParameterRefresh = nil
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -208,12 +211,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         promoteInteractiveLaunch()
     }
 
-    private func prepareForIncomingAutomationCommand() {
+    private func prepareForIncomingAutomationCommand(source: TaskScopeAutomationSource) {
         guard launchSession.allowsRuntime,
               !windowPresentationAllowed else { return }
         let resolved = TaskScopeLaunchContext.receivingAutomation(
             current: launchContext,
             phase: launchPhase,
+            source: source,
             hasInteractiveSignal: hasInteractiveSignal
         )
         guard resolved == .urlAutomation, resolved != launchContext else { return }
@@ -223,6 +227,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         launchContext = resolved
         finalizeBackgroundLaunch()
         launchPhase = .running
+        publishPendingShortcutParametersIfReady()
+    }
+
+    /// linkd can answer our own parameter refresh by querying entities in this
+    /// process. Defer that refresh until its intent signal cannot turn an
+    /// undecided interactive launch into a background launch. Coalesce edits
+    /// during launch; the callback reads the latest catalog when it executes.
+    func requestShortcutParameterRefresh(
+        update: @escaping @MainActor () -> Void = { TaskScopeShortcuts.updateAppShortcutParameters() }
+    ) {
+        guard launchSession.allowsRuntime else { return }
+        pendingShortcutParameterRefresh = update
+        publishPendingShortcutParametersIfReady()
+    }
+
+    private func publishPendingShortcutParametersIfReady() {
+        guard launchPhase == .running,
+              windowPresentationAllowed || hasInteractiveSignal || launchContext.suppressesAutomaticWindowPresentation,
+              let update = pendingShortcutParameterRefresh else { return }
+        pendingShortcutParameterRefresh = nil
+        TaskScopeShortcuts.refreshParameters(for: launchContext, update: update)
     }
 
     private func scheduleInteractiveLaunch() {
@@ -246,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             case .presentOnNextActivation:
                 self.finalizeInactiveInteractiveLaunch()
             }
+            self.publishPendingShortcutParametersIfReady()
         }
     }
 
@@ -322,6 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         windowPresentationAllowed = true
         runtime.setActivationPolicy(.regular)
         runtime.presentMainWindow()
+        publishPendingShortcutParametersIfReady()
     }
 
     func suppressAutomaticWindowPresentation() {
@@ -343,6 +370,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         launchPhase = .running
         windowPresentationAllowed = true
         runtime.setActivationPolicy(.regular)
+        publishPendingShortcutParametersIfReady()
     }
 }
 
@@ -572,7 +600,7 @@ struct TaskScopeApp: App {
         }
         .onChange(of: watchedApps.presets) { _, _ in
             guard launchSession.allowsRuntime else { return }
-            TaskScopeShortcuts.refreshParameters(for: appDelegate.launchContext)
+            appDelegate.requestShortcutParameterRefresh()
             // The refresh re-baselines on its own when the watched-name set changed,
             // so a newly watched app that was already running is not announced as
             // having just started.
@@ -631,7 +659,7 @@ struct TaskScopeApp: App {
             NotificationService.shared.prime(initialRunningNames: running)
         }
 
-        TaskScopeShortcuts.refreshParameters(for: appDelegate.launchContext)
+        appDelegate.requestShortcutParameterRefresh()
     }
 
     private func configurePolling() {

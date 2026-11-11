@@ -3,13 +3,13 @@ import XCTest
 
 @MainActor
 final class SavedSelectionsStoreTests: XCTestCase {
-    private let suiteName = "TaskScope.SavedSelectionsStoreTests"
+    private let suiteName = "TaskScope.SavedSelectionsStoreTests.\(UUID().uuidString)"
     private let key = "saved-selections-tests"
     nonisolated(unsafe) private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -29,7 +29,7 @@ final class SavedSelectionsStoreTests: XCTestCase {
         let store = makeStore()
         let restarted = process(pid: 99, command: "/Applications/Example.app/Contents/MacOS/Example")
 
-        let result = store.resolve(store.selections[0], in: [restarted])
+        let result = try store.resolve(XCTUnwrap(store.selections.first), in: [restarted])
 
         XCTAssertEqual(result.matched, [restarted])
         XCTAssertEqual(result.legacyNameMatches, [restarted.identity])
@@ -40,7 +40,7 @@ final class SavedSelectionsStoreTests: XCTestCase {
     /// A new entry without a kernel path would silently take the spoofable
     /// name-match branch on recall, so saving it is refused with a message that
     /// names the process.
-    func testSaveRefusesAnEntryWithoutAKernelExecutablePath() {
+    func testSaveRefusesAnEntryWithoutAKernelExecutablePath() throws {
         let store = makeStore()
         let bound = process(
             pid: 10,
@@ -54,10 +54,10 @@ final class SavedSelectionsStoreTests: XCTestCase {
         XCTAssertTrue(store.validationError?.contains("Mystery (PID 11)") == true, store.validationError ?? "")
 
         XCTAssertTrue(store.save(name: "Bound only", processes: [bound]))
-        XCTAssertEqual(store.selections[0].processes.map(\.executablePath), [bound.executablePath])
+        XCTAssertEqual(try XCTUnwrap(store.selections.first).processes.map(\.executablePath), [bound.executablePath])
     }
 
-    func testTrustedExecutablePathWinsOverSpoofableCommand() {
+    func testTrustedExecutablePathWinsOverSpoofableCommand() throws {
         let store = makeStore()
         let original = process(
             pid: 10,
@@ -76,13 +76,13 @@ final class SavedSelectionsStoreTests: XCTestCase {
         )
         XCTAssertTrue(store.save(name: "Example", processes: [original]))
 
-        let result = store.resolve(store.selections[0], in: [unrelated, restarted])
+        let result = try store.resolve(XCTUnwrap(store.selections.first), in: [unrelated, restarted])
 
         XCTAssertEqual(result.matched, [restarted])
         XCTAssertTrue(result.ambiguous.isEmpty)
     }
 
-    func testTrustedExecutablePathNeverFallsBackToSpoofableCommand() {
+    func testTrustedExecutablePathNeverFallsBackToSpoofableCommand() throws {
         let store = makeStore()
         let original = process(
             pid: 10,
@@ -96,14 +96,14 @@ final class SavedSelectionsStoreTests: XCTestCase {
         )
         XCTAssertTrue(store.save(name: "Example", processes: [original]))
 
-        let result = store.resolve(store.selections[0], in: [unrelated])
+        let result = try store.resolve(XCTUnwrap(store.selections.first), in: [unrelated])
 
         XCTAssertTrue(result.matched.isEmpty)
         XCTAssertEqual(result.unmatched.count, 1)
         XCTAssertTrue(result.ambiguous.isEmpty)
     }
 
-    func testRecallGroupsCopiesByPathAndOnlyMarksExcessRunningCopiesAmbiguous() {
+    func testRecallGroupsCopiesByPathAndOnlyMarksExcessRunningCopiesAmbiguous() throws {
         let store = makeStore()
         let path = "/test/bin/node"
         let originals = [10, 11].map { process(pid: Int32($0), command: "node", executablePath: path) }
@@ -113,7 +113,7 @@ final class SavedSelectionsStoreTests: XCTestCase {
 
         for count in 0...3 {
             let candidates = Array(running.prefix(count))
-            let result = store.resolve(store.selections[0], in: candidates + [impostor])
+            let result = try store.resolve(XCTUnwrap(store.selections.first), in: candidates + [impostor])
             XCTAssertEqual(result.matched, count <= 2 ? candidates : [])
             XCTAssertEqual(result.unmatched.count, max(0, 2 - count))
             XCTAssertEqual(result.ambiguous.count, count > 2 ? 2 : 0)
@@ -121,21 +121,21 @@ final class SavedSelectionsStoreTests: XCTestCase {
         }
     }
 
-    func testNameFallbackOnlyMatchesWhenUnique() {
+    func testNameFallbackOnlyMatchesWhenUnique() throws {
         seedLegacySelection(name: "Example", entries: [(pid: 10, command: "Example")])
         let store = makeStore()
         let first = process(pid: 20, command: "/one/Example")
         let second = process(pid: 21, command: "/two/Example")
 
-        let ambiguous = store.resolve(store.selections[0], in: [first, second])
-        let unique = store.resolve(store.selections[0], in: [first])
+        let ambiguous = try store.resolve(XCTUnwrap(store.selections.first), in: [first, second])
+        let unique = try store.resolve(XCTUnwrap(store.selections.first), in: [first])
 
         XCTAssertTrue(ambiguous.matched.isEmpty)
         XCTAssertEqual(ambiguous.ambiguous.count, 1)
         XCTAssertEqual(unique.matched, [first])
     }
 
-    func testLegacyEntryWhoseOnlyCandidateWasClaimedIsUnmatchedNotAmbiguous() {
+    func testLegacyEntryWhoseOnlyCandidateWasClaimedIsUnmatchedNotAmbiguous() throws {
         seedLegacySelection(name: "Workers", entries: [
             (pid: 10, command: "/usr/local/bin/worker"),
             (pid: 11, command: "/usr/local/bin/worker")
@@ -143,28 +143,28 @@ final class SavedSelectionsStoreTests: XCTestCase {
         let store = makeStore()
         let running = process(pid: 20, command: "/usr/local/bin/worker")
 
-        let result = store.resolve(store.selections[0], in: [running])
+        let result = try store.resolve(XCTUnwrap(store.selections.first), in: [running])
 
         XCTAssertEqual(result.matched, [running])
         XCTAssertEqual(result.unmatched.count, 1)
         XCTAssertTrue(result.ambiguous.isEmpty)
     }
 
-    func testRenamingADeletedSelectionReportsWhy() {
+    func testRenamingADeletedSelectionReportsWhy() throws {
         let store = makeStore()
         store.save(name: "Editors", processes: [process(pid: 1, command: "/bin/Editor", executablePath: "/bin/Editor")])
-        let selection = store.selections[0]
+        let selection = try XCTUnwrap(store.selections.first)
         XCTAssertTrue(store.remove(selection))
 
         XCTAssertFalse(store.rename(selection, to: "Development"))
         XCTAssertEqual(store.validationError, "This saved selection no longer exists.")
     }
 
-    func testDuplicateNamesAreRejectedAndRenamePersists() {
+    func testDuplicateNamesAreRejectedAndRenamePersists() throws {
         let store = makeStore()
         store.save(name: "Editors", processes: [process(pid: 1, command: "/bin/Editor", executablePath: "/bin/Editor")])
         XCTAssertFalse(store.save(name: " editors ", processes: [process(pid: 2, command: "/bin/Other", executablePath: "/bin/Other")]))
-        XCTAssertTrue(store.rename(store.selections[0], to: "Development"))
+        XCTAssertTrue(try store.rename(XCTUnwrap(store.selections.first), to: "Development"))
 
         let reloaded = makeStore()
         XCTAssertEqual(reloaded.selections.map(\.name), ["Development"])
@@ -177,9 +177,9 @@ final class SavedSelectionsStoreTests: XCTestCase {
         defaults.set(try XCTUnwrap(legacy.data(using: .utf8)), forKey: key)
 
         let store = makeStore()
-        let result = store.resolve(store.selections[0], in: [process(pid: 42, command: "Replacement")])
+        let result = try store.resolve(XCTUnwrap(store.selections.first), in: [process(pid: 42, command: "Replacement")])
 
-        XCTAssertTrue(store.selections[0].isLegacyUnsupported)
+        XCTAssertTrue(try XCTUnwrap(store.selections.first).isLegacyUnsupported)
         XCTAssertTrue(result.legacyUnsupported)
         XCTAssertTrue(result.matched.isEmpty)
     }

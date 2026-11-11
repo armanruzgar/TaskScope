@@ -18,7 +18,7 @@ vulnerability. Do not include exploit details or private process and
 organization data in a public channel.
 
 Use the repository's **Security** tab and choose **Report a vulnerability** to
-[submit a private report](https://github.com/38st/TaskScope/security/advisories/new).
+[submit a private report](https://github.com/armanruzgar/TaskScope/security/advisories/new).
 Include the affected version/build, macOS version and architecture, impact, and
 minimal reproduction steps. Remove usernames, organization details, command
 lines, preset paths, and other sensitive data unless essential to the report.

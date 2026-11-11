@@ -6,12 +6,12 @@ import XCTest
 
 final class AppShellRegressionTests: XCTestCase {
     private var suiteName: String!
-    private var defaults: UserDefaults!
+    private var defaults: InMemoryUserDefaults!
 
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.AppShell.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
     }
 
     override func tearDown() {
@@ -164,10 +164,11 @@ final class AppShellRegressionTests: XCTestCase {
         var context = TaskScopeLaunchContext.pending
         bus.onIntentExecution = {
             signals += 1
-            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: .starting)
+            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: .starting,
+                                                                  source: .intent, hasInteractiveSignal: false)
         }
         let query = WatchedPresetEntityQuery(
-            catalog: WatchedPresetCatalog(suiteName: suiteName),
+            catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: defaults.objectReader),
             prepareForIntent: { bus.prepareForIntentExecution() }
         )
         _ = try await query.entities(for: [WatchedAppPreset.globalProtectID])
@@ -210,7 +211,7 @@ final class AppShellRegressionTests: XCTestCase {
             _ = try await TaskScopeIntentExecution.perform(.refresh, bus: bus)
             let expected: TaskScopeLaunchContext = interactiveSignal == "none" ? .urlAutomation : .interactive
             XCTAssertEqual(delegate.launchContext, expected)
-            let query = WatchedPresetEntityQuery(catalog: WatchedPresetCatalog(suiteName: suiteName),
+            let query = WatchedPresetEntityQuery(catalog: WatchedPresetCatalog(key: WatchedAppsStore.defaultPersistenceKey, objectForKey: defaults.objectReader),
                                                 prepareForIntent: { bus.prepareForIntentExecution() })
             _ = try await query.suggestedEntities()
             XCTAssertEqual(delegate.launchContext, expected)

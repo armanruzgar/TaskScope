@@ -45,8 +45,10 @@ final class TaskScopeIntentsTests: XCTestCase {
         let bus = AppCommandBus()
         var context = TaskScopeLaunchContext.interactive
         var phase = TaskScopeLaunchPhase.starting
+        var hasInteractiveSignal = false
         bus.onIntentExecution = {
-            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: phase)
+            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: phase,
+                                                                  source: .intent, hasInteractiveSignal: hasInteractiveSignal)
         }
         bus.install { _ in .init(status: .completed, message: "done") }
         _ = try await TaskScopeIntentExecution.perform(.refresh, bus: bus) {
@@ -57,6 +59,7 @@ final class TaskScopeIntentsTests: XCTestCase {
         // Intent execution in an already-running interactive app leaves it interactive.
         context = .interactive
         phase = .running
+        hasInteractiveSignal = true
         _ = try await TaskScopeIntentExecution.perform(.refresh, bus: bus)
         XCTAssertEqual(context, .interactive)
     }
@@ -68,7 +71,8 @@ final class TaskScopeIntentsTests: XCTestCase {
         _ = try await TaskScopeIntentExecution.perform(.refresh, bus: bus)
         var context = TaskScopeLaunchContext.pending
         bus.onIntentExecution = {
-            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: .starting)
+            context = TaskScopeLaunchContext.receivingAutomation(current: context, phase: .starting,
+                                                                  source: .intent, hasInteractiveSignal: false)
         }
         XCTAssertEqual(context, .urlAutomation)
         context = TaskScopeLaunchContext.resolve(
@@ -91,11 +95,11 @@ final class TaskScopeIntentsTests: XCTestCase {
 
     private let suiteName = "TaskScope.TaskScopeIntentsTests.\(UUID().uuidString)"
     private let key = "watched-presets-intent-tests"
-    private var defaults: UserDefaults!
+    private var defaults: InMemoryUserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -106,7 +110,7 @@ final class TaskScopeIntentsTests: XCTestCase {
     }
 
     func testCatalogUsesDefaultPresetOnlyWhenNoPayloadExists() {
-        let catalog = WatchedPresetCatalog(suiteName: suiteName, key: key)
+        let catalog = makeCatalog()
         XCTAssertEqual(catalog.entities().map(\.displayName), ["GlobalProtect"])
 
         for payload: Any in [Data([0xFE, 0xED]), "unreadable", ["unexpected": "dictionary"]] {
@@ -118,7 +122,7 @@ final class TaskScopeIntentsTests: XCTestCase {
     @MainActor
     func testShortcutRefreshPublishesBootstrappedAddedAndRenamedPresets() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        let catalog = WatchedPresetCatalog(suiteName: suiteName, key: key)
+        let catalog = makeCatalog()
         var publishedNames: [[String]] = []
         let update = { publishedNames.append(catalog.entities().map(\.displayName)) }
 
@@ -150,7 +154,7 @@ final class TaskScopeIntentsTests: XCTestCase {
         let beta = preset(name: "Beta Client")
         defaults.set(try JSONEncoder().encode([alpha, beta]), forKey: key)
         let query = WatchedPresetEntityQuery(
-            catalog: WatchedPresetCatalog(suiteName: suiteName, key: key)
+            catalog: makeCatalog()
         )
 
         let resolved = try await query.entities(for: [beta.id, UUID()])
@@ -206,6 +210,11 @@ final class TaskScopeIntentsTests: XCTestCase {
                 action: "stop Alpha"
             )
         )
+    }
+
+    private func makeCatalog() -> WatchedPresetCatalog {
+        let defaults = defaults!
+        return WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader)
     }
 
     private func preset(name: String) -> WatchedAppPreset {

@@ -3,13 +3,13 @@ import XCTest
 
 @MainActor
 final class WatchedAppsStoreTests: XCTestCase {
-    private let suiteName = "TaskScope.WatchedAppsStoreTests"
+    private let suiteName = "TaskScope.WatchedAppsStoreTests.\(UUID().uuidString)"
     private let key = "watched-presets-tests"
-    nonisolated(unsafe) private var defaults: UserDefaults!
+    nonisolated(unsafe) private var defaults: InMemoryUserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 
@@ -27,7 +27,7 @@ final class WatchedAppsStoreTests: XCTestCase {
         XCTAssertFalse(second.isReadOnlyAfterCorruption)
         XCTAssertNil(second.persistenceIssue)
         XCTAssertEqual(
-            WatchedPresetCatalog(suiteName: suiteName, key: key).entities().map(\.id),
+            WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader).entities().map(\.id),
             [WatchedAppPreset.globalProtectID]
         )
     }
@@ -364,7 +364,7 @@ final class WatchedAppsStoreTests: XCTestCase {
         defaults.set(olderCorruptPayload, forKey: "\(key).corruptBackup")
 
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        let catalog = WatchedPresetCatalog(suiteName: suiteName, key: key)
+        let catalog = WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader)
 
         XCTAssertEqual(store.presets.map(\.displayName), ["Valid"])
         XCTAssertEqual(catalog.entities().map(\.displayName), ["Valid"])
@@ -405,7 +405,7 @@ final class WatchedAppsStoreTests: XCTestCase {
         defaults.set(original, forKey: key)
 
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        let catalog = WatchedPresetCatalog(suiteName: suiteName, key: key)
+        let catalog = WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader)
 
         XCTAssertEqual(store.presets, [valid, other])
         XCTAssertEqual(catalog.entities().map(\.id), [valid.id, other.id])
@@ -440,7 +440,7 @@ final class WatchedAppsStoreTests: XCTestCase {
             XCTAssertTrue(store.persistenceIssue?.contains("corruptBackup") == true)
             XCTAssertEqual(defaults.data(forKey: key), original)
             XCTAssertNil(defaults.data(forKey: "\(key).rejectedMigrationBackup"))
-            XCTAssertTrue(WatchedPresetCatalog(suiteName: suiteName, key: key).entities().isEmpty)
+            XCTAssertTrue(WatchedPresetCatalog(key: key, objectForKey: defaults.objectReader).entities().isEmpty)
         }
     }
 

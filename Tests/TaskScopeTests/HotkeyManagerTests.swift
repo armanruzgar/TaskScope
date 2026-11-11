@@ -5,8 +5,8 @@ import XCTest
 @MainActor
 final class HotkeyManagerTests: XCTestCase {
     func testUnsetHotkeyUsesControlOptionCommandT() {
-        let suite = "TaskScope.HotkeyManagerTests.default"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.default.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
 
@@ -21,8 +21,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testSavedCommandShiftTIsPreservedAndCanStillBeRecorded() {
-        let suite = "TaskScope.HotkeyManagerTests.saved"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.saved.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["enabled": true, "keyCode": UInt32(kVK_ANSI_T), "modifiers": UInt32(cmdKey | shiftKey)], forKey: "hotkey")
@@ -39,8 +39,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testReservedSavedShortcutMigratesToDefaultWithNotice() {
-        let suite = "TaskScope.HotkeyManagerTests.migration"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.migration.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         for enabled in [true, false] {
@@ -65,8 +65,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testMigrationNoticeDoesNotHideDefaultRegistrationFailure() {
-        let suite = "TaskScope.HotkeyManagerTests.migrationConflict"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.migrationConflict.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["enabled": true, "keyCode": UInt32(kVK_ANSI_K), "modifiers": UInt32(cmdKey)], forKey: "hotkey")
@@ -186,7 +186,7 @@ final class HotkeyManagerTests: XCTestCase {
 
     func testRejectedShortcutExplainsItselfWithoutChangingRegistrationStatus() {
         let suite = "TaskScope.HotkeyManagerTests.reasons.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = HotkeyManager(defaults: defaults, defaultsKey: "hotkey", backend: FakeHotkeyBackend())
@@ -201,8 +201,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testUnchangedShortcutIsNotReRegisteredAndAChangeUnregistersTheOldOneFirst() {
-        let suite = "TaskScope.HotkeyManagerTests.backend"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.backend.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let backend = FakeHotkeyBackend()
@@ -224,8 +224,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testRefusedNewShortcutRestoresThePreviousOneAndSaysSo() {
-        let suite = "TaskScope.HotkeyManagerTests.conflict"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.conflict.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let backend = FakeHotkeyBackend()
@@ -250,7 +250,7 @@ final class HotkeyManagerTests: XCTestCase {
 
     func testUnsupportedAtomicUpdateLeavesPreviousConfiguration() {
         let suite = "TaskScope.HotkeyManagerTests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = HotkeyManager(defaults: defaults, defaultsKey: "hotkey", backend: FakeHotkeyBackend())
@@ -265,8 +265,8 @@ final class HotkeyManagerTests: XCTestCase {
     }
 
     func testHotkeyIsNotAvailableWhileDisabled() {
-        let suite = "TaskScope.HotkeyManagerTests.disabled"
-        let defaults = UserDefaults(suiteName: suite)!
+        let suite = "TaskScope.HotkeyManagerTests.disabled.\(UUID().uuidString)"
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defaults.removePersistentDomain(forName: suite)
         defer { defaults.removePersistentDomain(forName: suite) }
         let backend = FakeHotkeyBackend()

@@ -55,7 +55,7 @@ Developer ID signature or notarization.
 ## Build and run from source
 
 ```bash
-git clone https://github.com/38st/TaskScope.git
+git clone https://github.com/armanruzgar/TaskScope.git
 cd TaskScope
 swift build -c debug
 ./script/build_and_run.sh

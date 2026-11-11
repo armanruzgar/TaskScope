@@ -9,7 +9,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
     override func setUp() {
         super.setUp()
         suiteName = "TaskScope.PersistenceRecoveryMutationTests.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 

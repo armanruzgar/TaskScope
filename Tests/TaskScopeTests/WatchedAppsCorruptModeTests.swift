@@ -7,14 +7,14 @@ import XCTest
 /// return value, so recovery work is accepted, reported as saved, and silently dropped.
 @MainActor
 final class P10CorruptModeSilentDiscardTests: XCTestCase {
-    private let suiteName = "TaskScope.P10CorruptModeSilentDiscardTests"
+    private let suiteName = "TaskScope.P10CorruptModeSilentDiscardTests.\(UUID().uuidString)"
     private let key = "watched-presets-p10-tests"
     private let corruptBytes = Data([0xFE, 0xED])
     nonisolated(unsafe) private var defaults: UserDefaults!
 
     override func setUp() {
         super.setUp()
-        defaults = UserDefaults(suiteName: suiteName)!
+        defaults = InMemoryUserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
     }
 

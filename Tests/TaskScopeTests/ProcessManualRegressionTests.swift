@@ -4,11 +4,11 @@ import XCTest
 
 @MainActor
 final class ProcessManualRegressionTests: XCTestCase {
-    nonisolated(unsafe) private var defaultsSuites: [String] = []
+    nonisolated(unsafe) private var defaultsSuites: [(name: String, defaults: UserDefaults)] = []
 
     override func tearDown() {
         for suite in defaultsSuites {
-            UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite)
+            suite.defaults.removePersistentDomain(forName: suite.name)
         }
         defaultsSuites.removeAll()
         super.tearDown()
@@ -16,8 +16,9 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     private func makeDefaults() -> UserDefaults {
         let suite = "TaskScope.ProcessManual.\(UUID())"
-        defaultsSuites.append(suite)
-        return UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
+        defaultsSuites.append((suite, defaults))
+        return defaults
     }
 
     func testAppPathOnlyEditRebaselinesNotificationsInBothDirections() async {

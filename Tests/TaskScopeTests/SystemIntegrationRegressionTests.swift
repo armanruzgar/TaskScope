@@ -8,7 +8,7 @@ import XCTest
 final class SystemIntegrationRegressionTests: XCTestCase {
     func testLoginRecoveryStatesCanUnregisterFromPresets() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         for state in [LoginItemState.requiresApproval, .notFound] {
             let service = IntegrationLoginService(state: state)
@@ -27,7 +27,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testLoginRecoveryStatesShowUnregisterFailureInPresets() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         for state in [LoginItemState.requiresApproval, .notFound] {
             let service = IntegrationLoginService(state: state)
@@ -45,7 +45,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testEveryInvalidSavedHotkeyMigratesAndRegistersWithAReason() {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let shortcuts: [(UInt32, UInt32, String)] = [
             (UInt32(kVK_Space), UInt32(optionKey), "Command or Control"),
@@ -74,7 +74,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testMigrationNoticeSurvivesRelaunchUntilAShortcutIsRecorded() {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(["enabled": true, "keyCode": UInt32(kVK_ANSI_K), "modifiers": UInt32(cmdKey)], forKey: "hotkey")
         let manager = HotkeyManager(defaults: defaults, defaultsKey: "hotkey", backend: IntegrationHotkeyBackend())
@@ -90,7 +90,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testRefusedRecordingPreservesActiveAndFailedRegistrationStatus() {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         for refusesRegistration in [false, true] {
             let backend = IntegrationHotkeyBackend()
@@ -110,7 +110,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testWrongTypeHotkeyIsBackedUpAndCannotBeOverwrittenByEdits() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let payloads: [Any] = ["unreadable shortcut", ["unreadable", "array"], Data([0, 1, 2])]
         for payload in payloads {
@@ -143,7 +143,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testActivityMonitorContextMenuPassesTheRowsIdentityInBothPresentations() async throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let process = AppProcess(
             pid: 42, parentPID: 1, cpu: 0, memoryMB: 1, command: "Original",
@@ -173,7 +173,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testLoginToggleKeepsItsEnableAndDisableBehavior() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         for state in [LoginItemState.requiresApproval, .notFound, .notRegistered, .enabled] {
             let service = IntegrationLoginService(state: state)
@@ -187,7 +187,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testHotkeyNoticeDismissalPersistsAndPreservesUnknownFields() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set([
             "enabled": false, "keyCode": UInt32(kVK_ANSI_K), "modifiers": UInt32(cmdKey),
@@ -205,7 +205,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testHotkeyRefusalAndRegistrationStatusAreBothVisible() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let manager = HotkeyManager(defaults: defaults, defaultsKey: "hotkey", backend: IntegrationHotkeyBackend())
         defer { manager.unregister() }
@@ -221,7 +221,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testHotkeyRecoveryResetRequiresExplicitActionAndKeepsPriorBackups() throws {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let older = try PropertyListSerialization.data(fromPropertyList: "older", format: .binary, options: 0)
         defaults.set(older, forKey: "hotkey.corruptBackup")
@@ -253,7 +253,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
 
     func testHotkeyRecoveryWithFullBackupSlotsLeavesPrimaryUntouched() {
         let suite = "TaskScope.SystemIntegration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = InMemoryUserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         for slot in 1...PersistenceRecovery.maximumBackupSlots {
             defaults.set(Data([UInt8(slot)]), forKey: slot == 1 ? "hotkey.corruptBackup" : "hotkey.corruptBackup.\(slot)")

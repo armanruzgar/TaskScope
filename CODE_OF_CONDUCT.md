@@ -21,7 +21,7 @@ consistent, private where possible, and focused on community safety.
 
 Do not post sensitive conduct information in a public issue. Use the repository's
 **Security** tab, choose **Report a vulnerability**, and identify the report as
-a conduct concern in the [private form](https://github.com/38st/TaskScope/security/advisories/new).
+a conduct concern in the [private form](https://github.com/armanruzgar/TaskScope/security/advisories/new).
 Describe what happened and include only the information needed to investigate.
 Keep identifying information and evidence private.
 
