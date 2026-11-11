@@ -65,8 +65,8 @@ caches and the runtime issues that SwiftUI reports, with a line but no column,
 while tests run. If the build itself
 fails, read `.build/warnings.log`; after a failed grep, the lines it printed
 are the warnings to fix. `Package.swift` enables complete concurrency checking
-for both targets, so ordinary `swift build` and `swift test` runs show the same
-diagnostics.
+for both Swift targets, so ordinary `swift build` and `swift test` runs show the
+same diagnostics.
 
 The [CI workflow](.github/workflows/ci.yml) enforces most of this gate. On every
 push to `main`, on every pull request, and on manual dispatch, GitHub Actions
@@ -98,6 +98,17 @@ the test can reach is one it wrote; `ProcessLifecycleRuntime.live` is the only
 real one. Give `sendSignal` a closure that fails the test unless the test
 expects signals, and send a real signal only to a child process the test
 started itself.
+
+Test targets also depend on `TaskScopeTestEnvironment`
+(`Tests/TaskScopeTestEnvironment`), a small C target that sets
+`CN_UNIT_TESTING=YES` while the test bundle loads. XCTest builds its test list
+by enumerating every Objective-C class in the process, and ViewInspector links
+AuthenticationServices, which loads the Contacts UI frameworks. Enumerating
+their classes initializes the Contacts store class, and unless that variable is
+set, Contacts then starts a background warm-up that asks for Contacts access
+and tries to open the user's Contacts database. A new test target must depend
+on `TaskScopeTestEnvironment` too; `TestEnvironmentTests` checks that the setup
+ran.
 
 The packaging test requires macOS and Xcode 26 and launches test copies of the
 app. It stages and signs them ad hoc in its own temporary directory, never in

@@ -22,10 +22,14 @@ let package = Package(
     ],
     targets: [
         .executableTarget(name: "TaskScope", swiftSettings: strictConcurrency),
+        // Sets the test process up before XCTest builds its list of tests;
+        // see Tests/TaskScopeTestEnvironment/TaskScopeTestEnvironment.c.
+        .target(name: "TaskScopeTestEnvironment", path: "Tests/TaskScopeTestEnvironment"),
         .testTarget(
             name: "TaskScopeTests",
             dependencies: [
                 "TaskScope",
+                "TaskScopeTestEnvironment",
                 .product(name: "ViewInspector", package: "ViewInspector")
             ],
             swiftSettings: strictConcurrency
