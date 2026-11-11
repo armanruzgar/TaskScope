@@ -26,13 +26,13 @@ itself and reloads at every watched-status read.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while the menu-bar icon shows status, notifications are on, or Keep Off is on for a preset; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
+| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status while a TaskScope window or the menu-bar popover is open; opening one reads at once. With both closed, it reads at this interval only while notifications are on or Keep Off is on for a preset, every 30 seconds (or at this interval when it is longer) while only the menu-bar icon shows status, and not at all otherwise. Keep Off enforcement runs on these reads |
 | Auto-refresh process list | Off | Load the process list without **Load Processes** and reload it at every watched-status read |
 | Show all processes | Off | List every matching process in any sort order and in tree view; the process list limit then does not apply |
 | Process list limit | 80 rows (10 to 200, in steps of 10) | Rows shown while Show all processes is off; a longer result shows **Showing N of M** |
 | Highlight Thresholds: CPU % | 30 % | Rows at or above either threshold are highlighted and match the **Hot** filter |
 | Highlight Thresholds: Memory (MB) | 1024 MB | See CPU % |
-| Show status in the menu-bar icon | On | The menu-bar icon marks TaskScope's state, as described below. While it is on and a preset exists, TaskScope reads watched status in the background; turned off, the icon stays plain |
+| Show status in the menu-bar icon | On | The menu-bar icon marks TaskScope's state, as described below. While it is on and a preset exists, the icon refreshes every 30 seconds in the background, or at the watched status interval when notifications or Keep Off are on (and when that interval is longer than 30 seconds); turned off, the icon stays plain |
 | Notify on watched process changes | Off | Notifications for watched presets; see [notifications](#history-notifications-and-hotkeys) |
 
 With **Show status in the menu-bar icon** on, a mark in the corner of the

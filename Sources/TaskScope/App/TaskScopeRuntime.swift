@@ -104,15 +104,18 @@ final class TaskScopeRuntime {
         processManager.setPolling(
             interval: settings.refreshIntervalSeconds,
             includeProcessList: settings.autoRefreshProcessList,
-            backgroundActivity: needsBackgroundReads
+            background: backgroundPolling
         )
     }
 
-    /// Notifications diff the background reads, Keep Off enforcement runs on
-    /// them, and the menu-bar icon shows the watched status they keep current.
-    private var needsBackgroundReads: Bool {
-        settings.enableNotifications || !settings.keptOffPresetIDs.isEmpty
-            || (settings.showsMenuBarStatus && !watchedApps.presets.isEmpty)
+    /// Notifications diff every background read and Keep Off enforcement runs
+    /// on them, so either keeps the interval. The menu-bar icon alone only
+    /// shows the watched status they keep current, and makes do with a read
+    /// every 30 seconds.
+    var backgroundPolling: ProcessManager.BackgroundPolling {
+        if settings.enableNotifications || !settings.keptOffPresetIDs.isEmpty { return .interval }
+        if settings.showsMenuBarStatus && !watchedApps.presets.isEmpty { return .menuBarIcon }
+        return .off
     }
 
     /// The same reactions the menu-bar label's `onChange` handlers had. A

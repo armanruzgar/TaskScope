@@ -188,7 +188,10 @@ Record evidence for every locally testable item:
   failed read (stale) and a fresh launch (unknown), and a waiting Auto-Stop
   prompt; the status item keeps its width in every state, VoiceOver reads each
   state, and turning **Show status in the menu-bar icon** off stops background
-  reads when notifications and Keep Off are off;
+  reads when notifications and Keep Off are off. With notifications and Keep Off
+  off and no TaskScope window or popover open, the icon picks up a watched app
+  starting or quitting within about 30 seconds, and within the watched status
+  interval once a window or popover is open;
 - light/dark appearance, keyboard operation, VoiceOver labels, and destructive
   confirmations. In tree mode, focus search, click the highlighted row again,
   and verify the arrows (Left and Right collapse and expand), Space, Return,

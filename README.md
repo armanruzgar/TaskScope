@@ -222,12 +222,13 @@ turn the switch off or choose **Open** ([Keep Off](docs/USING_TASKSCOPE.md#keep-
 the [preset guide](docs/USING_TASKSCOPE.md#watched-app-presets) before
 importing configuration.
 
-TaskScope reads watched status in the background only while the menu-bar icon
-shows status (**Settings > General**, on by default), notifications are on, or
-Keep Off is on for a preset; otherwise it reads only while a TaskScope window or
-the menu-bar popover is open. The icon then marks a running watched app, a
-kept-off service that is running again, a status TaskScope could not verify, and
-a waiting Auto-Stop prompt. The stale watched-status banner appears when a
+TaskScope reads watched status in the background only while notifications are
+on or Keep Off is on for a preset, at the watched status interval, or while the
+menu-bar icon shows status (**Settings > General**, on by default), then every
+30 seconds; otherwise it reads only while a TaskScope window or the menu-bar
+popover is open. The icon marks a running watched app, a kept-off service that
+is running again, a status TaskScope could not verify, and a waiting Auto-Stop
+prompt. The stale watched-status banner appears when a
 watched-status read fails and reports the last successful watched observation,
 independently of the process-list update time, with the date for observations
 before today. Stale single-process stops preserve displayed Net/Disk readings.

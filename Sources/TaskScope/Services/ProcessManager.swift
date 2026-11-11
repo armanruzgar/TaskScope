@@ -98,7 +98,7 @@ final class ProcessManager: ObservableObject {
     private var pollInterval: TimeInterval = 10
     private var pollProcessList = false
     private var isPollingConfigured = false
-    private var backgroundPollingNeeded = true
+    private var backgroundPolling = BackgroundPolling.interval
     private var visibleConsumers = 0
 
     private let currentPID: Int32
@@ -183,21 +183,54 @@ final class ProcessManager: ObservableObject {
         }
     }
 
-    /// Configures the poll. `backgroundActivity` says whether anything needs
-    /// the poll while no window or popover shows status: notifications diff its
-    /// reads, Keep Off enforcement runs on its ticks, and the menu-bar icon
-    /// shows the status they read. Without it, polling runs only between
-    /// `beginObservingStatus` and `endObservingStatus`.
-    func setPolling(interval: TimeInterval, includeProcessList: Bool, backgroundActivity: Bool = true) {
+    /// What needs the poll while no window or popover shows status, which
+    /// decides how often it reads then.
+    enum BackgroundPolling: Equatable, Sendable {
+        /// Nothing: polling runs only between `beginObservingStatus` and
+        /// `endObservingStatus`.
+        case off
+        /// Notifications diff every read and Keep Off enforcement runs on the
+        /// ticks, so the poll keeps the watched-status interval.
+        case interval
+        /// Only the menu-bar icon shows the reads. It is current enough at
+        /// `menuBarIconInterval`, or at the interval when that is longer.
+        case menuBarIcon
+    }
+
+    /// The background cadence while the menu-bar icon is the only reader: a
+    /// full inventory read every 10 seconds all day costs about 1% of a core.
+    nonisolated static let menuBarIconInterval: TimeInterval = 30
+
+    /// Configures the poll. `background` says what needs it while no window or
+    /// popover shows status; while one does, the poll reads at `interval`.
+    func setPolling(interval: TimeInterval, includeProcessList: Bool, background: BackgroundPolling) {
         isPollingConfigured = true
         pollInterval = max(2, interval)
         pollProcessList = includeProcessList
-        backgroundPollingNeeded = backgroundActivity
+        backgroundPolling = background
         restartPolling()
     }
 
-    private var pollingIsNeeded: Bool {
-        isPollingConfigured && (visibleConsumers > 0 || backgroundPollingNeeded)
+    /// `backgroundActivity` polls at the interval in the background too;
+    /// without it, only while a window or popover shows status.
+    func setPolling(interval: TimeInterval, includeProcessList: Bool, backgroundActivity: Bool = true) {
+        setPolling(
+            interval: interval, includeProcessList: includeProcessList,
+            background: backgroundActivity ? .interval : .off
+        )
+    }
+
+    /// How often the poll reads now: at the watched-status interval while a
+    /// window or popover shows status, else at the background cadence. Nil
+    /// while nothing needs it.
+    var effectivePollInterval: TimeInterval? {
+        guard isPollingConfigured else { return nil }
+        if visibleConsumers > 0 { return pollInterval }
+        switch backgroundPolling {
+        case .off: return nil
+        case .interval: return pollInterval
+        case .menuBarIcon: return max(pollInterval, Self.menuBarIconInterval)
+        }
     }
 
     /// A window or popover that shows status appeared. Starts polling if
@@ -205,13 +238,15 @@ final class ProcessManager: ObservableObject {
     /// poll may have been off. Pair every call with `endObservingStatus`; like
     /// the extended-metrics count, an early release is allowed to go negative.
     func beginObservingStatus() async {
-        let wasNeeded = pollingIsNeeded
+        let cadenceBefore = effectivePollInterval
         visibleConsumers += 1
         // Until the app configures polling (it never does for startup
         // verification or a rejected duplicate launch), showing status starts
         // no automatic work.
         guard isPollingConfigured else { return }
-        if !wasNeeded, pollingIsNeeded { restartPolling() }
+        // Starts the poll, or moves it from the menu-bar icon's slower
+        // background cadence to the interval.
+        if effectivePollInterval != cadenceBefore { restartPolling() }
         if pollProcessList {
             await loadProcessList(showMessage: false)
         } else {
@@ -220,9 +255,9 @@ final class ProcessManager: ObservableObject {
     }
 
     func endObservingStatus() {
-        let wasNeeded = pollingIsNeeded
+        let cadenceBefore = effectivePollInterval
         visibleConsumers -= 1
-        if wasNeeded, !pollingIsNeeded { restartPolling() }
+        if effectivePollInterval != cadenceBefore { restartPolling() }
     }
 
     /// Stops the poll until `setPolling` configures it again. Quitting stops it
@@ -234,14 +269,14 @@ final class ProcessManager: ObservableObject {
     }
 
     func restartPolling() {
-        guard pollingIsNeeded else {
+        guard let interval = effectivePollInterval else {
             pollingController.stop()
             // The history runs its own sampler for a visible chart again.
             processHistory?.setPollingActive(false)
             return
         }
         processHistory?.setPollingActive(true)
-        pollingController.restart(interval: pollInterval) { [weak self] in
+        pollingController.restart(interval: interval) { [weak self] in
             guard let self else { return }
             // macOS sends no event when the user allows notifications in
             // System Settings. While delivery is impossible, each tick re-reads

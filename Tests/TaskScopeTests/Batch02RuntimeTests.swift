@@ -212,18 +212,51 @@ final class Batch02RuntimeTests: XCTestCase {
         defer { rig.tearDown() }
         XCTAssertTrue(rig.stores.settings.showsMenuBarStatus, "on by default")
         XCTAssertFalse(rig.stores.settings.enableNotifications || rig.stores.settings.keepGlobalProtectOff)
+        XCTAssertEqual(rig.runtime.backgroundPolling, .menuBarIcon)
         await rig.start(.interactive)
         await waitUntil { !rig.polling.intervals.isEmpty }
-        XCTAssertEqual(rig.polling.intervals, [10], "The icon needs the poll although no view is open")
+        XCTAssertEqual(rig.polling.intervals, [30], "The icon alone reads every 30 seconds with no view open")
 
         rig.stores.settings.showsMenuBarStatus = false
         await waitUntil { rig.polling.cancellations > 0 }
         XCTAssertEqual(rig.polling.cancellations, 1, "Nothing else needs a background read")
-        XCTAssertEqual(rig.polling.intervals, [10])
+        XCTAssertEqual(rig.polling.intervals, [30])
+        XCTAssertEqual(rig.runtime.backgroundPolling, .off)
 
         rig.stores.settings.showsMenuBarStatus = true
         await waitUntil { rig.polling.intervals.count == 2 }
-        XCTAssertEqual(rig.polling.intervals, [10, 10])
+        XCTAssertEqual(rig.polling.intervals, [30, 30])
+    }
+
+    /// L11-21: notifications and Keep Off need every read, so they keep the
+    /// interval; the icon's slower cadence applies only while it reads alone.
+    func testNotificationsAndKeepOffKeepTheIntervalForBackgroundReads() async {
+        let rig = Batch02RuntimeRig()
+        defer { rig.tearDown() }
+        rig.stores.settings.refreshIntervalSeconds = 15
+        await rig.start(.interactive)
+        await waitUntil { !rig.polling.intervals.isEmpty }
+        XCTAssertEqual(rig.polling.intervals, [30])
+
+        rig.stores.settings.enableNotifications = true
+        await waitUntil { rig.polling.intervals.count == 2 }
+        XCTAssertEqual(rig.polling.intervals, [30, 15], "notifications diff every read")
+        XCTAssertEqual(rig.runtime.backgroundPolling, .interval)
+
+        rig.stores.settings.enableNotifications = false
+        await waitUntil { rig.polling.intervals.count == 3 }
+        XCTAssertEqual(rig.polling.intervals.last, 30)
+
+        rig.stores.settings.setKeptOff(true, for: WatchedAppPreset.globalProtectID)
+        await waitUntil { rig.polling.intervals.count == 4 }
+        XCTAssertEqual(rig.polling.intervals.last, 15, "Keep Off enforcement runs on every tick")
+        XCTAssertEqual(rig.runtime.backgroundPolling, .interval)
+
+        // A refresh interval longer than 30 seconds stays the icon's cadence too.
+        rig.stores.settings.setKeptOff(false, for: WatchedAppPreset.globalProtectID)
+        rig.stores.settings.refreshIntervalSeconds = 45
+        await waitUntil { rig.polling.intervals.last == 45 }
+        XCTAssertEqual(rig.runtime.backgroundPolling, .menuBarIcon)
     }
 
     /// L11-21: with no preset there is nothing for the icon to show.
