@@ -41,7 +41,8 @@ enum Batch10 {
 
     static func fixture(
         processes: [AppProcess],
-        inventory: (any ProcessInventoryProviding)? = nil
+        inventory: (any ProcessInventoryProviding)? = nil,
+        detailReader: any ProcessDetailReading = ScriptedDetailReader()
     ) async -> UIFixture {
         let inventory = inventory ?? ScriptedInventory(processes: processes)
         let signaler = FakeSignaler()
@@ -49,6 +50,7 @@ enum Batch10 {
         let manager = ProcessManager(
             processInventory: inventory, verificationInventory: inventory,
             processSignaler: signaler, lifecycle: lifecycle, settleAfterProcessChange: {},
+            detailReader: detailReader,
             dependencies: .inert
         )
         manager.enableNotifications = false

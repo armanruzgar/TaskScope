@@ -44,6 +44,8 @@ struct SettingsView: View {
     @State private var showPresetEditor = false
     @State private var showImportPreview = false
     @State private var dryRunPreset: WatchedAppPreset?
+    /// Lets a test inspect the installed view; see `Inspection`.
+    let inspection = Inspection<Self>()
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -160,6 +162,7 @@ struct SettingsView: View {
         .onReceive(processManager.keepOffActivity.$pendingPresetIDs) { pending in
             pendingKeepOffPresetIDs = pending
         }
+        .onReceive(inspection.notice) { inspection.visit(self, $0) }
     }
 
     /// Every sheet is sized to fit inside this window.

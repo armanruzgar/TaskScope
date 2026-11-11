@@ -118,18 +118,19 @@ final class Batch10PresentationTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [parent, child])
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.searchText = "Needle"
+        // The installed popover takes tree mode from Settings when it appears.
+        fixture.stores.settings.treeMode = true
         let list = ProcessListInteractionState()
-        list.treeMode = true
         list.expandedTreePids = [51]
-        let view = Batch10.popover(fixture, listState: list)
-        let rows = try view.inspect().findAll(ProcessRow.self)
+        let view = try await hosted(Batch10.popover(fixture, listState: list))
+        let rows = view.findAll(ProcessRow.self)
         let context = try XCTUnwrap(rows.first { try $0.actualView().process.pid == 51 })
         let match = try XCTUnwrap(rows.first { try $0.actualView().process.pid == 52 })
         XCTAssertTrue(try context.actualView().isContextOnly)
         XCTAssertEqual(try context.actualView().treeLevel, 1)
         XCTAssertFalse(try match.actualView().isContextOnly)
         XCTAssertEqual(try match.actualView().treeLevel, 2)
-        XCTAssertNoThrow(try view.inspect().find(text: "1 match, 2 rows visible"))
+        XCTAssertNoThrow(try view.find(text: "1 match, 2 rows visible"))
     }
 
     // A05-4: an unfiltered tree opens the path to every displayed row, and a
@@ -156,11 +157,10 @@ final class Batch10PresentationTests: XCTestCase {
     func testDecorativeImagesAreHiddenAndControlsAreNamedOnce() async throws {
         let fixture = await Batch10.fixture(processes: [Batch10.process(51, name: "Leaf"), Batch10.process(52, parent: 51, name: "Child")])
         defer { fixture.stores.cleanup() }
+        fixture.stores.settings.treeMode = true
         let list = ProcessListInteractionState()
-        list.treeMode = true
         list.expandedTreePids = [51]
-        let view = Batch10.popover(fixture, listState: list)
-        let inspected = try view.inspect()
+        let inspected = try await hosted(Batch10.popover(fixture, listState: list))
 
         let glass = try inspected.find(ViewType.Image.self) { try $0.actualImage().name() == "magnifyingglass" }
         XCTAssertTrue(try glass.accessibilityHidden())
@@ -188,8 +188,7 @@ final class Batch10PresentationTests: XCTestCase {
         let inventory = ScriptedInventory([.failure(.commandFailed("ps exited with status 1"))], repeatsLast: true)
         let fixture = await Batch10.fixture(processes: [], inventory: inventory)
         defer { fixture.stores.cleanup() }
-        let view = Batch10.popover(fixture)
-        let inspected = try view.inspect()
+        let inspected = try await hosted(Batch10.popover(fixture))
         XCTAssertNoThrow(try inspected.find(text: "ps exited with status 1."))
         let icon = try inspected.find(ViewType.Image.self) { try $0.actualImage().name() == "exclamationmark.triangle" }
         XCTAssertTrue(try icon.accessibilityHidden())
@@ -218,7 +217,7 @@ final class Batch10PresentationTests: XCTestCase {
         XCTAssertEqual(fixture.manager.message, "Could not load processes: Resource temporarily unavailable.")
         await fixture.manager.loadProcessList()
         XCTAssertEqual(fixture.manager.message, "Could not load processes: ps exited with status 1.")
-        let banner = try Batch10.popover(fixture).inspect().find(ViewType.Text.self) {
+        let banner = try await hosted(Batch10.popover(fixture)).find(ViewType.Text.self) {
             try $0.string().contains("Refresh failed:")
         }
         XCTAssertTrue(try banner.string().contains("Refresh failed: ps exited with status 1. Actions will be revalidated"))
@@ -229,13 +228,13 @@ final class Batch10PresentationTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [Batch10.process(51, name: "Solo"), Batch10.process(52, name: "Other")])
         defer { fixture.stores.cleanup() }
         fixture.manager.select([Batch10.process(51, name: "Solo")])
-        let view = Batch10.popover(fixture)
-        let menu = try view.inspect().find(ViewType.Menu.self) {
+        let menu = try await hosted(Batch10.popover(fixture)).find(ViewType.Menu.self) {
             try $0.accessibilityLabel().string().hasPrefix("Actions for")
         }
         XCTAssertEqual(try menu.accessibilityLabel().string(), "Actions for 1 selected process")
         fixture.stores.settings.searchText = "Solo"
-        XCTAssertNoThrow(try Batch10.popover(fixture).inspect().find(text: "1 match"))
+        let searched = try await hosted(Batch10.popover(fixture))
+        XCTAssertNoThrow(try searched.find(text: "1 match"))
 
         let one = SparklineView(samples: [.init(timestamp: Date(), observedProcessCPU: 1, observedProcessMemoryMB: 2, processCount: 3)],
                                 keyPath: \.observedProcessCPU, color: .orange, label: "PROC CPU %", unit: "percent")
@@ -247,10 +246,10 @@ final class Batch10PresentationTests: XCTestCase {
     func testFooterTotalIsLabelledAndOnlyOnTheProcessesTab() async throws {
         let fixture = await Batch10.fixture(processes: [Batch10.process(51, cpu: 2.5, memoryMB: 100)])
         defer { fixture.stores.cleanup() }
-        let footer = try Batch10.popover(fixture).inspect().find(TaskScopeFooterView.self).actualView()
+        let footer = try await hosted(Batch10.popover(fixture)).find(TaskScopeFooterView.self).actualView()
         XCTAssertEqual(footer.summary, "Σ shown 2.5% CPU · 100 MB MEM")
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
-        let presetsFooter = try Batch10.popover(fixture).inspect().find(TaskScopeFooterView.self).actualView()
+        let presetsFooter = try await hosted(Batch10.popover(fixture)).find(TaskScopeFooterView.self).actualView()
         XCTAssertNil(presetsFooter.summary)
     }
 
@@ -259,8 +258,7 @@ final class Batch10PresentationTests: XCTestCase {
     func testColumnHeadersAlignSortAndExplainTheirPairs() async throws {
         let fixture = await Batch10.fixture(processes: [Batch10.process(51)])
         defer { fixture.stores.cleanup() }
-        let view = Batch10.popover(fixture)
-        let inspected = try view.inspect()
+        let inspected = try await hosted(Batch10.popover(fixture))
         let header = try inspected.find(ViewType.HStack.self) { stack in
             (try? stack.find(text: "PPID")) != nil
         }
@@ -283,9 +281,10 @@ final class Batch10PresentationTests: XCTestCase {
         try inspected.find(button: "MEM MB").tap()
         XCTAssertEqual(fixture.stores.settings.sortKey, .memory)
         XCTAssertEqual(fixture.manager.sortKey, .memory)
-        try Batch10.popover(fixture).inspect().find(button: "PID").tap()
+        try await hosted(Batch10.popover(fixture)).find(button: "PID").tap()
         XCTAssertEqual(fixture.manager.sortKey, .pid)
-        XCTAssertEqual(try Batch10.popover(fixture).inspect().find(button: "PID").accessibilityValue().string(), "sorted ascending")
+        let resorted = try await hosted(Batch10.popover(fixture))
+        XCTAssertEqual(try resorted.find(button: "PID").accessibilityValue().string(), "sorted ascending")
     }
 
     // A05-6: a failed history read is visible on the charts, not only on hover.

@@ -12,7 +12,7 @@ final class ViewDependencyInjectionTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [])
         defer { fixture.stores.cleanup() }
         let views = ViewTestDependencies()
-        let popover = Batch10.popover(fixture, quitAction: views.quitAction)
+        let popover = try await hosted(Batch10.popover(fixture, quitAction: views.quitAction))
 
         try quitButton(in: popover).tap()
 
@@ -37,11 +37,11 @@ final class ViewDependencyInjectionTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [])
         defer { fixture.stores.cleanup() }
 
-        let denied = settings(fixture, notificationService: .forTests(state: .denied))
+        let denied = try await installed(settings(fixture, notificationService: .forTests(state: .denied)))
         XCTAssertNoThrow(try denied.inspect().find(button: "Open Notification Settings"))
         XCTAssertNoThrow(try denied.inspect().find(text: NotificationService.AuthorizationState.denied.label))
 
-        let allowed = settings(fixture, notificationService: .forTests(state: .authorized))
+        let allowed = try await installed(settings(fixture, notificationService: .forTests(state: .authorized)))
         XCTAssertThrowsError(try allowed.inspect().find(button: "Open Notification Settings"))
         XCTAssertNoThrow(try allowed.inspect().find(text: NotificationService.AuthorizationState.authorized.label))
     }
@@ -54,7 +54,7 @@ final class ViewDependencyInjectionTests: XCTestCase {
         let hotkey = HotkeyManager(defaults: defaults, backend: backend)
         XCTAssertTrue(hotkey.hotkeyEnabled, "precondition: the default hotkey is on")
 
-        let view = settings(fixture, hotkey: hotkey, tab: .hotkey)
+        let view = try await installed(settings(fixture, hotkey: hotkey, tab: .hotkey))
         try view.inspect().find(ViewType.Toggle.self, where: {
             (try? $0.labelView().text().string()) == "Enable global Show TaskScope hotkey"
         }).tap()
@@ -67,8 +67,8 @@ final class ViewDependencyInjectionTests: XCTestCase {
 
     // MARK: Helpers
 
-    private func quitButton(in popover: TaskScopePopoverView) throws -> InspectableView<ViewType.Button> {
-        try popover.inspect().find(TaskScopeFooterView.self).find(ViewType.Button.self, where: {
+    private func quitButton(in popover: InspectableView<ViewType.ClassifiedView>) throws -> InspectableView<ViewType.Button> {
+        try popover.find(TaskScopeFooterView.self).find(ViewType.Button.self, where: {
             (try? $0.accessibilityLabel().string()) == "Quit TaskScope"
         })
     }

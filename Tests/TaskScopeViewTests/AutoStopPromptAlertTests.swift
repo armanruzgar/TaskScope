@@ -27,8 +27,8 @@ final class AutoStopPromptAlertTests: XCTestCase {
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [41], "setup: one prompt queued")
 
-        let view = makePopover(fixture: fixture)
-        let alert = try view.inspect().find(ViewType.Alert.self)
+        let view = try await hosted(makePopover(fixture: fixture))
+        let alert = try view.find(ViewType.Alert.self)
         XCTAssertNoThrow(
             try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
@@ -66,8 +66,8 @@ final class AutoStopPromptAlertTests: XCTestCase {
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [41, 42], "setup: two prompts queued")
 
-        let view = makePopover(fixture: fixture)
-        let alert = try view.inspect().find(ViewType.Alert.self)
+        let view = try await hosted(makePopover(fixture: fixture))
+        let alert = try view.find(ViewType.Alert.self)
         XCTAssertNoThrow(
             try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
@@ -100,8 +100,8 @@ final class AutoStopPromptAlertTests: XCTestCase {
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [41, 42], "setup: two prompts queued")
 
-        let view = makePopover(fixture: fixture)
-        let alert = try view.inspect().find(ViewType.Alert.self)
+        let view = try await hosted(makePopover(fixture: fixture))
+        let alert = try view.find(ViewType.Alert.self)
         XCTAssertNoThrow(
             try alert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."),
             "setup: the alert must be displaying the prompt for pid 41"
@@ -137,8 +137,8 @@ final class AutoStopPromptAlertTests: XCTestCase {
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt)))
         await store.evaluateNow()
         XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [41, 42])
-        let view = makePopover(fixture: fixture)
-        let firstPresenter = try view.inspect().find(AutoStopPromptAlert.self)
+        let view = try await hosted(makePopover(fixture: fixture))
+        let firstPresenter = try view.find(AutoStopPromptAlert.self)
         let firstID = try firstPresenter.id()
         let firstAlert = try firstPresenter.find(ViewType.Alert.self)
         XCTAssertNoThrow(try firstAlert.find(text: "Example (PID 41) has run for 3m, beyond the 1-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."))
@@ -146,7 +146,7 @@ final class AutoStopPromptAlertTests: XCTestCase {
         fixture.inventory.setProcesses([queued])
         await store.evaluateNow()
         XCTAssertEqual(store.currentPrompt?.process.pid, 42)
-        let nextPresenter = try view.inspect().find(AutoStopPromptAlert.self)
+        let nextPresenter = try view.find(AutoStopPromptAlert.self)
         XCTAssertNotEqual(try nextPresenter.id(), firstID, "The next prompt must get a new SwiftUI presenter identity")
         XCTAssertEqual(try firstPresenter.actualView().prompt?.process.pid, 41)
         try firstAlert.find(button: "Stop Now").tap()

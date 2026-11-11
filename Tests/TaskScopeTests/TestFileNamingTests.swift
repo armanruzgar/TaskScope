@@ -3,8 +3,9 @@ import XCTest
 
 /// L07-8: `swift test --filter <file name>` selects every test in a file, and
 /// no file silently runs zero tests. Every Swift file in a test target outside
-/// `Support/` declares at least one `XCTestCase` subclass, the name of each such
-/// class contains its file's name, and `Support/` holds no tests.
+/// a support folder (`Support/`, or `ViewSupport/` for code that needs
+/// ViewInspector) declares at least one `XCTestCase` subclass, the name of each
+/// such class contains its file's name, and support folders hold no tests.
 final class TestFileNamingTests: XCTestCase {
     private static var testClass: NSRegularExpression {
         try! NSRegularExpression(
@@ -19,7 +20,10 @@ final class TestFileNamingTests: XCTestCase {
         for file in files {
             let name = file.deletingPathExtension().lastPathComponent
             let classes = try testClasses(in: file)
-            if file.pathComponents.contains("Support") {
+            // Only folders inside Tests/ count, so a checkout under a folder
+            // such as "Application Support" is scanned like any other.
+            let folders = file.deletingLastPathComponent().pathComponents.dropFirst(Self.testsRoot.pathComponents.count)
+            if folders.contains("Support") || folders.contains("ViewSupport") {
                 XCTAssertEqual(classes, [], "\(file.lastPathComponent) is support code and must not declare tests")
                 continue
             }
@@ -51,11 +55,12 @@ final class TestFileNamingTests: XCTestCase {
 
     /// Swift files of every test target: the folders beside this one in Tests/,
     /// except the C target that prepares the test environment.
+    private static let testsRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+
     private func testSourceFiles() throws -> [URL] {
-        let tests = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let manager = FileManager.default
         var files: [URL] = []
-        for target in try manager.contentsOfDirectory(at: tests, includingPropertiesForKeys: nil)
+        for target in try manager.contentsOfDirectory(at: Self.testsRoot, includingPropertiesForKeys: nil)
         where target.lastPathComponent != "TaskScopeTestEnvironment" && target.hasDirectoryPath {
             let enumerator = manager.enumerator(at: target, includingPropertiesForKeys: nil)
             while let url = enumerator?.nextObject() as? URL {

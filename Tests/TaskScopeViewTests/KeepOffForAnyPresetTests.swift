@@ -225,7 +225,7 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         settings.setKeptOff(true, for: preset.id)
         settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
+        let view = try await installed(Batch10.popover(fixture, state: state))
 
         let card = try XCTUnwrap(view.inspect().findAll(PresetCard.self).first { try $0.actualView().snapshot.preset.id == preset.id })
         XCTAssertTrue(try card.actualView().isKeptOff)
@@ -328,14 +328,14 @@ final class KeepOffForAnyPresetTests: XCTestCase {
         let preset = custom()
         XCTAssertTrue(watchedApps.add(preset))
         fixture.stores.settings.setKeptOff(true, for: preset.id)
-        let view = SettingsView(
+        let view = try await installed(SettingsView(
             settings: fixture.stores.settings,
             watchedApps: watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
             hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: .watchedApps
-        )
+        ))
 
         let edit = try view.inspect().find(button: "Edit…")
         XCTAssertTrue(edit.isDisabled())

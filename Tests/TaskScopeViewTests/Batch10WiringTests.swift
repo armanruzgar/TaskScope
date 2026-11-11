@@ -88,12 +88,13 @@ final class Batch10WiringTests: XCTestCase {
 
         // The menu-bar window never attaches a SwiftUI alert; such a dialog
         // stops taking clicks once another app takes focus.
-        let menu = Batch10.popover(fixture, confirmer: UIMenuBarConfirmation(answer: false))
-        XCTAssertThrowsError(try menu.inspect().find(AutoStopPromptAlert.self))
+        let menu = try await hosted(Batch10.popover(fixture, confirmer: UIMenuBarConfirmation(answer: false)))
+        XCTAssertThrowsError(try menu.find(AutoStopPromptAlert.self))
         // The window keeps one only as a fallback when no app-level owner exists.
-        XCTAssertNoThrow(try Batch10.popover(fixture).inspect().find(AutoStopPromptAlert.self))
+        let window = try await hosted(Batch10.popover(fixture))
+        XCTAssertNoThrow(try window.find(AutoStopPromptAlert.self))
         store.hasAppPromptPresenter = true
-        XCTAssertThrowsError(try Batch10.popover(fixture).inspect().find(AutoStopPromptAlert.self))
+        XCTAssertThrowsError(try window.find(AutoStopPromptAlert.self))
     }
 
     func testQueuedPromptShowsTheCurrentRuntimeAsADuration() async throws {
@@ -137,11 +138,11 @@ final class Batch10WiringTests: XCTestCase {
         let callsBefore = fixture.lifecycle.calls
 
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
-        try view.inspect().find(button: "Stop Services Anyway…").tap()
+        let view = try await hosted(Batch10.popover(fixture, state: state))
+        try view.find(button: "Stop Services Anyway…").tap()
         XCTAssertEqual(state.pendingPresetAction?.disconnectFailureID, failureID)
         XCTAssertEqual(fixture.lifecycle.calls, callsBefore, "The card only asks")
-        try view.inspect().find(ViewType.ConfirmationDialog.self).actions().find(button: "Stop Services Anyway").tap()
+        try view.find(ViewType.ConfirmationDialog.self).actions().find(button: "Stop Services Anyway").tap()
         await state.waitForActions()
 
         XCTAssertNil(fixture.manager.globalProtectDisconnectFailureID, "The confirmed failure is consumed")
@@ -168,7 +169,7 @@ final class Batch10WiringTests: XCTestCase {
         defer { Task { await gate.release() } }
         XCTAssertTrue(fixture.manager.isMutationActive)
 
-        let busy = try Batch10.popover(fixture).inspect()
+        let busy = try await hosted(Batch10.popover(fixture))
         let card = try busy.find(PresetCard.self) { try $0.actualView().snapshot.preset.id == preset.id }
         XCTAssertTrue(try card.actualView().isMutationActive)
         XCTAssertTrue(try card.find(button: "Open").isDisabled())
@@ -178,7 +179,7 @@ final class Batch10WiringTests: XCTestCase {
 
         await gate.release()
         _ = await opening.value
-        let idle = try Batch10.popover(fixture).inspect()
+        let idle = try await hosted(Batch10.popover(fixture))
         XCTAssertFalse(try idle.find(PresetCard.self) { try $0.actualView().snapshot.preset.id == preset.id }.find(button: "Open").isDisabled())
         XCTAssertFalse(try idle.find(TaskScopeFooterView.self).actualView().quitDisabled)
     }
@@ -193,7 +194,7 @@ final class Batch10WiringTests: XCTestCase {
         let entered = await Batch10.waitUntilAsync { await inventory.gate.hasEntered() }
         XCTAssertTrue(entered, "setup: the read must be in flight")
 
-        let footer = try Batch10.popover(fixture).inspect().find(TaskScopeFooterView.self).actualView()
+        let footer = try await hosted(Batch10.popover(fixture)).find(TaskScopeFooterView.self).actualView()
         XCTAssertFalse(footer.isWorking, "A poll is not user-visible work")
         XCTAssertFalse(footer.quitDisabled)
         XCTAssertEqual(footer.message, "Could not send stop to Example.")
@@ -219,14 +220,14 @@ final class Batch10WiringTests: XCTestCase {
         XCTAssertTrue(pending, "setup: Keep Off must be pending")
         XCTAssertFalse(fixture.stores.settings.keepGlobalProtectOff)
 
-        let settingsView = SettingsView(
+        let settingsView = try await installed(SettingsView(
             settings: fixture.stores.settings,
             watchedApps: fixture.stores.watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
             hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: .watchedApps
-        )
+        ))
         try settingsView.inspect().find(button: "Delete…").tap()
         XCTAssertTrue(
             fixture.stores.watchedApps.presets.contains { $0.id == WatchedAppPreset.globalProtectID },
@@ -247,22 +248,25 @@ final class Batch10WiringTests: XCTestCase {
         defer { fixture.stores.cleanup() }
         let reports = ProcessReportPresentationState()
         await fixture.manager.batchTerminate([alpha.identity])
-        let shown = try Batch10.popover(fixture, reportState: reports).inspect().find(ProcessBatchActionReportSheet.self).actualView()
+        // Test windows are never key, so the active state is set explicitly.
+        let window = try await hosted(Batch10.popover(fixture, reportState: reports, windowState: .key))
+        let shown = try window.find(ProcessBatchActionReportSheet.self).actualView()
         XCTAssertEqual(shown.report.targets.map(\.name), ["Alpha"])
 
         // A later action (another window, Shortcuts) replaces the manager's slot.
         await fixture.manager.batchTerminate([beta.identity])
-        let still = try Batch10.popover(fixture, reportState: reports).inspect().find(ProcessBatchActionReportSheet.self).actualView()
+        let still = try window.find(ProcessBatchActionReportSheet.self).actualView()
         XCTAssertEqual(still.report.targets.map(\.name), ["Alpha"], "The report being read stays on screen")
 
-        try Batch10.popover(fixture, reportState: reports).inspect().find(ProcessBatchActionReportSheet.self).find(button: "Done").tap()
+        try window.find(ProcessBatchActionReportSheet.self).find(button: "Done").tap()
         XCTAssertEqual(fixture.manager.batchActionReport?.targets.map(\.name), ["Beta"], "Done on the old report keeps the newer one")
-        let next = try Batch10.popover(fixture, reportState: reports).inspect().find(ProcessBatchActionReportSheet.self).actualView()
+        let next = try window.find(ProcessBatchActionReportSheet.self).actualView()
         XCTAssertEqual(next.report.targets.map(\.name), ["Beta"])
 
         // A view that loses ownership (the regular window took over) forgets
         // what it kept, so it cannot show a stale report later.
-        XCTAssertThrowsError(try Batch10.popover(fixture, reportState: reports, style: .menuBarCompact, mainWindowVisible: { true }).inspect().find(ProcessBatchActionReportSheet.self))
+        let compact = try await hosted(Batch10.popover(fixture, reportState: reports, style: .menuBarCompact, windowState: .key, mainWindowVisible: { true }))
+        XCTAssertThrowsError(try compact.find(ProcessBatchActionReportSheet.self))
         XCTAssertNil(reports.batch)
     }
 
@@ -345,13 +349,13 @@ final class Batch10WiringTests: XCTestCase {
         fixture.manager.select([shown, hidden])
         fixture.stores.settings.searchText = "Shown"
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
-        try view.inspect().find(button: "Stop Selected…").tap()
+        let view = try await hosted(Batch10.popover(fixture, state: state))
+        try view.find(button: "Stop Selected…").tap()
         let pending = try XCTUnwrap(state.pendingBatchTermination)
         XCTAssertEqual(Set(pending.targets), Set([shown.identity, hidden.identity]), "Exactly the selection is captured")
         XCTAssertEqual(pending.targets.first, shown.identity, "Rows on screen are listed first, in display order")
         XCTAssertEqual(pending.hiddenCount, 1)
-        let review = try Batch10.popover(fixture, state: state).inspect().find(BatchStopReviewSheet.self)
+        let review = try view.find(BatchStopReviewSheet.self)
         XCTAssertNoThrow(try review.find(text: "Stop 2 selected processes. 1 of these is not currently shown."))
         XCTAssertNoThrow(try review.find(text: "Hidden"))
 
@@ -371,9 +375,10 @@ final class Batch10WiringTests: XCTestCase {
         XCTAssertFalse(rules.add(AutoStopRule(processName: "", runtimeMinutes: 1, action: .prompt)))
         XCTAssertNotNil(rules.validationError, "setup: a refused save leaves the shared error")
         let state = ProcessConfirmationState()
-        try Batch10.popover(fixture, state: state).processContextMenu(for: target).inspect().find(button: "Create Auto-Stop Rule…").tap()
+        let popover = try await installed(Batch10.popover(fixture, state: state))
+        try popover.processContextMenu(for: target).inspect().find(button: "Create Auto-Stop Rule…").tap()
         XCTAssertEqual(state.quickAutoStopProcess?.identity, target.identity)
-        let sheet = try Batch10.popover(fixture, state: state).inspect().find(QuickAutoStopRuleSheet.self).actualView()
+        let sheet = try popover.inspect().find(QuickAutoStopRuleSheet.self).actualView()
         sheet.onCancel()
         XCTAssertNil(state.quickAutoStopProcess)
         XCTAssertNil(rules.validationError, "Settings > Auto-Stop must not inherit the quick sheet's error")
@@ -395,7 +400,7 @@ final class Batch10WiringTests: XCTestCase {
         fixture.stores.savedSelections = recovering
         fixture.manager.select([target])
 
-        let menu = try Batch10.popover(fixture).inspect()
+        let menu = try await hosted(Batch10.popover(fixture))
         XCTAssertTrue(try menu.find(button: "Rename…").isDisabled())
         XCTAssertTrue(try menu.find(button: "Delete…").isDisabled())
         XCTAssertTrue(try menu.find(button: "Save Current Selection…").isDisabled())
@@ -411,7 +416,7 @@ final class Batch10WiringTests: XCTestCase {
         let app = Batch10.process(53, name: "Editor")
         let fixture = await Batch10.fixture(processes: [tool, foreign, app])
         defer { fixture.stores.cleanup() }
-        let view = Batch10.popover(fixture)
+        let view = try await installed(Batch10.popover(fixture))
         XCTAssertTrue(try view.processContextMenu(for: tool).inspect().find(button: "Watch This Process…").isDisabled())
         XCTAssertTrue(try view.processContextMenu(for: foreign).inspect().find(button: "Watch This Process…").isDisabled())
         XCTAssertFalse(try view.processContextMenu(for: app).inspect().find(button: "Watch This Process…").isDisabled())
@@ -427,7 +432,7 @@ final class Batch10WiringTests: XCTestCase {
         fixture.manager.select([cold])
         XCTAssertFalse(fixture.manager.displayProcesses(for: ProcessListQuery(searchText: "", filterMode: .all, watchedScopes: [], cpuHighlightThreshold: 50, memoryHighlightThresholdMB: 1_000)).contains { $0.pid == cold.pid }, "setup: the selection is outside the display limit")
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
+        let view = try await installed(Batch10.popover(fixture, state: state))
         try view.processContextMenu(for: hot).inspect().find(button: "Save Selection as Preset…").tap()
         XCTAssertEqual(state.quickPresetDraft?.processes.map(\.pid), [cold.pid])
     }
@@ -441,7 +446,7 @@ final class Batch10WiringTests: XCTestCase {
         list.keyboardSelectedPid = target.pid
         list.keyboardSelectedIdentity = target.identity
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state, listState: list)
+        let view = try await installed(Batch10.popover(fixture, state: state, listState: list))
         view.showKeyboardDetail()
         XCTAssertEqual(state.detailProcess?.identity, target.identity)
 

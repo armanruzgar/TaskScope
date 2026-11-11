@@ -19,6 +19,8 @@ struct TaskScopePopoverView: View {
     /// The footer's Quit. It has no default, so a view built in a test can
     /// never quit the test process.
     private let quitAction: @MainActor () -> Void
+    /// Lets a test inspect the installed view; see `Inspection`.
+    let inspection = Inspection<Self>()
     @StateObject private var confirmationState: ProcessConfirmationState
     @StateObject private var listState: ProcessListInteractionState
     @StateObject private var reportState: ProcessReportPresentationState
@@ -96,6 +98,7 @@ struct TaskScopePopoverView: View {
 
     var body: some View {
         autoStopAlertContent
+            .onReceive(inspection.notice) { inspection.visit(self, $0) }
     }
 
     private var baseContent: some View {

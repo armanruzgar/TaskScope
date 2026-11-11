@@ -229,7 +229,7 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - A09-3 and L11-9: the built-in preset can be restored
 
-    func testDeletedBuiltInPresetCanBeRestoredFromSettings() throws {
+    func testDeletedBuiltInPresetCanBeRestoredFromSettings() async throws {
         let defaults = makeDefaults()
         let store = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(store.remove(.globalProtect))
@@ -238,7 +238,7 @@ final class Batch11FixTests: XCTestCase {
         XCTAssertTrue(relaunched.presets.isEmpty)
         XCTAssertFalse(relaunched.isReadOnlyAfterCorruption)
 
-        let view = settingsView(defaults, tab: .watchedApps, watchedApps: relaunched)
+        let view = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: relaunched))
         try view.inspect().find(button: "Restore Built-in GlobalProtect Preset").tap()
         XCTAssertEqual(relaunched.presets, [.globalProtect])
         XCTAssertEqual(WatchedAppsStore(userDefaults: defaults, key: "presets").presets.map(\.id),
@@ -247,7 +247,7 @@ final class Batch11FixTests: XCTestCase {
                              "Offered only while the built-in preset is missing")
     }
 
-    func testRestoringTheBuiltInPresetNamesALookAlikeAndIsRefusedInRecovery() throws {
+    func testRestoringTheBuiltInPresetNamesALookAlikeAndIsRefusedInRecovery() async throws {
         let defaults = makeDefaults()
         let store = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(store.remove(.globalProtect))
@@ -255,7 +255,7 @@ final class Batch11FixTests: XCTestCase {
             displayName: "GlobalProtect", mainProcessName: "GlobalProtect", helperProcessNames: [],
             protectedProcessNames: [], appPath: "/Applications/GlobalProtect Copy.app"
         )))
-        let view = settingsView(defaults, tab: .watchedApps, watchedApps: store)
+        let view = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: store))
         try view.inspect().find(button: "Restore Built-in GlobalProtect Preset").tap()
         let message = "The built-in GlobalProtect preset cannot be restored. A preset named “GlobalProtect” already exists. Delete or change that preset first."
         XCTAssertEqual(store.validationError, message)
@@ -265,18 +265,18 @@ final class Batch11FixTests: XCTestCase {
         let corrupt = WatchedAppsStore(userDefaults: defaults, key: "corrupt")
         XCTAssertFalse(corrupt.restoreBuiltInPreset())
         XCTAssertEqual(defaults.data(forKey: "corrupt"), Data([0xFF]))
-        let recoveryView = settingsView(defaults, tab: .watchedApps, watchedApps: corrupt)
+        let recoveryView = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: corrupt))
         XCTAssertThrowsError(try recoveryView.inspect().find(button: "Restore Built-in GlobalProtect Preset"))
     }
 
     // MARK: - L11-9: deletions are confirmed
 
-    func testDeletingAPresetAsksFirstAndExplainsWhatTheBuiltInTakesWithIt() throws {
+    func testDeletingAPresetAsksFirstAndExplainsWhatTheBuiltInTakesWithIt() async throws {
         let defaults = makeDefaults()
         let store = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(store.add(customPreset))
         let interactions = SettingsInteractionState()
-        let view = settingsView(defaults, tab: .watchedApps, watchedApps: store, interactions: interactions)
+        let view = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: store, interactions: interactions))
 
         try button(labeled: "Delete preset GlobalProtect", in: view).tap()
         XCTAssertEqual(store.presets.count, 2, "Nothing is deleted before confirmation")
@@ -294,7 +294,7 @@ final class Batch11FixTests: XCTestCase {
         XCTAssertEqual(store.presets, [.globalProtect])
     }
 
-    func testDeletingARuleAndClearingEventsAskFirst() throws {
+    func testDeletingARuleAndClearingEventsAskFirst() async throws {
         let defaults = makeDefaults()
         let events = (1...3).map {
             AutoStopEvent(timestamp: Date(timeIntervalSince1970: 1_000), processName: "Example", pid: Int32($0),
@@ -304,7 +304,7 @@ final class Batch11FixTests: XCTestCase {
         let store = rules(defaults)
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 5, action: .prompt)))
         let interactions = SettingsInteractionState()
-        let view = settingsView(defaults, tab: .autoStop, autoStopRules: store, interactions: interactions)
+        let view = try await installed(settingsView(defaults, tab: .autoStop, autoStopRules: store, interactions: interactions))
 
         try button(labeled: "Delete rule Example", in: view).tap()
         XCTAssertEqual(store.rules.count, 1)
@@ -394,11 +394,11 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - L10-10: rules can be duplicated and deleted without a context menu
 
-    func testRuleRowsOfferVisibleDuplicateAndDelete() throws {
+    func testRuleRowsOfferVisibleDuplicateAndDelete() async throws {
         let defaults = makeDefaults()
         let store = rules(defaults)
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 5, action: .prompt)))
-        let view = settingsView(defaults, tab: .autoStop, autoStopRules: store)
+        let view = try await installed(settingsView(defaults, tab: .autoStop, autoStopRules: store))
         try button(labeled: "Duplicate rule Example", in: view).tap()
         XCTAssertEqual(store.rules.count, 2)
         XCTAssertNoThrow(try button(labeled: "Delete rule Example", in: view))
@@ -406,40 +406,41 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - L12-7: every retained event is visible
 
-    func testRecentEventsListsEveryRetainedEvent() throws {
+    func testRecentEventsListsEveryRetainedEvent() async throws {
         let defaults = makeDefaults()
         let events = (1...120).map {
             AutoStopEvent(timestamp: Date(timeIntervalSince1970: 1_000), processName: "Event \($0)", pid: Int32($0),
                           ruleID: UUID(), outcome: .logged, detail: "Reason \($0)")
         }
         defaults.set(try JSONEncoder().encode(events), forKey: "events")
-        let view = settingsView(defaults, tab: .autoStop)
+        let view = try await installed(settingsView(defaults, tab: .autoStop))
         XCTAssertNoThrow(try view.inspect().find(text: "Reason 51"))
         XCTAssertNoThrow(try view.inspect().find(text: "Reason 120"))
     }
 
     // MARK: - L09-1 (Settings part, from batch 10): event PIDs are not grouped numbers
 
-    func testEventHistoryShowsThePIDAsAPlainNumber() throws {
+    func testEventHistoryShowsThePIDAsAPlainNumber() async throws {
         let defaults = makeDefaults()
         let event = AutoStopEvent(timestamp: Date(timeIntervalSince1970: 1_000), processName: "Example", pid: 48_165,
                                   ruleID: UUID(), outcome: .logged, detail: "Logged")
         let line = SettingsView.eventTimeAndPID(event)
         XCTAssertTrue(line.hasSuffix(" · PID 48165"), line)
         defaults.set(try JSONEncoder().encode([event]), forKey: "events")
-        XCTAssertNoThrow(try settingsView(defaults, tab: .autoStop).inspect().find(text: line))
+        let events = try await installed(settingsView(defaults, tab: .autoStop))
+        XCTAssertNoThrow(try events.inspect().find(text: line))
     }
 
     // MARK: - L07-7: a refused rule change is reported on its row
 
-    func testRefusedRuleToggleIsReportedOnItsOwnRow() throws {
+    func testRefusedRuleToggleIsReportedOnItsOwnRow() async throws {
         let defaults = makeDefaults()
         let store = rules(defaults)
         // Auto Stop without a path may be stored disabled, but not enabled.
         let rule = AutoStopRule(processName: "Example", runtimeMinutes: 5, action: .kill, isEnabled: false)
         XCTAssertTrue(store.add(rule))
         let interactions = SettingsInteractionState()
-        let view = settingsView(defaults, tab: .autoStop, autoStopRules: store, interactions: interactions)
+        let view = try await installed(settingsView(defaults, tab: .autoStop, autoStopRules: store, interactions: interactions))
 
         try view.inspect().find(ViewType.Toggle.self, where: {
             try $0.accessibilityLabel().string() == "Enable rule Example"
@@ -465,10 +466,10 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - L09-20: an empty rule list says how to add one
 
-    func testEmptyRuleListShowsHowToAddARule() throws {
+    func testEmptyRuleListShowsHowToAddARule() async throws {
         let defaults = makeDefaults()
         let store = rules(defaults)
-        let view = settingsView(defaults, tab: .autoStop, autoStopRules: store)
+        let view = try await installed(settingsView(defaults, tab: .autoStop, autoStopRules: store))
         XCTAssertNoThrow(try view.inspect().find(text: SettingsView.noRulesMessage))
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 5, action: .prompt)))
         XCTAssertThrowsError(try view.inspect().find(text: SettingsView.noRulesMessage))
@@ -476,28 +477,28 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - A13-14: row buttons name their preset or rule
 
-    func testRowButtonsNameTheirPresetOrRule() throws {
+    func testRowButtonsNameTheirPresetOrRule() async throws {
         let defaults = makeDefaults()
         let presets = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(presets.add(customPreset))
-        let watched = settingsView(defaults, tab: .watchedApps, watchedApps: presets)
+        let watched = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: presets))
         for label in ["Dry run GlobalProtect", "Dry run Example", "Edit preset Example"] {
             XCTAssertNoThrow(try button(labeled: label, in: watched), label)
         }
         let store = rules(defaults)
         XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 5, action: .prompt)))
-        let autoStop = settingsView(defaults, tab: .autoStop, autoStopRules: store)
+        let autoStop = try await installed(settingsView(defaults, tab: .autoStop, autoStopRules: store))
         XCTAssertNoThrow(try button(labeled: "Edit rule Example", in: autoStop))
     }
 
     // MARK: - L09-14: empty lists are hidden and the toggle has a title
 
-    func testPresetRowsHideEmptyListsAndTitleTheNotificationsToggle() throws {
+    func testPresetRowsHideEmptyListsAndTitleTheNotificationsToggle() async throws {
         let defaults = makeDefaults()
         let presets = WatchedAppsStore(userDefaults: defaults, key: "presets")
         XCTAssertTrue(presets.remove(.globalProtect))
         XCTAssertTrue(presets.add(customPreset))
-        let view = settingsView(defaults, tab: .watchedApps, watchedApps: presets)
+        let view = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: presets))
         XCTAssertThrowsError(try view.inspect().find(textWhere: { text, _ in text.hasPrefix("Helpers:") }))
         XCTAssertThrowsError(try view.inspect().find(textWhere: { text, _ in text.hasPrefix("Protected:") }))
         let toggle = try view.inspect().find(ViewType.Toggle.self, where: {
@@ -515,7 +516,7 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - A13-15: recovery mode keeps the read-only preset actions
 
-    func testPresetRecoveryKeepsDryRunAndSelfCheckButLocksEditing() throws {
+    func testPresetRecoveryKeepsDryRunAndSelfCheckButLocksEditing() async throws {
         let defaults = makeDefaults()
         let builtIn = try JSONSerialization.jsonObject(with: JSONEncoder().encode(WatchedAppPreset.globalProtect))
         defaults.set(try JSONSerialization.data(withJSONObject: [builtIn, ["unexpected": true]]), forKey: "presets")
@@ -523,7 +524,7 @@ final class Batch11FixTests: XCTestCase {
         XCTAssertTrue(presets.isReadOnlyAfterCorruption)
         XCTAssertEqual(presets.presets.map(\.id), [WatchedAppPreset.globalProtectID])
 
-        let view = settingsView(defaults, tab: .watchedApps, watchedApps: presets)
+        let view = try await installed(settingsView(defaults, tab: .watchedApps, watchedApps: presets))
         XCTAssertFalse(try button(labeled: "Dry run GlobalProtect", in: view).isDisabled())
         XCTAssertFalse(try view.inspect().find(GlobalProtectCompatibilityButton.self).isDisabled())
         XCTAssertTrue(try button(labeled: "Delete preset GlobalProtect", in: view).isDisabled())
@@ -548,7 +549,7 @@ final class Batch11FixTests: XCTestCase {
         XCTAssertNil(actions.preview)
     }
 
-    func testImportErrorsClearWhenANewImportStartsAndACommitReportsANeutralSummary() throws {
+    func testImportErrorsClearWhenANewImportStartsAndACommitReportsANeutralSummary() async throws {
         let store = WatchedAppsStore(userDefaults: makeDefaults(), key: "presets")
         let actions = PresetSettingsActions()
         actions.fileSize = { _ in 10 }
@@ -559,7 +560,7 @@ final class Batch11FixTests: XCTestCase {
         XCTAssertNil(actions.preview)
 
         // Opening the importer again forgets the stale error.
-        let view = settingsView(makeDefaults(), tab: .watchedApps, watchedApps: store, actions: actions)
+        let view = try await installed(settingsView(makeDefaults(), tab: .watchedApps, watchedApps: store, actions: actions))
         try view.inspect().find(button: "Import…").tap()
         XCTAssertNil(actions.importError)
 
@@ -680,7 +681,7 @@ final class Batch11FixTests: XCTestCase {
 
     // MARK: - A10-8: the runtime threshold can be typed
 
-    func testEveryRuleFormAcceptsATypedRuntimeWithinTheLimit() throws {
+    func testEveryRuleFormAcceptsATypedRuntimeWithinTheLimit() async throws {
         let control = RuntimeMinutesControl(minutes: .constant(5))
         let field = try control.inspect().find(ViewType.TextField.self)
         XCTAssertEqual(try field.labelView().text().string(), "Runtime minutes")
@@ -695,7 +696,8 @@ final class Batch11FixTests: XCTestCase {
         let quick = QuickAutoStopRuleSheet(process: process(), existingRule: nil,
                                           onSave: { _, _, _ in nil }, onCancel: {})
         XCTAssertNoThrow(try quick.inspect().find(RuntimeMinutesControl.self))
-        XCTAssertNoThrow(try settingsView(makeDefaults(), tab: .autoStop).inspect().find(RuntimeMinutesControl.self))
+        let rules = try await installed(settingsView(makeDefaults(), tab: .autoStop))
+        XCTAssertNoThrow(try rules.inspect().find(RuntimeMinutesControl.self))
     }
 
     // MARK: - L10-15: sheet keys and footers
@@ -750,8 +752,8 @@ final class Batch11FixTests: XCTestCase {
         }
     }
 
-    func testReadOnlySheetsCloseWithEscapeAsWellAsReturn() throws {
-        let dryRun = settingsView(makeDefaults(), tab: .watchedApps).lifecycleDryRunSheet(for: .globalProtect)
+    func testReadOnlySheetsCloseWithEscapeAsWellAsReturn() async throws {
+        let dryRun = try await installed(settingsView(makeDefaults(), tab: .watchedApps)).lifecycleDryRunSheet(for: .globalProtect)
         XCTAssertNoThrow(try dryRun.inspect().find(button: "Done"))
         XCTAssertThrowsError(try dryRun.inspect().find(button: "Close"))
         XCTAssertNoThrow(try dryRun.inspect().vStack().callOnExitCommand())
@@ -771,7 +773,7 @@ final class Batch11FixTests: XCTestCase {
 
     func testGeneralSlidersHaveNamesAndUnits() throws {
         let settings = SettingsStore(userDefaults: makeDefaults(), key: "settings")
-        let sliders = try GeneralSettingsTab(settings: settings, notificationService: .shared)
+        let sliders = try GeneralSettingsTab(settings: settings, notificationService: .forTests())
             .inspect().findAll(ViewType.Slider.self)
         XCTAssertEqual(try sliders.map { try $0.accessibilityLabel().string() },
                        ["Watched status interval", "CPU highlight threshold", "Memory highlight threshold"])
@@ -786,7 +788,7 @@ final class Batch11FixTests: XCTestCase {
         defaults.set(Data([0xFF]), forKey: "settings")
         let settings = SettingsStore(userDefaults: defaults, key: "settings")
         XCTAssertTrue(settings.isReadOnlyAfterCorruption)
-        let tab = try GeneralSettingsTab(settings: settings, notificationService: .shared).inspect()
+        let tab = try GeneralSettingsTab(settings: settings, notificationService: .forTests()).inspect()
         let sliders = tab.findAll(ViewType.Slider.self)
         let toggles = tab.findAll(ViewType.Toggle.self)
         XCTAssertEqual(sliders.count, 3)
@@ -897,7 +899,7 @@ final class Batch11FixTests: XCTestCase {
         let defaults = makeDefaults()
         fillEverySlot(of: "settings", in: defaults)
         let settings = SettingsStore(userDefaults: defaults, key: "settings")
-        let tab = try GeneralSettingsTab(settings: settings, notificationService: .shared).inspect()
+        let tab = try GeneralSettingsTab(settings: settings, notificationService: .forTests()).inspect()
         XCTAssertNoThrow(try tab.find(button: "Discard Unreadable Settings and Reset"))
         XCTAssertThrowsError(try tab.find(button: "Reset Settings After Backup"))
     }

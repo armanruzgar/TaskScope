@@ -40,11 +40,34 @@ struct AppModalMenuBarConfirmation: MenuBarConfirming {
             RunLoop.main.perform(inModes: [.default]) {
                 MainActor.assumeIsolated {
                     let response = runAlert(Self.makeAlert(request))
-                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                    continuation.resume(returning: Self.consents(response))
                 }
             }
             CFRunLoopWakeUp(CFRunLoopGetMain())
         }
+    }
+
+    /// One of the alert's buttons, in the order the alert adds them.
+    struct AlertButton: Equatable {
+        var title: String
+        var keyEquivalent: String
+        var isDestructive: Bool
+    }
+
+    /// The confirmation comes first and is marked destructive. AppKit would
+    /// give the first button Return, and a destructive answer must be chosen
+    /// deliberately, so it has no key equivalent; Cancel answers Escape.
+    static func alertButtons(for request: MenuBarConfirmationRequest) -> [AlertButton] {
+        [
+            AlertButton(title: request.confirmTitle, keyEquivalent: "", isDestructive: true),
+            AlertButton(title: request.cancelTitle, keyEquivalent: "\u{1b}", isDestructive: false)
+        ]
+    }
+
+    /// Only the first button, the confirmation, consents. Cancel, Escape and
+    /// any other way the alert ends do not.
+    static func consents(_ response: NSApplication.ModalResponse) -> Bool {
+        response == .alertFirstButtonReturn
     }
 
     static func makeAlert(_ request: MenuBarConfirmationRequest) -> NSAlert {
@@ -58,12 +81,11 @@ struct AppModalMenuBarConfirmation: MenuBarConfirming {
             alert.accessoryView = scrollingText(request.message)
             alert.informativeText = "Review the details below."
         }
-        let confirm = alert.addButton(withTitle: request.confirmTitle)
-        confirm.hasDestructiveAction = true
-        // AppKit gives the first button Return. A destructive answer must be
-        // chosen deliberately, so neither button answers Return.
-        confirm.keyEquivalent = ""
-        alert.addButton(withTitle: request.cancelTitle).keyEquivalent = "\u{1b}"
+        for button in alertButtons(for: request) {
+            let added = alert.addButton(withTitle: button.title)
+            added.hasDestructiveAction = button.isDestructive
+            added.keyEquivalent = button.keyEquivalent
+        }
         return alert
     }
 

@@ -11,7 +11,7 @@ final class ConfigurationBackupSectionTests: XCTestCase {
         let actions = ConfigurationBackupActions()
         var calls: [String] = []
         let tab = GeneralSettingsTab(
-            settings: settings, notificationService: .shared,
+            settings: settings, notificationService: .forTests(),
             backupSection: ConfigurationBackupSection(
                 actions: actions,
                 exportConfiguration: { calls.append("export") },
@@ -27,7 +27,7 @@ final class ConfigurationBackupSectionTests: XCTestCase {
         XCTAssertNoThrow(try tab.inspect().find(text: "Imported settings."))
         XCTAssertNoThrow(try tab.inspect().find(text: "The backup leaves out settings."))
         XCTAssertThrowsError(
-            try GeneralSettingsTab(settings: settings, notificationService: .shared).inspect()
+            try GeneralSettingsTab(settings: settings, notificationService: .forTests()).inspect()
                 .find(button: "Export Configuration…"),
             "Without the stores a backup needs, the section is not shown"
         )

@@ -128,6 +128,8 @@ instead of declaring new ones:
   passes; any other member fails the test when reached.
 - `AppProcess.fixture(...)` and `WatchedAppPreset.fixture(...)` are the one place
   tests build those models, so a new field needs one change.
+- `ScriptedDetailReader` answers the process detail sheet's reads per PID and
+  fails the test on a read it was not given.
 
 A fake that models something these cannot, such as a read that blocks until a
 cancellation or a simulated set of running processes, stays next to its tests.
@@ -168,6 +170,31 @@ Tests pass their own from `Tests/TaskScopeTests/Support/ViewTestDependencies.swi
 a private bus, a Quit that only counts, `HotkeyManager.forTests()` on in-memory
 preferences with a backend that registers nothing, and
 `NotificationService.forTests()`, which never touches the notification center.
+
+View tests inspect a view that SwiftUI installed in a window, not the bare
+struct. A struct that was never installed reads each `@State`, `@StateObject`,
+`@FocusState` and environment value as a fresh default, drops every write and
+logs a runtime warning, so a flow that lives in a view's own state, such as a
+sheet opened from `@State`, cannot be tested that way. `TaskScopePopoverView`
+and `SettingsView` have an `inspection` hook
+(`Sources/TaskScope/Support/ViewInspection.swift`). In a test,
+`try await hosted(view)` installs the view until the test ends and returns it
+to inspect, and `installed(view)` returns the installed copy for calling the
+view's own methods; both are in
+`Tests/TaskScopeViewTests/ViewSupport/HostedInspection.swift`, the folder for
+support code that needs ViewInspector. An installed view runs `onAppear`,
+`task` and `onChange` as in the app, so set up what the app would (the
+popover takes tree mode from Settings when it appears) and pass
+`windowState: .key` where a report sheet should show, because the test window
+is never the key window. Each installed view gets its own window far off
+screen; it and any sheet or alert the view presents are transparent and let
+clicks pass through, so a test run shows nothing. Never install Settings on its
+Health tab, which checks the real installation when it appears. A test that
+calls `callOnChange` itself stays uninstalled, because an installed view would
+run the handler a second time. To make another view installable, give it
+`let inspection = Inspection<Self>()` and
+`.onReceive(inspection.notice) { inspection.visit(self, $0) }`, and conform it
+to `HostedInspectable` in that file.
 
 The packaging test requires macOS and Xcode 26 and launches test copies of the
 app. It stages and signs them ad hoc in its own temporary directory, never in

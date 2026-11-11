@@ -66,7 +66,7 @@ final class Batch10FixTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [target])
         defer { fixture.stores.cleanup() }
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
+        let view = try await installed(Batch10.popover(fixture, state: state))
         for (title, mode) in [("Stop…", ProcessConfirmationState.TerminationMode.normal), ("Force Stop…", .force)] {
             try view.processContextMenu(for: target).inspect().find(button: title).tap()
             XCTAssertEqual(state.pendingTermination?.process.identity, target.identity)
@@ -134,8 +134,7 @@ final class Batch10FixTests: XCTestCase {
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         await fixture.manager.refreshWatchedStatus(showMessage: false)
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state)
-        let cards = try view.inspect().findAll(PresetCard.self)
+        let cards = try await hosted(Batch10.popover(fixture, state: state)).findAll(PresetCard.self)
         let gp = try XCTUnwrap(cards.first { try $0.actualView().snapshot.preset.isBuiltInGlobalProtect })
         let editor = try XCTUnwrap(cards.first { try $0.actualView().snapshot.preset.id == preset.id })
         XCTAssertTrue(try gp.actualView().isKeptOff)
@@ -236,13 +235,14 @@ final class Batch10FixTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [parent, child, hidden, bystander])
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.searchText = "Needle"
+        // The installed popover takes tree mode from Settings when it appears.
+        fixture.stores.settings.treeMode = true
         let interaction = ProcessListInteractionState()
-        interaction.treeMode = true
         interaction.expandedTreePids = [51]
         interaction.keyboardSelectedPid = 52
         interaction.keyboardSelectedIdentity = child.identity
         let state = ProcessConfirmationState()
-        let view = Batch10.popover(fixture, state: state, listState: interaction)
+        let view = try await installed(Batch10.popover(fixture, state: state, listState: interaction))
         fixture.manager.select([hidden])
         view.selectAllVisibleMatches()
         XCTAssertEqual(fixture.manager.selectedPids, [52, 53], "Select All preserves hidden choices and excludes context ancestors")
@@ -330,8 +330,7 @@ final class Batch10FixTests: XCTestCase {
             manager.enableNotifications = false
             var modified = fixture; modified.manager = manager
             let state = ProcessConfirmationState()
-            let view = Batch10.popover(modified, state: state)
-            try view.inspect().find(button: "Preview & Recall…").tap()
+            try await hosted(Batch10.popover(modified, state: state)).find(button: "Preview & Recall…").tap()
             await state.waitForActions()
             XCTAssertEqual(state.pendingRecallSelection != nil, success)
             XCTAssertEqual(state.pendingRecallResult != nil, success)
@@ -384,16 +383,17 @@ final class Batch10FixTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [target])
         defer { fixture.stores.cleanup() }
         await fixture.manager.batchTerminate([target.identity])
+        // Test windows are never key, so the active state is set explicitly.
         for style in [TaskScopePresentationStyle.expandedWindow, .menuBarCompact] {
-            let view = Batch10.popover(fixture, style: style)
-            XCTAssertNoThrow(try view.inspect().find(ProcessBatchActionReportSheet.self))
+            let view = try await hosted(Batch10.popover(fixture, style: style, windowState: .key))
+            XCTAssertNoThrow(try view.find(ProcessBatchActionReportSheet.self))
         }
-        let inactive = Batch10.popover(fixture, windowState: .inactive)
-        XCTAssertThrowsError(try inactive.inspect().find(ProcessBatchActionReportSheet.self))
-        let menuWithWindow = Batch10.popover(fixture, style: .menuBarCompact, mainWindowVisible: { true })
-        XCTAssertThrowsError(try menuWithWindow.inspect().find(ProcessBatchActionReportSheet.self))
-        let view = Batch10.popover(fixture)
-        try view.inspect().find(ProcessBatchActionReportSheet.self).find(button: "Done").tap()
+        let inactive = try await hosted(Batch10.popover(fixture, windowState: .inactive))
+        XCTAssertThrowsError(try inactive.find(ProcessBatchActionReportSheet.self))
+        let menuWithWindow = try await hosted(Batch10.popover(fixture, style: .menuBarCompact, windowState: .key, mainWindowVisible: { true }))
+        XCTAssertThrowsError(try menuWithWindow.find(ProcessBatchActionReportSheet.self))
+        let view = try await hosted(Batch10.popover(fixture, windowState: .key))
+        try view.find(ProcessBatchActionReportSheet.self).find(button: "Done").tap()
         XCTAssertNil(fixture.manager.batchActionReport)
         let reportState = ProcessReportPresentationState()
         let first = LifecycleReport(title: "First", jobs: [.init(label: "job", state: .failed, detail: "A long failure")])
