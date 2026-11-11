@@ -5,11 +5,11 @@ import XCTest
 final class ActivityMonitorCoordinatorTests: XCTestCase {
     func testSuccessfulHandoffOpensAndSelectsRequestedPID() async {
         let opener = FakeActivityMonitorOpener()
-        let checker = FakeActivityMonitorProcessChecker(results: [true, true])
+        let checker = FakeActivityMonitorProcessChecker(results: [true, true, true])
         let selector = FakeActivityMonitorProcessSelector(results: [.selected])
         let coordinator = makeCoordinator(opener: opener, checker: checker, selector: selector)
 
-        let outcome = await coordinator.openAndSelect(pid: 42)
+        let outcome = await coordinator.openAndSelect(identity: identity(42))
 
         XCTAssertEqual(outcome, .success)
         XCTAssertEqual(opener.openCount, 1)
@@ -22,7 +22,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         let selector = FakeActivityMonitorProcessSelector(results: [])
         let coordinator = makeCoordinator(opener: opener, checker: checker, selector: selector)
 
-        let outcome = await coordinator.openAndSelect(pid: 77)
+        let outcome = await coordinator.openAndSelect(identity: identity(77))
 
         XCTAssertEqual(outcome, .missingProcess)
         XCTAssertEqual(opener.openCount, 0)
@@ -36,7 +36,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         let selector = FakeActivityMonitorProcessSelector(results: [])
         let coordinator = makeCoordinator(opener: opener, checker: checker, selector: selector)
 
-        let outcome = await coordinator.openAndSelect(pid: 88)
+        let outcome = await coordinator.openAndSelect(identity: identity(88))
 
         XCTAssertEqual(outcome, .appLaunchFailed("Activity Monitor launch failed."))
         XCTAssertTrue(outcome.message(for: 88).contains("Could not open Activity Monitor"))
@@ -51,7 +51,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         )
         let coordinator = makeCoordinator(opener: opener, checker: checker, selector: selector)
 
-        let outcome = await coordinator.openAndSelect(pid: 99)
+        let outcome = await coordinator.openAndSelect(identity: identity(99))
 
         XCTAssertEqual(
             outcome,
@@ -63,7 +63,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
 
     func testReadinessIsRetriedUntilSelectionSucceeds() async {
         let opener = FakeActivityMonitorOpener()
-        let checker = FakeActivityMonitorProcessChecker(results: [true, true, true, true])
+        let checker = FakeActivityMonitorProcessChecker(results: [true, true, true, true, true])
         let selector = FakeActivityMonitorProcessSelector(
             results: [.notReady, .failed("Application is not ready."), .selected]
         )
@@ -77,7 +77,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
             sleep: { sleepDurations.append($0) }
         )
 
-        let outcome = await coordinator.openAndSelect(pid: 1234)
+        let outcome = await coordinator.openAndSelect(identity: identity(1234))
 
         XCTAssertEqual(outcome, .success)
         XCTAssertEqual(selector.requestedPIDs, [1234, 1234, 1234])
@@ -97,7 +97,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
             maximumAttempts: 2
         )
 
-        let outcome = await coordinator.openAndSelect(pid: 321)
+        let outcome = await coordinator.openAndSelect(identity: identity(321))
 
         XCTAssertEqual(outcome, .timedOut(lastError: "Activity Monitor was busy."))
         XCTAssertEqual(selector.requestedPIDs, [321, 321])
@@ -115,7 +115,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
             maximumAttempts: 3
         )
 
-        let outcome = await coordinator.openAndSelect(pid: 654)
+        let outcome = await coordinator.openAndSelect(identity: identity(654))
 
         XCTAssertEqual(outcome, .missingProcess)
         XCTAssertEqual(selector.requestedPIDs, [654])
@@ -174,7 +174,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         )
         let selector = SystemActivityMonitorProcessSelector(runtime: runtime)
 
-        let result = await selector.select(pid: 42)
+        let result = await selector.select(pid: 42, timeout: 5)
 
         guard case .accessibilityDenied = result else {
             return XCTFail("Expected an Accessibility denial, got \(result)")
@@ -191,7 +191,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         )
         let selector = SystemActivityMonitorProcessSelector(runtime: runtime)
 
-        let result = await selector.select(pid: 42)
+        let result = await selector.select(pid: 42, timeout: 5)
         XCTAssertEqual(result, .notReady)
         XCTAssertEqual(runtime.promptValues, [true])
         XCTAssertTrue(runtime.selectionRequests.isEmpty)
@@ -205,7 +205,7 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         )
         let selector = SystemActivityMonitorProcessSelector(runtime: runtime)
 
-        let result = await selector.select(pid: 42)
+        let result = await selector.select(pid: 42, timeout: 5)
         XCTAssertEqual(result, .selected)
         XCTAssertEqual(runtime.selectionRequests, [.init(applicationPID: 700, targetPID: 42)])
     }
@@ -293,6 +293,10 @@ final class ActivityMonitorCoordinatorTests: XCTestCase {
         )
     }
 
+    private func identity(_ pid: Int32) -> ProcessIdentity {
+        ProcessIdentity(pid: pid, startTime: "fixture", command: "fixture", executablePath: "/fixture")
+    }
+
     private func makeCoordinator(
         opener: FakeActivityMonitorOpener,
         checker: FakeActivityMonitorProcessChecker,
@@ -335,7 +339,7 @@ private final class FakeActivityMonitorProcessChecker: ActivityMonitorProcessChe
         self.results = results
     }
 
-    func processExists(pid: Int32) -> Bool {
+    func processMatches(identity: ProcessIdentity) -> Bool {
         results.isEmpty ? false : results.removeFirst()
     }
 }
@@ -344,14 +348,16 @@ private final class FakeActivityMonitorProcessChecker: ActivityMonitorProcessChe
 private final class FakeActivityMonitorProcessSelector: ActivityMonitorProcessSelecting {
     private var results: [ActivityMonitorSelectionAttempt]
     private(set) var requestedPIDs: [Int32] = []
+    private(set) var requestedTimeouts: [TimeInterval] = []
     private(set) var restoreCount = 0
 
     init(results: [ActivityMonitorSelectionAttempt]) {
         self.results = results
     }
 
-    func select(pid: Int32) async -> ActivityMonitorSelectionAttempt {
+    func select(pid: Int32, timeout: TimeInterval) async -> ActivityMonitorSelectionAttempt {
         requestedPIDs.append(pid)
+        requestedTimeouts.append(timeout)
         return results.isEmpty ? .notReady : results.removeFirst()
     }
 
@@ -401,7 +407,8 @@ private final class FakeActivityMonitorAccessibilityRuntime:
 
     func selectProcessRow(
         applicationPID: pid_t,
-        targetPID: Int32
+        targetPID: Int32,
+        timeout: TimeInterval
     ) async -> ActivityMonitorSelectionAttempt {
         selectionRequests.append(
             .init(applicationPID: applicationPID, targetPID: targetPID)

@@ -29,8 +29,8 @@ final class ProcessManualRegressionTests: XCTestCase {
         manager.watchedAppsProvider = { [preset] }
         var primes: [Set<String>] = []
         var diffs: [Set<String>] = []
-        manager.primeNotificationBaseline = { primes.append($0) }
-        manager.notifyTransitions = { diffs.append($0) }
+        manager.primeNotificationBaseline = { primes.append(Set($0.flatMap(\.runningNames))) }
+        manager.notifyTransitions = { diffs.append(Set($0.flatMap(\.runningNames))) }
         await manager.refreshWatchedStatus()
         preset.appPath = "/Users/test/Applications/Example.app"
         await manager.refreshWatchedStatus()

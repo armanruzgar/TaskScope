@@ -133,6 +133,34 @@ final class SupportDiagnosticsTests: XCTestCase {
         XCTAssertEqual(harness.commands, ["/bin/launchctl print 'gui/501/com.acme.agent'"])
     }
 
+    /// T05-9: presence is read for the preset's own app path and each job's
+    /// own plist path, and a found file reaches the report.
+    func testCollectorReportsWhichConfiguredFilesExist() async {
+        var preset = Self.privatePreset
+        preset.appPath = "/Applications/Present.app"
+        preset.userLaunchAgentJobs = [
+            .init(label: "com.acme.present", plistPath: "/Users/alice/present.plist", isRequired: true),
+            .init(label: "com.acme.missing", plistPath: "/Users/alice/missing.plist", isRequired: false)
+        ]
+        let harness = DiagnosticsInspectionHarness(
+            results: [], existingPaths: ["/Applications/Present.app", "/Users/alice/present.plist"]
+        )
+
+        let result = await SupportDiagnosticsCollector(runtime: harness.runtime)
+            .inspectPreset(preset, keepOffRequested: nil)
+
+        XCTAssertTrue(result.appBundleFound)
+        XCTAssertEqual(result.userLaunchAgents.map(\.plistFound), [true, false])
+        XCTAssertEqual(harness.pathQueries, [
+            "/Users/alice/present.plist", "/Users/alice/missing.plist", "/Applications/Present.app"
+        ])
+
+        preset.appPath = "/Applications/Missing.app"
+        let missing = await SupportDiagnosticsCollector(runtime: harness.runtime)
+            .inspectPreset(preset, keepOffRequested: nil)
+        XCTAssertFalse(missing.appBundleFound)
+    }
+
     func testCanonicalIdentityCannotBeSpoofedByNameOrUUID() async {
         let collector = SupportDiagnosticsCollector(runtime: DiagnosticsInspectionHarness(results: []).runtime)
         let builtIn = await collector.inspectPreset(.globalProtect, keepOffRequested: false)
@@ -306,11 +334,22 @@ private final class DiagnosticsInspectionHarness: @unchecked Sendable {
     private let lock = NSLock()
     private var results: [ShellCommandResult]
     private var recordedCommands: [String] = []
+    private let existingPaths: Set<String>
+    private var recordedPathQueries: [String] = []
     var commands: [String] { lock.withLock { recordedCommands } }
-    init(results: [ShellCommandResult]) { self.results = results }
+    var pathQueries: [String] { lock.withLock { recordedPathQueries } }
+    init(results: [ShellCommandResult], existingPaths: Set<String> = []) {
+        self.results = results
+        self.existingPaths = existingPaths
+    }
 
     var runtime: ProcessLifecycleRuntime {
-        .init(userID: 501, fileExists: { _ in false }, launchAgentLabel: { _ in nil }, runCommand: { [self] command, timeout in
+        .init(userID: 501, fileExists: { [self] path in
+            lock.withLock {
+                recordedPathQueries.append(path)
+                return existingPaths.contains(path)
+            }
+        }, launchAgentLabel: { _ in nil }, runCommand: { [self] command, timeout in
             XCTAssertEqual(timeout, 5)
             return lock.withLock {
                 recordedCommands.append(command)

@@ -19,10 +19,8 @@ final class ReviewShellRegressionTests: XCTestCase {
 
         let identityOutcome = await coordinator.openAndSelect(identity: process.identity)
         XCTAssertEqual(identityOutcome, .success, "A visible other-user process must pass identity verification")
-        let pidOutcome = await coordinator.openAndSelect(pid: process.pid)
-        XCTAssertEqual(pidOutcome, .success, "The PID-only sibling must also recognize other-user processes")
-        XCTAssertEqual(opener.openCount, 2)
-        XCTAssertEqual(selector.requestedPIDs, [process.pid, process.pid])
+        XCTAssertEqual(opener.openCount, 1)
+        XCTAssertEqual(selector.requestedPIDs, [process.pid])
     }
 
     func testIntentQueriesDoNotPublishDefaultsForWrongTypePresets() async throws {
@@ -53,7 +51,7 @@ private final class ReviewShellActivityOpener: ActivityMonitorOpening {
 @MainActor
 private final class ReviewShellActivitySelector: ActivityMonitorProcessSelecting {
     var requestedPIDs: [Int32] = []
-    func select(pid: Int32) async -> ActivityMonitorSelectionAttempt {
+    func select(pid: Int32, timeout: TimeInterval) async -> ActivityMonitorSelectionAttempt {
         requestedPIDs.append(pid)
         return .selected
     }

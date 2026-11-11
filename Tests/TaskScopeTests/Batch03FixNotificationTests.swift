@@ -22,21 +22,28 @@ final class Batch03NotificationTests: XCTestCase {
         let manager = ProcessManager(processInventory: inventory, processSignaler: ManagerTestSignaler(),
                                      lifecycle: ManagerTestLifecycle(), settleAfterProcessChange: {})
         manager.watchedAppsProvider = { presets }
-        var baseline = ProcessNotificationBaseline()
-        var started: [Set<String>] = [], stopped: [Set<String>] = []
-        manager.primeNotificationBaseline = { baseline.rebaseline($0) }
-        manager.notifyTransitions = {
-            let transitions = baseline.transitions(to: $0, canNotify: true)
-            started.append(transitions.started)
-            stopped.append(transitions.stopped)
-        }
+        // The manager's seams carry the watched snapshots to the service, which
+        // diffs each preset on its own; this service records instead of posting.
+        var delivered: [String] = []
+        let service = NotificationService(
+            isAvailable: true, authorizationState: .authorized,
+            readAuthorization: { .authorized }, deliver: { delivered.append($0.content.body) }
+        )
+        manager.primeNotificationBaseline = { service.prime($0) }
+        manager.notifyTransitions = { service.diffAndNotify($0) }
+        manager.refreshNotificationAuthorization = {}
 
         await manager.refreshWatchedStatus()
         await manager.refreshWatchedStatus()
+        XCTAssertEqual(
+            delivered, ["Slack: chrome_crashpad_handler is no longer running."],
+            "Slack's helper stopping while Discord's runs must notify"
+        )
         await manager.refreshWatchedStatus()
-
-        let slackHelper = "Slack: chrome_crashpad_handler"
-        XCTAssertEqual(stopped, [[slackHelper], []], "Slack's helper stopping while Discord's runs must notify")
-        XCTAssertEqual(started, [[], [slackHelper]], "Slack's helper starting again must notify")
+        XCTAssertEqual(
+            delivered.last, "Slack: chrome_crashpad_handler is now running.",
+            "Slack's helper starting again must notify"
+        )
+        XCTAssertEqual(delivered.count, 2)
     }
 }

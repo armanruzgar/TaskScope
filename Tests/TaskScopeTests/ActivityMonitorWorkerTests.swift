@@ -42,7 +42,9 @@ final class ActivityMonitorWorkerTests: XCTestCase {
         XCTAssertEqual(table.restoreCount, 1)
     }
 
-    func testConsecutiveSuccessfulHandoffsRetargetSearchAndRestoreOriginal() async {
+    /// The search that made a selected row visible is kept: restoring the
+    /// original search would hide the row TaskScope reported as selected.
+    func testConsecutiveSuccessfulHandoffsRetargetSearchAndKeepTheSelectedRowVisible() async {
         let table = WorkerTableFixture()
         let worker = ActivityMonitorAccessibilityWorker(
             selection: { _, pid, _, state in table.select(pid: pid, existing: state) },
@@ -58,7 +60,8 @@ final class ActivityMonitorWorkerTests: XCTestCase {
         await worker.restore(generation: first.generation)
         XCTAssertEqual(table.search, "temporary 2")
         await worker.restore(generation: second.generation)
-        XCTAssertEqual(table.search, "original search")
+        XCTAssertEqual(table.search, "temporary 2")
+        XCTAssertEqual(table.restoreCount, 1)
     }
 
     func testSearchRetargetsWithoutLosingOriginalAndRetriesFailedWrites() {
@@ -72,9 +75,13 @@ final class ActivityMonitorWorkerTests: XCTestCase {
         XCTAssertEqual(state.searchValueSet, "second")
         XCTAssertEqual(state.searchValue, "original search")
         state.updateSearch(processName: "original search") { writes.append($0); return true }
+        // Without a name the search is cleared, so a stale search cannot keep
+        // hiding the row; the original is still what restoration puts back.
         state.updateSearch(processName: nil) { writes.append($0); return true }
-        XCTAssertEqual(writes, ["first", "second", "second", "original search"])
-        XCTAssertEqual(state.searchValueSet, "original search")
+        state.updateSearch(processName: nil) { writes.append($0); return true }
+        XCTAssertEqual(writes, ["first", "second", "second", "original search", ""])
+        XCTAssertEqual(state.searchValueSet, "")
+        XCTAssertEqual(state.searchValue, "original search")
         XCTAssertTrue(state.searchWasChanged)
     }
 
@@ -151,9 +158,13 @@ private final class WorkerTableFixture: @unchecked Sendable {
         }
     }
 
+    /// Like the real restoration, the search is put back only when the
+    /// handoff's restoration still includes it.
     func restore(_ state: ActivityMonitorPreparedTableState) {
         lock.withLock {
-            value = state.searchValue
+            if state.searchWasChanged {
+                value = state.searchValue
+            }
             restorations += 1
         }
     }

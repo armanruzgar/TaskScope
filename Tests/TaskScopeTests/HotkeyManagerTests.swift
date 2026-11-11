@@ -130,7 +130,10 @@ final class HotkeyManagerTests: XCTestCase {
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(shiftKey)))
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(optionKey)))
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(shiftKey | optionKey)))
-        XCTAssertTrue(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(controlKey)))
+        // ⌃T alone is a reserved Control-letter key; Control alone still
+        // satisfies the Command-or-Control rule for other keys.
+        XCTAssertFalse(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(controlKey)))
+        XCTAssertTrue(HotkeyManager.isSupported(keyCode: UInt32(kVK_F5), modifiers: UInt32(controlKey)))
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(cmdKey)))
         XCTAssertTrue(HotkeyManager.isSupported(keyCode: key, modifiers: UInt32(controlKey | shiftKey)))
         XCTAssertTrue(
@@ -162,7 +165,7 @@ final class HotkeyManagerTests: XCTestCase {
         XCTAssertNil(HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(cmdKey | shiftKey)))
         XCTAssertNil(HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_T), modifiers: UInt32(controlKey | optionKey | cmdKey)))
         XCTAssertNil(HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey | optionKey)))
-        XCTAssertNil(HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey)))
+        XCTAssertNotNil(HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_C), modifiers: UInt32(controlKey)))
     }
 
     func testSystemReservedCombinationsAreRefusedWithAnExplanation() {
@@ -176,7 +179,12 @@ final class HotkeyManagerTests: XCTestCase {
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: UInt32(kVK_Space), modifiers: command | option))
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: UInt32(kVK_ANSI_Q), modifiers: command | shift))
         XCTAssertFalse(HotkeyManager.isSupported(keyCode: UInt32(kVK_ANSI_4), modifiers: command | shift))
-        XCTAssertTrue(HotkeyManager.isSupported(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey)))
+        XCTAssertFalse(HotkeyManager.isSupported(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey)))
+        XCTAssertFalse(
+            HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_Q), modifiers: UInt32(controlKey))?
+                .contains("Lock Screen") ?? true,
+            "only ⌃⌘Q is the Lock Screen shortcut; ⌃Q is refused as a control key"
+        )
         XCTAssertTrue(HotkeyManager.isSupported(keyCode: UInt32(kVK_Space), modifiers: command | shift))
         XCTAssertEqual(
             HotkeyManager.validationFailure(keyCode: UInt32(kVK_ANSI_Q), modifiers: command),

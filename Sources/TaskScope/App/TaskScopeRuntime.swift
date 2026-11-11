@@ -15,7 +15,7 @@ final class TaskScopeRuntime {
     /// System effects, injected so the composition can be tested with fakes.
     struct Effects {
         var requestNotificationAuthorization: () async -> Void = {}
-        var primeNotificationBaseline: (Set<String>) -> Void = { _ in }
+        var primeNotificationBaseline: ([WatchedAppSnapshot]) -> Void = { _ in }
     }
 
     let processManager: ProcessManager
@@ -101,7 +101,7 @@ final class TaskScopeRuntime {
 
         if settings.enableNotifications {
             await effects.requestNotificationAuthorization()
-            effects.primeNotificationBaseline(eligibleNotificationNames())
+            effects.primeNotificationBaseline(eligibleNotificationSnapshots())
         }
 
         requestShortcutParameterRefresh()
@@ -176,7 +176,6 @@ final class TaskScopeRuntime {
 
     private func notificationSettingChanged(_ enabled: Bool) {
         let token = notificationEnablement.beginConfiguration(
-            enabled: enabled,
             setDeliveryEnabled: { [processManager] in processManager.enableNotifications = $0 }
         )
         configurePolling()
@@ -187,17 +186,17 @@ final class TaskScopeRuntime {
             await self.effects.requestNotificationAuthorization()
             self.notificationEnablement.completeEnabledConfiguration(
                 token: token,
-                currentRunningNames: { self.eligibleNotificationNames() },
+                currentBaseline: { self.eligibleNotificationSnapshots() },
                 primeBaseline: { self.effects.primeNotificationBaseline($0) },
                 setDeliveryEnabled: { self.processManager.enableNotifications = $0 }
             )
         }
     }
 
-    private func eligibleNotificationNames() -> Set<String> {
+    /// Snapshots of the presets whose notifications are on; each preset keeps
+    /// its own baseline (see NotificationService).
+    private func eligibleNotificationSnapshots() -> [WatchedAppSnapshot] {
         let enabledPresetIDs = Set(watchedApps.presets.filter(\.notificationsEnabled).map(\.id))
-        return ProcessManager.notificationNames(for: processManager.snapshots.filter {
-            enabledPresetIDs.contains($0.preset.id)
-        })
+        return processManager.snapshots.filter { enabledPresetIDs.contains($0.preset.id) }
     }
 }

@@ -17,8 +17,8 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
 
         var started: [Set<String>] = []
         var primed: [Set<String>] = []
-        manager.notifyTransitions = { started.append($0) }
-        manager.primeNotificationBaseline = { primed.append($0) }
+        manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
+        manager.primeNotificationBaseline = { primed.append(Set($0.flatMap(\.runningNames))) }
 
         // The preset list changes to include an app that is already running, and the
         // manager has no snapshot for it yet.
@@ -49,7 +49,7 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
         manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
 
         var started: [Set<String>] = []
-        manager.notifyTransitions = { started.append($0) }
+        manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
 
         await manager.refreshWatchedStatus(showMessage: false)
         inventory.processes = [appProcess(pid: 41, name: "Slack")]
@@ -72,8 +72,8 @@ final class WatchedPresetNotificationBaselineTests: XCTestCase {
 
         var started: [Set<String>] = []
         var primed: [Set<String>] = []
-        manager.notifyTransitions = { started.append($0) }
-        manager.primeNotificationBaseline = { primed.append($0) }
+        manager.notifyTransitions = { started.append(Set($0.flatMap(\.runningNames))) }
+        manager.primeNotificationBaseline = { primed.append(Set($0.flatMap(\.runningNames))) }
 
         manager.watchedAppsProvider = { [self.preset(named: "Slack")] }
         await manager.refreshWatchedStatus(showMessage: false)

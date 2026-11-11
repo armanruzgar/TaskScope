@@ -60,7 +60,7 @@ struct HotkeySettingsView: View {
                             : Color.orange
                     )
 
-                Text("Default: ⌃⌥⌘T shows the TaskScope window. A hotkey needs Command or Control. Standard ⌘-letter app shortcuts, ⌘Tab, and ⌘Space are reserved.")
+                Text("Default: ⌃⌥⌘T shows the TaskScope window. A hotkey needs Command or Control. Standard ⌘ app shortcuts (letters, digits, arrows, Delete, Return), ⌃-letter control keys, ⌘Tab, and ⌘Space are reserved.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -94,6 +94,15 @@ struct HotkeySettingsView: View {
                 },
                 onCancel: {
                     recording = false
+                },
+                // Recording starts and ends inside a view update; pausing and
+                // resuming the hotkey publishes status, so it runs right after
+                // the update, in the order the sessions started and ended.
+                onStart: { [hotkey] in
+                    Task { @MainActor in hotkey.beginRecording() }
+                },
+                onFinish: { [hotkey] in
+                    Task { @MainActor in hotkey.endRecording() }
                 }
             )
         }
@@ -104,6 +113,8 @@ private struct RecordingListenerView: NSViewRepresentable {
     @Binding var isRecording: Bool
     let onRecord: (UInt32, UInt32) -> Void
     let onCancel: () -> Void
+    let onStart: () -> Void
+    let onFinish: () -> Void
 
     func makeNSView(context: Context) -> NSView {
         NSView()
@@ -111,75 +122,140 @@ private struct RecordingListenerView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         if isRecording {
-            guard context.coordinator.localMonitor == nil else { return }
-
-            context.coordinator.localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                if event.keyCode == 53 {
-                    onCancel()
-                    return nil
-                }
-                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                var carbonMods: UInt32 = 0
-                if mods.contains(.command) { carbonMods |= UInt32(cmdKey) }
-                if mods.contains(.shift) { carbonMods |= UInt32(shiftKey) }
-                if mods.contains(.option) { carbonMods |= UInt32(optionKey) }
-                if mods.contains(.control) { carbonMods |= UInt32(controlKey) }
-                // A bare key is ordinary typing. Everything else is handed to
-                // the manager, which validates it (Command or Control required,
-                // system-reserved combinations refused) and explains a rejection
-                // in the status line.
-                if carbonMods == 0 { return event }
-                onRecord(UInt32(event.keyCode), carbonMods)
-                return nil
-            }
-
-            context.coordinator.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { _ in
-                onCancel()
-            }
-
-            context.coordinator.onCancel = onCancel
-            NotificationCenter.default.addObserver(
-                context.coordinator,
-                selector: #selector(Coordinator.applicationDidResignActive),
-                name: NSApplication.didResignActiveNotification,
-                object: nil
+            context.coordinator.start(
+                recorderWindow: nsView.window,
+                onRecord: onRecord,
+                onCancel: onCancel,
+                onStart: onStart,
+                onFinish: onFinish
             )
         } else {
-            context.coordinator.removeMonitors()
+            context.coordinator.stop()
         }
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeCoordinator() -> HotkeyRecorderCoordinator { HotkeyRecorderCoordinator() }
 
-    @MainActor
-    final class Coordinator: NSObject {
-        var localMonitor: Any?
-        var globalMonitor: Any?
-        var onCancel: (() -> Void)?
+    static func dismantleNSView(_ nsView: NSView, coordinator: HotkeyRecorderCoordinator) {
+        coordinator.stop()
+    }
+}
 
-        @objc func applicationDidResignActive() {
-            onCancel?()
+/// One recording session: the key monitors and the observers that end it.
+/// Recording belongs to the window that shows the recorder. Keystrokes typed
+/// in any other TaskScope window pass through, and the recording is cancelled
+/// when that window stops being key or closes, or TaskScope stops being active.
+@MainActor
+final class HotkeyRecorderCoordinator: NSObject {
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    private var onCancel: (() -> Void)?
+    private var onFinish: (() -> Void)?
+    private(set) var isRecording = false
+
+    func start(
+        recorderWindow: NSWindow?,
+        onRecord: @escaping (UInt32, UInt32) -> Void,
+        onCancel: @escaping () -> Void,
+        onStart: () -> Void = {},
+        onFinish: @escaping () -> Void = {},
+        installsEventMonitors: Bool = true
+    ) {
+        guard !isRecording else { return }
+        isRecording = true
+        self.onCancel = onCancel
+        self.onFinish = onFinish
+        onStart()
+
+        if installsEventMonitors {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak recorderWindow] event in
+                switch HotkeyRecordingInput.action(
+                    keyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags,
+                    eventWindow: event.window,
+                    recorderWindow: recorderWindow
+                ) {
+                case .passThrough:
+                    return event
+                case .cancel:
+                    onCancel()
+                    return nil
+                case .record(let keyCode, let modifiers):
+                    onRecord(keyCode, modifiers)
+                    return nil
+                }
+            }
+            globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { _ in
+                onCancel()
+            }
         }
 
-        func removeMonitors() {
-            if let localMonitor {
-                NSEvent.removeMonitor(localMonitor)
-                self.localMonitor = nil
+        let center = NotificationCenter.default
+        if let recorderWindow {
+            for name in [NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
+                center.addObserver(self, selector: #selector(cancelRecording), name: name, object: recorderWindow)
             }
-            if let globalMonitor {
-                NSEvent.removeMonitor(globalMonitor)
-                self.globalMonitor = nil
-            }
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSApplication.didResignActiveNotification,
-                object: nil
-            )
-            onCancel = nil
         }
+        center.addObserver(
+            self,
+            selector: #selector(cancelRecording),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
     }
 
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.removeMonitors()
+    /// Ends the session on every path (recorded, cancelled, view torn down)
+    /// and lets the owner resume the paused hotkey.
+    func stop() {
+        guard isRecording else { return }
+        isRecording = false
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
+            self.globalMonitor = nil
+        }
+        NotificationCenter.default.removeObserver(self)
+        let finish = onFinish
+        onCancel = nil
+        onFinish = nil
+        finish?()
+    }
+
+    @objc func cancelRecording() {
+        onCancel?()
+    }
+}
+
+/// What the recorder does with one keyDown event.
+enum HotkeyRecordingInput {
+    enum Action: Equatable {
+        case passThrough
+        case cancel
+        case record(keyCode: UInt32, modifiers: UInt32)
+    }
+
+    static func action(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        eventWindow: NSWindow?,
+        recorderWindow: NSWindow?
+    ) -> Action {
+        // Only keystrokes typed in the recorder's own window are captured.
+        guard let recorderWindow, eventWindow === recorderWindow else { return .passThrough }
+        if Int(keyCode) == kVK_Escape { return .cancel }
+        let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var carbonModifiers: UInt32 = 0
+        if flags.contains(.command) { carbonModifiers |= UInt32(cmdKey) }
+        if flags.contains(.shift) { carbonModifiers |= UInt32(shiftKey) }
+        if flags.contains(.option) { carbonModifiers |= UInt32(optionKey) }
+        if flags.contains(.control) { carbonModifiers |= UInt32(controlKey) }
+        // A bare key is ordinary typing. Everything else is handed to the
+        // manager, which validates it (Command or Control required, reserved
+        // combinations refused) and explains a rejection in the status line.
+        guard carbonModifiers != 0 else { return .passThrough }
+        return .record(keyCode: UInt32(keyCode), modifiers: carbonModifiers)
     }
 }

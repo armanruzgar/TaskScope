@@ -213,6 +213,11 @@ final class ProcessManager: ObservableObject {
         processHistory?.setPollingActive(true)
         pollingController.restart(interval: pollInterval) { [weak self] in
             guard let self else { return }
+            // macOS sends no event when the user allows notifications in
+            // System Settings. While delivery is impossible, each tick re-reads
+            // the authorization before its read, so later transitions are not
+            // absorbed until TaskScope is next activated.
+            if self.enableNotifications { await self.refreshNotificationAuthorization() }
             // With Auto-refresh on, the list read is the tick's only read: it
             // also applies the watched snapshots, and it performs the first
             // load as well. A watched-only read is the fallback. Each tick's
@@ -432,7 +437,7 @@ final class ProcessManager: ObservableObject {
             status: .failed,
             message: "Open did not complete."
         )
-        let ran = await runAction(kind: .mutation) {
+        let ran = await runAction(kind: .mutation, announcesTransitions: false) {
             let previousMessage = message
             var cancelledRead = false
             var mayHaveChangedState = false
@@ -726,7 +731,9 @@ final class ProcessManager: ObservableObject {
             status: .failed,
             message: "Keep Off did not complete."
         )
-        await runAction(kind: .mutation) {
+        // Background enforcement was not just requested by the user, so the
+        // processes it stops are still announced.
+        await runAction(kind: .mutation, announcesTransitions: !recordIntent) {
             // Check before disconnect and again afterwards: settings or the
             // preset may change while the vendor UI is settling.
             @MainActor func preparationRefusal() -> String? {
@@ -1030,7 +1037,7 @@ final class ProcessManager: ObservableObject {
         if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         var result = PresetStopResult.failed(scope.incompleteMessage, reason: .incomplete)
         var cancelled = false
-        let ran = await runAction(kind: .mutation) {
+        let ran = await runAction(kind: .mutation, announcesTransitions: false) {
             // Admission is the cancellation boundary for Stop. Once admitted,
             // finish all scoped stops and verification even if its caller leaves.
             await Task { @MainActor in
@@ -1376,37 +1383,36 @@ final class ProcessManager: ObservableObject {
         selectedPids = Set(selectedIdentities.keys)
     }
 
-    func notifiableRunningNames(in watched: [WatchedAppSnapshot]) -> Set<String> {
-        Self.notificationNames(for: watched.filter { $0.preset.notificationsEnabled })
-    }
-
-    /// Running names to diff for start and stop notifications. Presets may
-    /// share a process name (two Java apps both run JavaApplicationStub), and a
-    /// flat set would merge them: one app quitting while the other runs would
-    /// go unnoticed. A name that more than one preset lists is therefore keyed,
-    /// and shown, with the preset's display name.
+    /// Running names as notifications show them. Presets may share a process
+    /// name (two Java apps both run JavaApplicationStub); such a name carries
+    /// the preset's display name so the two stay apart. Diffing itself is per
+    /// preset (see NotificationService), so one app quitting while the other
+    /// runs is still announced.
     nonisolated static func notificationNames(for snapshots: [WatchedAppSnapshot]) -> Set<String> {
-        var owners: [String: Set<UUID>] = [:]
-        for snapshot in snapshots {
-            for name in snapshot.preset.killableNames + snapshot.preset.protectedProcessNames {
-                owners[name, default: []].insert(snapshot.preset.id)
-            }
-        }
+        let shared = NotificationService.sharedProcessNames(among: snapshots.map(\.preset))
         return Set(snapshots.flatMap { snapshot in
-            snapshot.runningNames.map { name in
-                (owners[name]?.count ?? 0) > 1 ? "\(snapshot.preset.displayName): \(name)" : name
+            snapshot.runningNames.map {
+                NotificationService.displayName(for: $0, in: snapshot.preset, sharedNames: shared)
             }
         })
     }
 
     /// Seams over the notification singleton so the baseline/diff ordering is
-    /// testable; both default to `NotificationService.shared`.
-    var notifyTransitions: (Set<String>) -> Void = {
-        NotificationService.shared.diffAndNotify(currentRunningNames: $0)
+    /// testable; all default to `NotificationService.shared`. Both baseline
+    /// seams receive the snapshots of presets with notifications enabled.
+    var notifyTransitions: ([WatchedAppSnapshot]) -> Void = {
+        NotificationService.shared.diffAndNotify($0)
     }
-    var primeNotificationBaseline: (Set<String>) -> Void = {
-        NotificationService.shared.prime(initialRunningNames: $0)
+    var primeNotificationBaseline: ([WatchedAppSnapshot]) -> Void = {
+        NotificationService.shared.prime($0)
     }
+    var refreshNotificationAuthorization: () async -> Void = {
+        await NotificationService.shared.refreshAuthorizationIfUndeliverable()
+    }
+    /// Set while Open, Quit or an explicit Keep Off runs. The user just asked
+    /// for those transitions and sees the action's result, so the reads inside
+    /// the action re-baseline instead of announcing them.
+    private var isApplyingOwnLifecycleAction = false
 
     /// The presets define detection scope as well as names. Bundle paths and
     /// which preset owns a helper must invalidate the baseline too.
@@ -1428,11 +1434,11 @@ final class ProcessManager: ObservableObject {
         // predates these presets and diffing would report an already-running app as
         // newly started. Self-detecting removes any dependence on callers passing
         // the right flag, and on the order in which they run.
-        let names = notifiableRunningNames(in: watched)
-        if previousPresets == notifiablePresets(in: watched) {
-            notifyTransitions(names)
+        let notifiable = watched.filter { $0.preset.notificationsEnabled }
+        if !isApplyingOwnLifecycleAction, previousPresets == notifiablePresets(in: watched) {
+            notifyTransitions(notifiable)
         } else {
-            primeNotificationBaseline(names)
+            primeNotificationBaseline(notifiable)
         }
     }
 
@@ -1440,9 +1446,13 @@ final class ProcessManager: ObservableObject {
     private func runAction(
         kind: ProcessOperationGate.Kind,
         reportsProgress: Bool = true,
+        announcesTransitions: Bool = true,
         _ operation: () async -> Void
     ) async -> Bool {
         await operationGate.run(kind: kind, reportsProgress: reportsProgress) {
+            let wasApplyingOwnLifecycleAction = isApplyingOwnLifecycleAction
+            if !announcesTransitions { isApplyingOwnLifecycleAction = true }
+            defer { isApplyingOwnLifecycleAction = wasApplyingOwnLifecycleAction }
             await operation()
             if kind == .mutation, let shared = processInventory as? CoalescingProcessInventory {
                 // Reads queued behind this mutation, and observers outside the

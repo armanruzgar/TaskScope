@@ -90,6 +90,12 @@ final class HotkeyManager: ObservableObject {
     private let defaults: UserDefaults
     private let defaultsKey: String
     private let backend: any HotkeyRegistrationBackend
+    /// True while the Settings recorder listens for a new combination. The
+    /// registered hotkey is paused, so pressing it is recorded instead of
+    /// showing the main window.
+    private var recordingPaused = false
+    /// Carbon refused the combination recorded while paused.
+    private var registrationRefusedWhileRecording = false
     private var nextRegistrationID: UInt32 = 1
     /// The combination `hotkeyRef` currently stands for.
     private var registeredShortcut: (keyCode: UInt32, modifiers: UInt32)?
@@ -108,7 +114,10 @@ final class HotkeyManager: ObservableObject {
         keyCode = (saved?["keyCode"] as? UInt32) ?? UInt32(kVK_ANSI_T)
         modifiers = (saved?["modifiers"] as? UInt32) ?? UInt32(controlKey | optionKey | cmdKey)
         migrationNotice = saved?["migrationNotice"] as? String
-        if let stored, saved == nil {
+        // A field that is present with the wrong type is unreadable data, like
+        // a value that is not a dictionary: it is backed up and the hotkey
+        // stays off until an explicit reset. Absent fields take defaults.
+        if let stored, saved.map(Self.hasWrongTypedField) ?? true {
             isReadOnlyAfterCorruption = true
             hotkeyEnabled = false
             let baseKey = "\(defaultsKey).corruptBackup"
@@ -130,6 +139,22 @@ final class HotkeyManager: ObservableObject {
         }
     }
 
+    static func hasWrongTypedField(_ saved: [String: Any]) -> Bool {
+        func isBoolean(_ value: Any) -> Bool {
+            guard let number = value as? NSNumber else { return false }
+            return CFGetTypeID(number) == CFBooleanGetTypeID()
+        }
+        func isUInt32(_ value: Any) -> Bool {
+            guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
+            return UInt32(exactly: number.doubleValue) != nil
+        }
+        if let value = saved["enabled"], !isBoolean(value) { return true }
+        if let value = saved["keyCode"], !isUInt32(value) { return true }
+        if let value = saved["modifiers"], !isUInt32(value) { return true }
+        if let value = saved["migrationNotice"], !(value is String) { return true }
+        return false
+    }
+
     deinit {
         if let hotkeyRef {
             UnregisterEventHotKey(hotkeyRef)
@@ -141,7 +166,7 @@ final class HotkeyManager: ObservableObject {
 
     func register() {
         lastRecordingError = nil
-        guard hotkeyEnabled, !isReadOnlyAfterCorruption else {
+        guard hotkeyEnabled, !isReadOnlyAfterCorruption, !recordingPaused else {
             unregister()
             registrationStatus = .disabled
             return
@@ -163,6 +188,7 @@ final class HotkeyManager: ObservableObject {
         }
 
         if hotkeyEnabled, !registerCandidate(keyCode: keyCode, modifiers: modifiers) {
+            if recordingPaused { registrationRefusedWhileRecording = true }
             return false
         }
 
@@ -173,8 +199,41 @@ final class HotkeyManager: ObservableObject {
         return true
     }
 
+    /// Called when a new recording starts. A refused recording left the
+    /// previous shortcut active with an orange conflict status; that status is
+    /// stale once the user moves on, like the recording error itself.
     func clearRecordingError() {
         lastRecordingError = nil
+        guard hotkeyRef != nil else { return }
+        switch registrationStatus {
+        case .conflict(_, true), .handlerUnavailable(_, true):
+            registrationStatus = .registered
+        default:
+            break
+        }
+    }
+
+    /// Pauses the registered hotkey while the recorder listens.
+    func beginRecording() {
+        recordingPaused = true
+        registrationRefusedWhileRecording = false
+        unregister()
+    }
+
+    /// Ends a recording on every exit path: the recorded combination stays
+    /// registered, or the previous one is registered again.
+    func endRecording() {
+        guard recordingPaused else { return }
+        recordingPaused = false
+        let refused = registrationRefusedWhileRecording
+        registrationRefusedWhileRecording = false
+        let error = lastRecordingError
+        register()
+        if refused, registrationStatus == .registered {
+            lastRecordingError = "That shortcut is unavailable. The previous shortcut remains active."
+        } else {
+            lastRecordingError = error
+        }
     }
 
     func dismissMigrationNotice() {
@@ -257,6 +316,21 @@ final class HotkeyManager: ObservableObject {
         let shift = UInt32(shiftKey)
         let option = UInt32(optionKey)
         let control = UInt32(controlKey)
+        let name = keyName(for: keyCode) ?? ""
+        // A global hotkey is delivered to TaskScope instead of the frontmost
+        // app: Control-letters are terminal and text-editing control keys
+        // (⌃C interrupts, ⌃A/⌃E move the cursor), and Command with an arrow,
+        // Delete, Return or a digit is a standard editing or app shortcut.
+        if modifiers == control, name.count == 1, name.first?.isLetter == true {
+            return "⌃\(name) (terminal and text-editing control key)"
+        }
+        let commandEditingKeys = [kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow,
+                                  kVK_Delete, kVK_ForwardDelete, kVK_Return,
+                                  kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
+                                  kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+        if modifiers == command, commandEditingKeys.contains(Int(keyCode)) {
+            return "⌘\(name) (standard app shortcut)"
+        }
         switch (Int(keyCode), modifiers) {
         case (kVK_ANSI_Q, control | command):
             return "⌃⌘Q (Lock Screen)"

@@ -1916,7 +1916,7 @@ struct UILoginItemService: LoginItemServicing {
 
 @MainActor
 struct UIActivityMonitor: ActivityMonitorCoordinating {
-    func openAndSelect(pid: Int32) async -> ActivityMonitorHandoffOutcome {
+    func openAndSelect(identity: ProcessIdentity) async -> ActivityMonitorHandoffOutcome {
         .missingProcess
     }
 }

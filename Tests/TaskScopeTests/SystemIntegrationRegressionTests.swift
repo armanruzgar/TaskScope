@@ -135,7 +135,7 @@ final class SystemIntegrationRegressionTests: XCTestCase {
             selector: IntegrationActivitySelector(result: .accessibilityDenied("macOS has not granted access.")),
             sleep: { _ in }
         )
-        let outcome = await coordinator.openAndSelect(pid: 42)
+        let outcome = await coordinator.openAndSelect(identity: ProcessIdentity(pid: 42, startTime: "fixture", command: "fixture", executablePath: "/fixture"))
         XCTAssertTrue(outcome.message(for: 42).contains("Accessibility access is not granted"))
         XCTAssertFalse(outcome.message(for: 42).contains("was denied"))
         XCTAssertTrue(outcome.message(for: 42).contains("Privacy & Security > Accessibility"))
@@ -166,8 +166,9 @@ final class SystemIntegrationRegressionTests: XCTestCase {
             )
             try view.processContextMenu(for: process).inspect().find(button: "Open in Activity Monitor").tap()
             await fulfillment(of: [called], timeout: 2)
+            // The coordinator protocol no longer has a PID-only entry, so the
+            // identity handoff is the only one a view can request.
             XCTAssertEqual(activity.requestedIdentity, process.identity)
-            XCTAssertNil(activity.requestedPID)
         }
     }
 
@@ -438,14 +439,8 @@ private struct IntegrationLifecycle: ProcessLifecycleServicing {
 @MainActor
 private final class IntegrationActivityCoordinator: ActivityMonitorCoordinating {
     var requestedIdentity: ProcessIdentity?
-    var requestedPID: Int32?
     let onRequest: () -> Void
     init(onRequest: @escaping () -> Void) { self.onRequest = onRequest }
-    func openAndSelect(pid: Int32) async -> ActivityMonitorHandoffOutcome {
-        requestedPID = pid
-        onRequest()
-        return .missingProcess
-    }
     func openAndSelect(identity: ProcessIdentity) async -> ActivityMonitorHandoffOutcome {
         requestedIdentity = identity
         onRequest()
@@ -462,7 +457,7 @@ private final class IntegrationActivityOpener: ActivityMonitorOpening {
 
 @MainActor
 private struct IntegrationActivityChecker: ActivityMonitorProcessChecking {
-    func processExists(pid: Int32) -> Bool { true }
+    func processMatches(identity: ProcessIdentity) -> Bool { true }
 }
 
 @MainActor
@@ -472,7 +467,7 @@ private final class IntegrationActivitySelector: ActivityMonitorProcessSelecting
     var onSelect: () -> Void = {}
     init(result: ActivityMonitorSelectionAttempt) { results = [result] }
     init(results: [ActivityMonitorSelectionAttempt]) { self.results = results }
-    func select(pid: Int32) async -> ActivityMonitorSelectionAttempt {
+    func select(pid: Int32, timeout: TimeInterval) async -> ActivityMonitorSelectionAttempt {
         requestedPIDs.append(pid)
         onSelect()
         return results.isEmpty ? .notReady : results.removeFirst()

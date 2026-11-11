@@ -580,7 +580,7 @@ struct TaskScopeApp: App {
                     await NotificationService.shared.requestAuthorization()
                 },
                 primeNotificationBaseline: {
-                    NotificationService.shared.prime(initialRunningNames: $0)
+                    NotificationService.shared.prime($0)
                 }
             )
         )
@@ -783,8 +783,9 @@ struct TaskScopeApp: App {
         appDelegate.showMainWindow = {
             showTaskScopeWindow()
         }
+        let terminationCleanup = TaskScopeTerminationCleanup(activityMonitor: activityMonitor)
         appDelegate.willTerminate = {
-            activityMonitor.restoreActivityMonitorState()
+            terminationCleanup.perform()
         }
         promptCoordinator = AutoStopPromptCoordinator(rules: autoStopRules, confirmation: AppModalMenuBarConfirmation())
         actionFeedback = ProcessActionFeedback(manager: processManager)

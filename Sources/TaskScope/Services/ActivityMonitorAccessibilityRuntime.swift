@@ -7,7 +7,11 @@ import Foundation
 protocol ActivityMonitorAccessibilityRuntime {
     func isProcessTrusted(prompt: Bool) -> Bool
     func activityMonitorProcessIdentifier() -> pid_t?
-    func selectProcessRow(applicationPID: pid_t, targetPID: Int32) async -> ActivityMonitorSelectionAttempt
+    func selectProcessRow(
+        applicationPID: pid_t,
+        targetPID: Int32,
+        timeout: TimeInterval
+    ) async -> ActivityMonitorSelectionAttempt
     func restorePreparedState()
 }
 
@@ -31,7 +35,7 @@ struct SystemActivityMonitorProcessSelector: ActivityMonitorProcessSelecting {
         runtime.restorePreparedState()
     }
 
-    func select(pid: Int32) async -> ActivityMonitorSelectionAttempt {
+    func select(pid: Int32, timeout: TimeInterval) async -> ActivityMonitorSelectionAttempt {
         guard runtime.isProcessTrusted(prompt: true) else {
             return .accessibilityDenied(
                 "macOS has not granted TaskScope permission to select another app's interface."
@@ -42,7 +46,11 @@ struct SystemActivityMonitorProcessSelector: ActivityMonitorProcessSelecting {
             return .notReady
         }
 
-        return await runtime.selectProcessRow(applicationPID: applicationPID, targetPID: pid)
+        return await runtime.selectProcessRow(
+            applicationPID: applicationPID,
+            targetPID: pid,
+            timeout: timeout
+        )
     }
 }
 
@@ -63,12 +71,18 @@ struct ActivityMonitorPreparedTableState: @unchecked Sendable {
     var processIDWasVisible = true
     var processIDWasShown = false
     var searchWasChanged = false
+    /// True when the latest attempt selected the row. Restoration then keeps
+    /// the search text and process scope that made the row visible, because
+    /// putting them back would hide the row TaskScope reported as selected.
+    var keepsSelectionVisible = false
 
+    /// Types the process name into the search field. Without a name, an
+    /// existing search is cleared instead, so it cannot keep hiding the row.
     mutating func updateSearch(processName: String?, setValue: (String) -> Bool) {
-        guard let processName,
-              (searchWasChanged ? searchValueSet : searchValue) != processName,
-              setValue(processName) else { return }
-        searchValueSet = processName
+        let searchText = processName ?? ""
+        guard (searchWasChanged ? searchValueSet : searchValue) != searchText,
+              setValue(searchText) else { return }
+        searchValueSet = searchText
         searchWasChanged = true
     }
 
@@ -80,14 +94,30 @@ struct ActivityMonitorPreparedTableState: @unchecked Sendable {
 @MainActor
 final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibilityRuntime {
     private static let activityMonitorBundleIdentifier = "com.apple.ActivityMonitor"
-    private static let restorationDelayNanoseconds: UInt64 = 4_000_000_000
+    static let applicationPath = "/System/Applications/Utilities/Activity Monitor.app"
+    static let executablePath = applicationPath + "/Contents/MacOS/Activity Monitor"
+
+    /// A running app that reports Activity Monitor's bundle identifier.
+    struct ApplicationCandidate: Equatable {
+        let pid: pid_t
+        let bundlePath: String?
+        let isTerminated: Bool
+    }
 
     private let worker: ActivityMonitorAccessibilityWorker
+    private let restorationDelayNanoseconds: UInt64
+    private let sleep: @Sendable (UInt64) async throws -> Void
     private var restorationTask: Task<Void, Never>?
     private var requestGeneration: UInt64 = 0
 
-    init(worker: ActivityMonitorAccessibilityWorker = ActivityMonitorAccessibilityWorker()) {
+    init(
+        worker: ActivityMonitorAccessibilityWorker = ActivityMonitorAccessibilityWorker(),
+        restorationDelayNanoseconds: UInt64 = 4_000_000_000,
+        sleep: @escaping @Sendable (UInt64) async throws -> Void = { try await Task.sleep(nanoseconds: $0) }
+    ) {
         self.worker = worker
+        self.restorationDelayNanoseconds = restorationDelayNanoseconds
+        self.sleep = sleep
     }
 
     func isProcessTrusted(prompt: Bool) -> Bool {
@@ -102,16 +132,40 @@ final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibil
     }
 
     func activityMonitorProcessIdentifier() -> pid_t? {
-        NSRunningApplication.runningApplications(
+        let candidates = NSRunningApplication.runningApplications(
             withBundleIdentifier: Self.activityMonitorBundleIdentifier
-        ).first?.processIdentifier
+        ).map {
+            ApplicationCandidate(
+                pid: $0.processIdentifier,
+                bundlePath: $0.bundleURL?.standardizedFileURL.path,
+                isTerminated: $0.isTerminated
+            )
+        }
+        return Self.systemActivityMonitorPID(
+            in: candidates,
+            executablePath: ProcessListReader.executablePath(for:)
+        )
+    }
+
+    /// Any app can declare Activity Monitor's bundle identifier. Only the
+    /// copy in /System, running its own executable, may be driven.
+    static func systemActivityMonitorPID(
+        in candidates: [ApplicationCandidate],
+        executablePath: (pid_t) -> String?
+    ) -> pid_t? {
+        candidates.first { candidate in
+            !candidate.isTerminated
+                && candidate.bundlePath == applicationPath
+                && executablePath(candidate.pid) == Self.executablePath
+        }?.pid
     }
 
     /// State is captured and updated on the same queue as the AX calls, so
     /// overlapping attempts cannot overwrite the original table settings.
     func selectProcessRow(
         applicationPID: pid_t,
-        targetPID: Int32
+        targetPID: Int32,
+        timeout: TimeInterval
     ) async -> ActivityMonitorSelectionAttempt {
         requestGeneration &+= 1
         let request = requestGeneration
@@ -121,7 +175,8 @@ final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibil
         let outcome = await worker.selectOrPrepare(
             applicationPID: applicationPID,
             targetPID: targetPID,
-            processName: processName
+            processName: processName,
+            timeout: timeout
         )
         if request == requestGeneration, outcome.preparedState != nil {
             scheduleProcessTableRestoration(generation: outcome.generation)
@@ -139,9 +194,11 @@ final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibil
 
     private func scheduleProcessTableRestoration(generation: UInt64) {
         restorationTask?.cancel()
+        let delay = restorationDelayNanoseconds
+        let sleep = sleep
         restorationTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: Self.restorationDelayNanoseconds)
+                try await sleep(delay)
             } catch {
                 return
             }
@@ -152,13 +209,33 @@ final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibil
     }
 
     private static func processName(for pid: Int32) -> String? {
-        if let localizedName = NSRunningApplication(
-            processIdentifier: pid
-        )?.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines),
-        !localizedName.isEmpty {
-            return localizedName
-        }
+        searchName(
+            localizedName: NSRunningApplication(processIdentifier: pid)?.localizedName,
+            kernelName: kernelProcessName(for: pid),
+            executablePath: { ProcessListReader.executablePath(for: pid) }
+        )
+    }
 
+    /// The name typed into Activity Monitor's search field. proc_name is
+    /// refused for root-owned and other users' processes, but their kernel
+    /// executable path stays readable, and Activity Monitor lists such
+    /// processes under that file name.
+    static func searchName(
+        localizedName: String?,
+        kernelName: String?,
+        executablePath: () -> String?
+    ) -> String? {
+        func nonEmpty(_ value: String?) -> String? {
+            guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+        return nonEmpty(localizedName)
+            ?? nonEmpty(kernelName)
+            ?? nonEmpty(executablePath().map { URL(fileURLWithPath: $0).lastPathComponent })
+    }
+
+    private static func kernelProcessName(for pid: Int32) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         let byteCount = proc_name(pid, &buffer, UInt32(buffer.count))
         guard byteCount > 0 else {
@@ -168,9 +245,7 @@ final class SystemActivityMonitorAccessibilityRuntime: ActivityMonitorAccessibil
             .prefix(Int(byteCount))
             .prefix { $0 != 0 }
             .map { UInt8(bitPattern: $0) }
-        let name = String(decoding: bytes, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return name.isEmpty ? nil : name
+        return String(decoding: bytes, as: UTF8.self)
     }
 }
 
@@ -214,6 +289,39 @@ enum ActivityMonitorMenuMatcher {
     }
 }
 
+/// The Accessibility calls the worker makes. Tests supply an in-memory element
+/// tree; production forwards to the AX C functions. Every call is made on the
+/// worker's queue.
+protocol ActivityMonitorAXTransport: Sendable {
+    func applicationElement(pid: pid_t) -> AXUIElement
+    func setTimeout(_ element: AXUIElement, seconds: Float)
+    func copyAttribute(_ element: AXUIElement, _ attribute: CFString, _ value: inout CFTypeRef?) -> AXError
+    func setAttribute(_ element: AXUIElement, _ attribute: CFString, _ value: CFTypeRef) -> AXError
+    func performAction(_ element: AXUIElement, _ action: CFString) -> AXError
+}
+
+struct SystemActivityMonitorAXTransport: ActivityMonitorAXTransport {
+    func applicationElement(pid: pid_t) -> AXUIElement {
+        AXUIElementCreateApplication(pid)
+    }
+
+    func setTimeout(_ element: AXUIElement, seconds: Float) {
+        AXUIElementSetMessagingTimeout(element, seconds)
+    }
+
+    func copyAttribute(_ element: AXUIElement, _ attribute: CFString, _ value: inout CFTypeRef?) -> AXError {
+        AXUIElementCopyAttributeValue(element, attribute, &value)
+    }
+
+    func setAttribute(_ element: AXUIElement, _ attribute: CFString, _ value: CFTypeRef) -> AXError {
+        AXUIElementSetAttributeValue(element, attribute, value)
+    }
+
+    func performAction(_ element: AXUIElement, _ action: CFString) -> AXError {
+        AXUIElementPerformAction(element, action)
+    }
+}
+
 /// Runs all Accessibility traffic on one serial queue. AX calls are synchronous
 /// IPC into Activity Monitor; performed on the main actor for every row and
 /// cell, up to eight attempts, they froze TaskScope's own UI.
@@ -227,30 +335,53 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
     typealias Selection = @Sendable (pid_t, Int32, String?, ActivityMonitorPreparedTableState?) -> Outcome
     typealias Restoration = @Sendable (ActivityMonitorPreparedTableState) -> Void
 
+    /// Upper bound for one Accessibility request; a request never gets more
+    /// than what is left of its attempt's deadline either.
+    static let requestTimeout: TimeInterval = 1
+    static let restorationTimeout: TimeInterval = 2
+
     private let selection: Selection?
     private let restoration: Restoration?
+    private let transport: any ActivityMonitorAXTransport
     // Accessed exclusively on queue, including synchronous shutdown.
     private var preparedState: ActivityMonitorPreparedTableState?
+    /// The Activity Monitor process whose elements `preparedState` holds.
+    private var preparedApplicationPID: pid_t?
     private var generation: UInt64 = 0
+    private var deadline = TimeInterval.infinity
+    private var stoppedResponding = false
     private static let maximumTreeDepth = 12
     private let queue = DispatchQueue(
         label: "TaskScope.ActivityMonitorAccessibility",
         qos: .userInitiated
     )
 
-    init(selection: Selection? = nil, restoration: Restoration? = nil) {
+    init(
+        selection: Selection? = nil,
+        restoration: Restoration? = nil,
+        transport: any ActivityMonitorAXTransport = SystemActivityMonitorAXTransport()
+    ) {
         self.selection = selection
         self.restoration = restoration
+        self.transport = transport
     }
 
     @MainActor
     func selectOrPrepare(
         applicationPID: pid_t,
         targetPID: Int32,
-        processName: String?
+        processName: String?,
+        timeout: TimeInterval = 5
     ) async -> Outcome {
         await withCheckedContinuation { continuation in
             queue.async {
+                // State captured from an Activity Monitor that has quit holds
+                // dead elements and must not be carried into a new instance:
+                // the new instance is captured afresh.
+                if self.preparedApplicationPID != applicationPID {
+                    self.preparedState = nil
+                }
+                self.beginRequests(timeout: timeout)
                 var outcome: Outcome
                 if let selection = self.selection {
                     outcome = selection(applicationPID, targetPID, processName, self.preparedState)
@@ -262,7 +393,12 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
                         existingState: self.preparedState
                     )
                 }
+                if self.stoppedResponding, outcome.attempt == .notReady {
+                    outcome.attempt = .unresponsive
+                }
+                outcome.preparedState?.keepsSelectionVisible = outcome.attempt == .selected
                 self.preparedState = outcome.preparedState
+                self.preparedApplicationPID = applicationPID
                 self.generation &+= 1
                 outcome.generation = self.generation
                 continuation.resume(returning: outcome)
@@ -296,13 +432,54 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
     }
 
     private func restoreOnQueue() {
-        guard let state = preparedState else { return }
+        guard var state = preparedState else { return }
         preparedState = nil
+        preparedApplicationPID = nil
+        beginRequests(timeout: Self.restorationTimeout)
+        if state.keepsSelectionVisible {
+            // The search and scope are what made the selected row visible.
+            // Only the PID column, which never hides a row, is hidden again.
+            state.searchWasChanged = false
+            state.processScopeChanged = false
+        }
         if let restoration {
             restoration(state)
         } else {
             performRestore(state)
         }
+    }
+
+    private func beginRequests(timeout: TimeInterval) {
+        deadline = ProcessInfo.processInfo.systemUptime + max(0, timeout)
+        stoppedResponding = false
+    }
+
+    /// Bounds the next request by `requestTimeout` and the attempt's deadline.
+    /// After one request times out, the rest of the attempt is skipped instead
+    /// of every remaining request waiting out its own timeout.
+    private func prepareRequest(_ element: AXUIElement) -> Bool {
+        guard !stoppedResponding else { return false }
+        let remaining = deadline - ProcessInfo.processInfo.systemUptime
+        guard remaining > 0 else { return false }
+        transport.setTimeout(element, seconds: Float(min(Self.requestTimeout, remaining)))
+        return true
+    }
+
+    private func recordResult(_ error: AXError) -> AXError {
+        if error == .cannotComplete {
+            stoppedResponding = true
+        }
+        return error
+    }
+
+    private func setAttribute(_ element: AXUIElement, _ attribute: String, _ value: CFTypeRef) -> AXError {
+        guard prepareRequest(element) else { return .cannotComplete }
+        return recordResult(transport.setAttribute(element, attribute as CFString, value))
+    }
+
+    private func performAction(_ element: AXUIElement, _ action: String) -> AXError {
+        guard prepareRequest(element) else { return .cannotComplete }
+        return recordResult(transport.performAction(element, action as CFString))
     }
 
     private func performSelectOrPrepare(
@@ -311,7 +488,7 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         processName: String?,
         existingState: ActivityMonitorPreparedTableState?
     ) -> Outcome {
-        let application = AXUIElementCreateApplication(applicationPID)
+        let application = transport.applicationElement(pid: applicationPID)
 
         if let rowSelection = selectVisibleRow(in: application, targetPID: targetPID) {
             return Outcome(attempt: rowSelection, preparedState: existingState)
@@ -374,15 +551,15 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
                     continue
                 }
 
-                let selectionError = AXUIElementSetAttributeValue(
+                let selectionError = setAttribute(
                     outline,
-                    kAXSelectedRowsAttribute as CFString,
+                    kAXSelectedRowsAttribute,
                     [row] as CFArray
                 )
                 if selectionError != .success {
-                    let rowSelectionError = AXUIElementSetAttributeValue(
+                    let rowSelectionError = setAttribute(
                         row,
-                        kAXSelectedAttribute as CFString,
+                        kAXSelectedAttribute,
                         kCFBooleanTrue
                     )
                     guard rowSelectionError == .success else {
@@ -427,10 +604,7 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         if !state.processScopeChanged,
            let allProcessesItem = state.allProcessesItem,
            let previousProcessScopeItem = state.previousProcessScopeItem,
-           AXUIElementPerformAction(
-               allProcessesItem,
-               kAXPressAction as CFString
-           ) == .success,
+           performAction(allProcessesItem, kAXPressAction) == .success,
            isMarked(allProcessesItem) {
             state.previousProcessScopeItem = previousProcessScopeItem
             state.processScopeChanged = true
@@ -439,10 +613,7 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         if !state.processIDWasVisible,
            !state.processIDWasShown,
            let processIDItem = state.processIDItem,
-           AXUIElementPerformAction(
-               processIDItem,
-               kAXPressAction as CFString
-           ) == .success,
+           performAction(processIDItem, kAXPressAction) == .success,
            isMarked(processIDItem) {
             state.processIDWasShown = true
         }
@@ -450,12 +621,8 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         let searchField = state.searchField
         state.updateSearch(processName: processName) { name in
             guard let searchField,
-                  AXUIElementSetAttributeValue(
-                      searchField,
-                      kAXValueAttribute as CFString,
-                      name as CFString
-                  ) == .success else { return false }
-            _ = AXUIElementPerformAction(searchField, kAXConfirmAction as CFString)
+                  setAttribute(searchField, kAXValueAttribute, name as CFString) == .success else { return false }
+            _ = performAction(searchField, kAXConfirmAction)
             return true
         }
 
@@ -544,24 +711,20 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         if state.searchWasChanged,
            let searchField = state.searchField,
            string(searchField, attribute: kAXValueAttribute) ?? "" == state.searchValueSet {
-            if AXUIElementSetAttributeValue(
-                searchField,
-                kAXValueAttribute as CFString,
-                state.searchValue as CFString
-            ) == .success {
-                _ = AXUIElementPerformAction(searchField, kAXConfirmAction as CFString)
+            if setAttribute(searchField, kAXValueAttribute, state.searchValue as CFString) == .success {
+                _ = performAction(searchField, kAXConfirmAction)
             }
         }
         if state.processScopeChanged,
            let allProcessesItem = state.allProcessesItem,
            isMarked(allProcessesItem),
            let item = state.previousProcessScopeItem {
-            _ = AXUIElementPerformAction(item, kAXPressAction as CFString)
+            _ = performAction(item, kAXPressAction)
         }
         if state.processIDWasShown,
            let item = state.processIDItem,
            isMarked(item) {
-            _ = AXUIElementPerformAction(item, kAXPressAction as CFString)
+            _ = performAction(item, kAXPressAction)
         }
     }
 
@@ -697,12 +860,9 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
     }
 
     private func value(_ element: AXUIElement, attribute: String) -> AnyObject? {
+        guard prepareRequest(element) else { return nil }
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            element,
-            attribute as CFString,
-            &value
-        ) == .success else {
+        guard recordResult(transport.copyAttribute(element, attribute as CFString, &value)) == .success else {
             return nil
         }
         return value

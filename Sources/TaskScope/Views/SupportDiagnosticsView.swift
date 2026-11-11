@@ -63,10 +63,22 @@ struct SupportDiagnosticsView: View {
             SupportDiagnosticsPreviewSheet(preview: snapshot, onClose: { preview = nil })
         }
         .onDisappear { collectionTask?.cancel() }
+        .onChange(of: watchedApps.presets) { _, presets in
+            if let id = selectedPresetID, !presets.contains(where: { $0.id == id }) {
+                selectedPresetID = nil
+                status = Self.removedPresetMessage
+            }
+        }
     }
+
+    static let removedPresetMessage = "The selected preset was removed. Choose a preset again."
 
     private func collect() {
         let preset = watchedApps.presets.first { $0.id == selectedPresetID }
+        guard selectedPresetID == nil || preset != nil else {
+            status = Self.removedPresetMessage
+            return
+        }
         let keepOff: Bool? = settings.isReadOnlyAfterCorruption
             ? nil : preset?.hasSupportedGlobalProtectIdentity == true && settings.keepGlobalProtectOff
         let notificationsEnabled = settings.isReadOnlyAfterCorruption ? nil : settings.enableNotifications
@@ -104,6 +116,10 @@ struct SupportDiagnosticsView: View {
 struct SupportDiagnosticsPreviewSheet: View {
     let preview: SupportDiagnosticsPreview
     let onClose: () -> Void
+    /// Clipboard and save-panel effects, injectable so the export actions can
+    /// be tested without touching the real pasteboard or showing a panel.
+    var copyText: @MainActor (String) -> Bool = { SupportDiagnosticsPreviewSheet.copyToGeneralPasteboard($0) }
+    var chooseDestination: @MainActor () -> URL? = { SupportDiagnosticsPreviewSheet.chooseDestinationWithSavePanel() }
     @State private var status: String?
 
     var body: some View {
@@ -124,8 +140,7 @@ struct SupportDiagnosticsPreviewSheet: View {
             }
             HStack {
                 Button("Copy JSON") {
-                    NSPasteboard.general.clearContents()
-                    status = NSPasteboard.general.setString(preview.text, forType: .string)
+                    status = copyText(preview.text)
                         ? "Copied the preview to the clipboard."
                         : "Could not copy diagnostics."
                 }
@@ -141,10 +156,7 @@ struct SupportDiagnosticsPreviewSheet: View {
     }
 
     private func save() {
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "TaskScope-diagnostics.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard let url = chooseDestination() else { return }
         do {
             try preview.save(to: url)
             status = "Saved the preview."
@@ -152,5 +164,18 @@ struct SupportDiagnosticsPreviewSheet: View {
             // Filesystem errors can contain usernames and destination paths.
             status = "Could not save diagnostics. Choose another destination and try again."
         }
+    }
+
+    static func copyToGeneralPasteboard(_ text: String) -> Bool {
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    static func chooseDestinationWithSavePanel() -> URL? {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "TaskScope-diagnostics.json"
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
     }
 }

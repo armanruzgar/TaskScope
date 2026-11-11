@@ -64,8 +64,13 @@ final class NotificationBaselineTests: XCTestCase {
         XCTAssertFalse(service.isAvailable)
         await service.requestAuthorization()
         await service.refreshAuthorizationStatus()
-        service.prime(initialRunningNames: ["Example"])
-        service.diffAndNotify(currentRunningNames: ["Example", "Other"])
+        let preset = WatchedAppPreset(
+            displayName: "Example", mainProcessName: "Example", helperProcessNames: ["Other"],
+            protectedProcessNames: [], appPath: "/Applications/Example.app"
+        )
+        service.prime([WatchedAppSnapshot(preset: preset, runningNames: ["Example"])])
+        service.diffAndNotify([WatchedAppSnapshot(preset: preset, runningNames: ["Example", "Other"])])
+        await service.refreshAuthorizationIfUndeliverable()
 
         XCTAssertEqual(service.authorizationState, .unknown)
     }
@@ -73,6 +78,9 @@ final class NotificationBaselineTests: XCTestCase {
     func testForegroundPresentationUsesBannerWithoutSound() {
         let options = NotificationService.foregroundPresentationOptions
         XCTAssertTrue(options.contains(.banner))
+        // Without .list a notification that arrives while TaskScope is
+        // frontmost is shown once and not kept in Notification Center.
+        XCTAssertTrue(options.contains(.list))
         XCTAssertFalse(options.contains(.sound))
     }
 
@@ -83,21 +91,19 @@ final class NotificationBaselineTests: XCTestCase {
         var events: [String] = []
 
         let staleToken = coordinator.beginConfiguration(
-            enabled: true,
             setDeliveryEnabled: {
                 deliveryEnabled = $0
                 events.append("delivery:\($0)")
             }
         )
         _ = coordinator.beginConfiguration(
-            enabled: false,
             setDeliveryEnabled: { deliveryEnabled = $0 }
         )
 
         XCTAssertFalse(
             coordinator.completeEnabledConfiguration(
                 token: staleToken,
-                currentRunningNames: { ["Stale"] },
+                currentBaseline: { ["Stale"] },
                 primeBaseline: { _ in events.append("stale-prime") },
                 setDeliveryEnabled: { deliveryEnabled = $0 }
             )
@@ -106,7 +112,6 @@ final class NotificationBaselineTests: XCTestCase {
         XCTAssertFalse(events.contains("stale-prime"))
 
         let currentToken = coordinator.beginConfiguration(
-            enabled: true,
             setDeliveryEnabled: {
                 deliveryEnabled = $0
                 events.append("delivery:\($0)")
@@ -115,8 +120,8 @@ final class NotificationBaselineTests: XCTestCase {
         XCTAssertTrue(
             coordinator.completeEnabledConfiguration(
                 token: currentToken,
-                currentRunningNames: { ["Current"] },
-                primeBaseline: { names in events.append("prime:\(names.sorted())") },
+                currentBaseline: { ["Current"] },
+                primeBaseline: { (names: Set<String>) in events.append("prime:\(names.sorted())") },
                 setDeliveryEnabled: {
                     deliveryEnabled = $0
                     events.append("delivery:\($0)")

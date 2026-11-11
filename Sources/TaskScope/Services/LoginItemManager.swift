@@ -58,10 +58,20 @@ final class LoginItemManager: ObservableObject {
     }
 
     private let service: any LoginItemServicing
+    /// How long to wait before re-reading the state after a change, so a
+    /// state macOS settles shortly after the call (such as Requires Approval)
+    /// reaches the UI. Injectable for tests.
+    private let verificationDelay: @Sendable () async throws -> Void
     private var delayedRefreshTask: Task<Void, Never>?
 
-    init(service: any LoginItemServicing = SystemLoginItemService()) {
+    init(
+        service: any LoginItemServicing = SystemLoginItemService(),
+        verificationDelay: @escaping @Sendable () async throws -> Void = {
+            try await Task.sleep(nanoseconds: 750_000_000)
+        }
+    ) {
         self.service = service
+        self.verificationDelay = verificationDelay
         refresh()
     }
 
@@ -109,12 +119,14 @@ final class LoginItemManager: ObservableObject {
     }
 
     private func scheduleVerification() {
+        let verificationDelay = verificationDelay
         delayedRefreshTask = Task { [weak self] in
             do {
-                try await Task.sleep(nanoseconds: 750_000_000)
+                try await verificationDelay()
             } catch {
                 return
             }
+            guard !Task.isCancelled else { return }
             self?.refresh()
         }
     }

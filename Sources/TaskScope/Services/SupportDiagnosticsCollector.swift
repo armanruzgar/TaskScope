@@ -48,11 +48,19 @@ struct SupportDiagnosticsCollector {
     }
 
     @MainActor
-    static func permissions(notificationsEnabled: Bool?) async -> SupportDiagnosticsReport.Permissions {
-        let service = NotificationService.shared
-        await service.refreshAuthorizationStatus()
+    static func permissions(
+        notificationsEnabled: Bool?,
+        authorization: @MainActor () async -> NotificationService.AuthorizationState = {
+            let service = NotificationService.shared
+            await service.refreshAuthorizationStatus()
+            return service.authorizationState
+        },
+        accessibility: @MainActor () -> Bool = { AXIsProcessTrusted() },
+        loginState: @MainActor () -> LoginItemState = { SystemLoginItemService().state }
+    ) async -> SupportDiagnosticsReport.Permissions {
+        let authorizationState = await authorization()
         let notifications: SupportDiagnosticsReport.Permissions.Notification
-        switch service.authorizationState {
+        switch authorizationState {
         case .unknown: notifications = .unknown
         case .notDetermined: notifications = .notRequested
         case .denied: notifications = .denied
@@ -60,7 +68,7 @@ struct SupportDiagnosticsCollector {
         case .provisional: notifications = .provisional
         }
         let login: SupportDiagnosticsReport.Permissions.LoginItem
-        switch SystemLoginItemService().state {
+        switch loginState() {
         case .notRegistered: login = .off
         case .enabled: login = .on
         case .requiresApproval: login = .requiresApproval
@@ -68,7 +76,7 @@ struct SupportDiagnosticsCollector {
         }
         return .init(
             notifications: notifications, notificationsEnabledInApp: notificationsEnabled,
-            accessibilityGranted: AXIsProcessTrusted(), launchAtLogin: login
+            accessibilityGranted: accessibility(), launchAtLogin: login
         )
     }
 }

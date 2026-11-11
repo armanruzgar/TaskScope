@@ -11,18 +11,44 @@ struct InstallationHealthRuntime: Sendable {
     var paths: @Sendable ([WatchedAppPreset]) -> [HealthPathFinding]
     var recoveries: @MainActor @Sendable () -> Set<InstallationHealthReport.Recovery>
     var now: @Sendable () -> Date = { Date() }
+    /// How long a collection waits for the file and signature probes.
+    var probeTimeout: TimeInterval = 10
+    var probeRunner = InstallationHealthProbeRunner()
 
     func collect(_ input: InstallationHealthInput) async -> InstallationHealthReport {
-        // File and signature work runs outside the main actor. Cancellation
-        // invalidates publication; probes never write or prompt for permission.
+        // File and signature work runs on the probe runner's own queue, never
+        // on Swift's cooperative pool, and is waited for only until a deadline.
+        // Cancellation invalidates publication; probes never write or prompt
+        // for permission.
         let checkedAt = now()
-        let bundleEvidence = bundle()
-        let pathEvidence = input.presetsReadable ? paths(input.presets) : []
-        let permissionEvidence = await permissions()
-        return await InstallationHealthAssessment.report(
-            input: input, permissions: permissionEvidence, bundle: bundleEvidence,
-            paths: pathEvidence, recoveries: recoveries(), checkedAt: checkedAt
+        let presets = input.presets
+        let readsPaths = input.presetsReadable
+        let paths = paths
+        let probes = await probeRunner.run(
+            timeout: probeTimeout,
+            bundle: bundle,
+            paths: { readsPaths ? paths(presets) : [] }
         )
+        let unfinishedDetail = probes.earlierProbePending
+            ? "An earlier check is still waiting for the file system; a volume may be unresponsive. Refresh Health to try again later."
+            : "The check did not finish in time; a volume may be unresponsive. Refresh Health to try again."
+        let permissionEvidence = await permissions()
+        var report = await InstallationHealthAssessment.report(
+            input: input, permissions: permissionEvidence,
+            bundle: probes.bundle ?? HealthBundleEvidence(
+                identity: .unavailable, identityDetail: unfinishedDetail,
+                signature: .unverified, metadata: .unavailable
+            ),
+            paths: probes.paths ?? [], recoveries: recoveries(), checkedAt: checkedAt
+        )
+        var unfinished: Set<InstallationHealthReport.Category> = []
+        if probes.bundle == nil { unfinished.formUnion([.signing, .appIntents, .bundleIdentity]) }
+        if readsPaths, probes.paths == nil { unfinished.insert(.presetPaths) }
+        for index in report.findings.indices where unfinished.contains(report.findings[index].category) {
+            report.findings[index].state = .unavailable
+            report.findings[index].detail = unfinishedDetail
+        }
+        return report
     }
 
     static let live = Self(
@@ -40,6 +66,91 @@ struct InstallationHealthRuntime: Sendable {
         paths: { InstallationHealthProbe.inspectPaths($0) },
         recoveries: { InstallationHealthRecovery.available() }
     )
+}
+
+/// Runs the blocking Health probes on one dedicated serial queue. open, stat
+/// and read on a volume that stopped answering can block indefinitely, and on
+/// the cooperative pool every such call would pin one of its few threads.
+/// The caller waits only until a deadline; evidence that finished by then is
+/// kept. While a probe is still blocked, later runs start nothing new and
+/// report the checks as pending.
+final class InstallationHealthProbeRunner: @unchecked Sendable {
+    struct Result: Sendable {
+        var bundle: HealthBundleEvidence?
+        var paths: [HealthPathFinding]?
+        var earlierProbePending = false
+    }
+
+    private let lock = NSLock()
+    private var probeInFlight = false
+    private let queue = DispatchQueue(label: "TaskScope.InstallationHealthProbes", qos: .userInitiated)
+
+    func run(
+        timeout: TimeInterval,
+        bundle: @escaping @Sendable () -> HealthBundleEvidence,
+        paths: @escaping @Sendable () -> [HealthPathFinding]
+    ) async -> Result {
+        let admitted = lock.withLock {
+            guard !probeInFlight else { return false }
+            probeInFlight = true
+            return true
+        }
+        guard admitted else { return Result(earlierProbePending: true) }
+
+        let progress = ProbeProgress()
+        queue.async { [self] in
+            progress.setBundle(bundle())
+            progress.setPaths(paths())
+            lock.withLock { probeInFlight = false }
+            progress.finish()
+        }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + max(0, timeout)) {
+            progress.finish()
+        }
+        return await withTaskCancellationHandler {
+            await progress.result()
+        } onCancel: {
+            progress.finish()
+        }
+    }
+
+    /// Evidence gathered so far, delivered once: when the probes complete, at
+    /// the deadline, or on cancellation, whichever comes first.
+    private final class ProbeProgress: @unchecked Sendable {
+        private let lock = NSLock()
+        private var current = Result()
+        private var delivered: Result?
+        private var waiter: CheckedContinuation<Result, Never>?
+
+        func setBundle(_ bundle: HealthBundleEvidence) {
+            lock.withLock { current.bundle = bundle }
+        }
+
+        func setPaths(_ paths: [HealthPathFinding]) {
+            lock.withLock { current.paths = paths }
+        }
+
+        func finish() {
+            let (continuation, result): (CheckedContinuation<Result, Never>?, Result) = lock.withLock {
+                if delivered == nil { delivered = current }
+                let continuation = waiter
+                waiter = nil
+                return (continuation, delivered ?? current)
+            }
+            continuation?.resume(returning: result)
+        }
+
+        func result() async -> Result {
+            await withCheckedContinuation { continuation in
+                let ready: Result? = lock.withLock {
+                    if let delivered { return delivered }
+                    waiter = continuation
+                    return nil
+                }
+                if let ready { continuation.resume(returning: ready) }
+            }
+        }
+    }
 }
 
 enum InstallationHealthProbe {
@@ -170,8 +281,9 @@ enum InstallationHealthProbe {
             .allSatisfy { text.contains($0) }
     }
 
-    static func inspectBundle() -> HealthBundleEvidence {
-        let app = Bundle.main.bundleURL
+    /// Inspects the running app's bundle. `app` is a parameter so tests can
+    /// point the same production checks at fixture bundles.
+    static func inspectBundle(at app: URL = Bundle.main.bundleURL) -> HealthBundleEvidence {
         guard app.pathExtension.lowercased() == "app" else {
             return .init(identity: .unavailable, identityDetail: "Running outside a packaged .app. Use the installed TaskScope app for permission and integration checks.", signature: .unverified, metadata: .unavailable)
         }
@@ -264,28 +376,60 @@ enum InstallationHealthRecovery {
         return url
     }
 
+    /// The workspace effects behind recovery, injectable so the destination
+    /// checks and navigation can be tested without opening anything.
+    @MainActor
+    struct Environment {
+        var systemSettingsURL: @MainActor () -> URL?
+        var runningAppURL: @MainActor () -> URL?
+        var finderAvailable: @MainActor () -> Bool
+        var openApplication: @MainActor (URL) async throws -> Void
+        var revealInFinder: @MainActor (URL) -> Void
+
+        static let live = Environment(
+            systemSettingsURL: { InstallationHealthRecovery.systemSettingsURL() },
+            runningAppURL: { InstallationHealthRecovery.runningAppURL() },
+            finderAvailable: {
+                NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") != nil
+            },
+            openApplication: { url in
+                _ = try await NSWorkspace.shared.openApplication(at: url, configuration: .init())
+            },
+            revealInFinder: { NSWorkspace.shared.activateFileViewerSelecting([$0]) }
+        )
+    }
+
     static func available() -> Set<InstallationHealthReport.Recovery> {
+        available(in: .live)
+    }
+
+    static func available(in environment: Environment) -> Set<InstallationHealthReport.Recovery> {
         var result: Set<InstallationHealthReport.Recovery> = [.reviewPresets]
-        if systemSettingsURL() != nil { result.insert(.systemSettings) }
-        if runningAppURL() != nil,
-           NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") != nil {
+        if environment.systemSettingsURL() != nil { result.insert(.systemSettings) }
+        if environment.runningAppURL() != nil, environment.finderAvailable() {
             result.insert(.revealApp)
         }
         return result
     }
 
     static func perform(_ action: InstallationHealthReport.Recovery) async -> Bool {
+        await perform(action, in: .live)
+    }
+
+    static func perform(
+        _ action: InstallationHealthReport.Recovery,
+        in environment: Environment
+    ) async -> Bool {
         switch action {
         case .systemSettings:
-            guard let url = systemSettingsURL() else { return false }
+            guard let url = environment.systemSettingsURL() else { return false }
             do {
-                _ = try await NSWorkspace.shared.openApplication(at: url, configuration: .init())
+                try await environment.openApplication(url)
                 return true
             } catch { return false }
         case .revealApp:
-            guard let url = runningAppURL(),
-                  NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.finder") != nil else { return false }
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            guard let url = environment.runningAppURL(), environment.finderAvailable() else { return false }
+            environment.revealInFinder(url)
             return true // Request submitted; Finder provides no completion result.
         case .reviewPresets:
             return true // The owning Settings view handles this local navigation.
