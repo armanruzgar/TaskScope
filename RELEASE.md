@@ -183,6 +183,12 @@ Record evidence for every locally testable item:
   Monitor handoff, using an appropriate test environment;
 - About/onboarding use the packaged icon; changing the watched-status interval
   preserves history without immediate samples;
+- the menu-bar icon's marks on macOS 14 and on 26 or later, in light and dark
+  menu bars: plain, a running watched app, a kept-off service running again, a
+  failed read (stale) and a fresh launch (unknown), and a waiting Auto-Stop
+  prompt; the status item keeps its width in every state, VoiceOver reads each
+  state, and turning **Show status in the menu-bar icon** off stops background
+  reads when notifications and Keep Off are off;
 - light/dark appearance, keyboard operation, VoiceOver labels, and destructive
   confirmations. In tree mode, focus search, click the highlighted row again,
   and verify the arrows (Left and Right collapse and expand), Space, Return,

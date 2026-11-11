@@ -56,6 +56,14 @@ struct GeneralSettingsTab: View {
             }
             .disabled(settings.isReadOnlyAfterCorruption)
 
+            Section("Menu Bar") {
+                Toggle("Show status in the menu-bar icon", isOn: $settings.showsMenuBarStatus)
+                Text("The icon marks a running watched app, a kept-off preset's service that is running again, a watched status TaskScope could not verify, and a waiting Auto-Stop prompt. TaskScope then reads watched status in the background at the watched status interval.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(settings.isReadOnlyAfterCorruption)
+
             Section("Notifications") {
                 Toggle("Notify on watched process changes", isOn: $settings.enableNotifications)
                 LabeledContent("System permission", value: notificationService.authorizationState.label)

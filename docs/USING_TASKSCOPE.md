@@ -26,13 +26,30 @@ itself and reloads at every watched-status read.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while notifications or Keep GlobalProtect Off are on; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
+| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while the menu-bar icon shows status, notifications are on, or Keep GlobalProtect Off is on; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
 | Auto-refresh process list | Off | Load the process list without **Load Processes** and reload it at every watched-status read |
 | Show all processes | Off | List every matching process in any sort order and in tree view; the process list limit then does not apply |
 | Process list limit | 80 rows (10 to 200, in steps of 10) | Rows shown while Show all processes is off; a longer result shows **Showing N of M** |
 | Highlight Thresholds: CPU % | 30 % | Rows at or above either threshold are highlighted and match the **Hot** filter |
 | Highlight Thresholds: Memory (MB) | 1024 MB | See CPU % |
+| Show status in the menu-bar icon | On | The menu-bar icon marks TaskScope's state, as described below. While it is on and a preset exists, TaskScope reads watched status in the background; turned off, the icon stays plain |
 | Notify on watched process changes | Off | Notifications for watched presets; see [notifications](#history-notifications-and-hotkeys) |
+
+With **Show status in the menu-bar icon** on, a mark in the corner of the
+menu-bar icon shows what most needs you while the popover is closed:
+
+| Mark | State |
+| --- | --- |
+| None | Nothing below applies |
+| Dot | A watched preset's main app is running |
+| Warning triangle | Keep Off is on for a preset, but its service or user agent is running again; use **Apply Keep Off** |
+| Question mark | TaskScope could not verify watched status: it is unknown (not read yet) or stale (the last read failed) |
+| Bell | An Auto-Stop prompt is waiting in the popover |
+
+When several apply, the bell comes first, then the question mark (stale
+snapshots cannot show what is running), then the warning, then the dot.
+VoiceOver reads the state with the icon's name, for example "TaskScope, watched
+app running". The icon keeps the same size in every state.
 
 The onboarding window opens on interactive launches until you choose **Get
 Started**; **Help > Welcome to TaskScope** shows it again. It introduces

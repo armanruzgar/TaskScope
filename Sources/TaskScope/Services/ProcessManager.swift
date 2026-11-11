@@ -172,8 +172,9 @@ final class ProcessManager: ObservableObject {
 
     /// Configures the poll. `backgroundActivity` says whether anything needs
     /// the poll while no window or popover shows status: notifications diff its
-    /// reads and Keep Off enforcement runs on its ticks. Without it, polling
-    /// runs only between `beginObservingStatus` and `endObservingStatus`.
+    /// reads, Keep Off enforcement runs on its ticks, and the menu-bar icon
+    /// shows the status they read. Without it, polling runs only between
+    /// `beginObservingStatus` and `endObservingStatus`.
     func setPolling(interval: TimeInterval, includeProcessList: Bool, backgroundActivity: Bool = true) {
         isPollingConfigured = true
         pollInterval = max(2, interval)

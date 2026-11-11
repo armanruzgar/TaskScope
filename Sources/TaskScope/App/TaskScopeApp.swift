@@ -535,15 +535,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
 /// The status item's label. MenuBarExtra hosts it in an NSStatusBarButton that
 /// does not take the Label's title for accessibility, so without an explicit
-/// label VoiceOver announces the symbol's name ("Ecg Waveform Path").
+/// label VoiceOver announces the image instead of naming TaskScope and its state.
 struct TaskScopeStatusItemLabel: View {
+    var status: MenuBarStatus = .normal
+
     var body: some View {
         // MenuBarExtra may size its native status item from rendered image
-        // content, including a hidden badge. Keep this image and identity
-        // constant; the popover already displays the live preset status.
-        Label("TaskScope", systemImage: "waveform.path.ecg")
-            .labelStyle(.iconOnly)
-            .accessibilityLabel("TaskScope")
+        // content. Every state's image has the same 18 × 18 pt canvas, so the
+        // item's width never changes with the state.
+        Label {
+            Text("TaskScope")
+        } icon: {
+            Image(nsImage: MenuBarStatusIcon.image(for: status))
+        }
+        .labelStyle(.iconOnly)
+        .accessibilityLabel(status.accessibilityLabel)
+    }
+}
+
+/// Follows the stores the menu-bar state comes from, so the status item shows
+/// TaskScope's state while the popover is closed. With the setting off the
+/// icon stays plain.
+struct TaskScopeMenuBarStatusLabel: View {
+    @ObservedObject var processManager: ProcessManager
+    @ObservedObject var watchedApps: WatchedAppsStore
+    @ObservedObject var autoStopRules: AutoStopRulesStore
+    @ObservedObject var settings: SettingsStore
+
+    var body: some View {
+        TaskScopeStatusItemLabel(status: status)
+    }
+
+    var status: MenuBarStatus {
+        guard settings.showsMenuBarStatus else { return .normal }
+        let manager = processManager
+        return MenuBarStatus.resolve(
+            presets: watchedApps.presets,
+            snapshots: manager.snapshots,
+            availability: manager.watchedStatusAvailability,
+            isKeptOff: { manager.isPresetKeptOffProvider?($0) ?? false },
+            pendingPromptCount: autoStopRules.pendingPrompts.count
+        )
     }
 }
 
@@ -757,7 +789,12 @@ struct TaskScopeApp: App {
 
     @ViewBuilder
     private var menuBarLabel: some View {
-        TaskScopeStatusItemLabel()
+        TaskScopeMenuBarStatusLabel(
+            processManager: processManager,
+            watchedApps: watchedApps,
+            autoStopRules: autoStopRules,
+            settings: settings
+        )
             .task {
                 await bootstrapRuntimeIfNeeded()
                 if appDelegate.windowPresentationAllowed {

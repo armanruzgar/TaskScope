@@ -120,8 +120,15 @@ final class TaskScopeRuntime {
         processManager.setPolling(
             interval: settings.refreshIntervalSeconds,
             includeProcessList: settings.autoRefreshProcessList,
-            backgroundActivity: settings.enableNotifications || settings.keepGlobalProtectOff
+            backgroundActivity: needsBackgroundReads
         )
+    }
+
+    /// Notifications diff the background reads, Keep Off enforcement runs on
+    /// them, and the menu-bar icon shows the watched status they keep current.
+    private var needsBackgroundReads: Bool {
+        settings.enableNotifications || settings.keepGlobalProtectOff
+            || (settings.showsMenuBarStatus && !watchedApps.presets.isEmpty)
     }
 
     /// The same reactions the menu-bar label's `onChange` handlers had. A
@@ -137,6 +144,13 @@ final class TaskScopeRuntime {
             runtime.configurePolling()
         }
         react(to: settings.$keepGlobalProtectOff) { runtime in
+            runtime.configurePolling()
+        }
+        react(to: settings.$showsMenuBarStatus) { runtime in
+            runtime.configurePolling()
+        }
+        // The icon needs background reads only while there is a preset to show.
+        react(to: watchedApps.$presets.map(\.isEmpty).removeDuplicates()) { runtime in
             runtime.configurePolling()
         }
         react(to: settings.$sortKeyRaw) { runtime in
@@ -160,10 +174,10 @@ final class TaskScopeRuntime {
         }
     }
 
-    private func react<Value: Equatable>(
-        to publisher: Published<Value>.Publisher,
+    private func react<Changes: Publisher>(
+        to publisher: Changes,
         _ reaction: @escaping @MainActor (TaskScopeRuntime) -> Void
-    ) {
+    ) where Changes.Output: Equatable, Changes.Failure == Never {
         publisher
             .dropFirst()
             .removeDuplicates()

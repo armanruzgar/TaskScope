@@ -202,6 +202,39 @@ final class Batch02RuntimeTests: XCTestCase {
         XCTAssertFalse(rig.manager.enableNotifications)
     }
 
+    /// L11-21: the menu-bar icon shows watched status, so while its setting is
+    /// on the poll runs with no view open; with it off nothing else needs it.
+    func testMenuBarStatusKeepsBackgroundReadsWhileItIsShown() async {
+        let rig = Batch02RuntimeRig()
+        defer { rig.tearDown() }
+        XCTAssertTrue(rig.stores.settings.showsMenuBarStatus, "on by default")
+        XCTAssertFalse(rig.stores.settings.enableNotifications || rig.stores.settings.keepGlobalProtectOff)
+        await rig.start(.interactive)
+        await waitUntil { !rig.polling.intervals.isEmpty }
+        XCTAssertEqual(rig.polling.intervals, [10], "The icon needs the poll although no view is open")
+
+        rig.stores.settings.showsMenuBarStatus = false
+        await waitUntil { rig.polling.cancellations > 0 }
+        XCTAssertEqual(rig.polling.cancellations, 1, "Nothing else needs a background read")
+        XCTAssertEqual(rig.polling.intervals, [10])
+
+        rig.stores.settings.showsMenuBarStatus = true
+        await waitUntil { rig.polling.intervals.count == 2 }
+        XCTAssertEqual(rig.polling.intervals, [10, 10])
+    }
+
+    /// L11-21: with no preset there is nothing for the icon to show.
+    func testMenuBarStatusNeedsNoBackgroundReadsWithoutPresets() async throws {
+        let defaults = batch02Defaults()
+        defaults.set(try JSONEncoder().encode([WatchedAppPreset]()), forKey: WatchedAppsStore.defaultPersistenceKey)
+        let rig = Batch02RuntimeRig(defaults: defaults)
+        defer { rig.tearDown() }
+        XCTAssertTrue(rig.stores.watchedApps.presets.isEmpty, "precondition: an empty stored preset list")
+        await rig.start(.interactive)
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(rig.polling.intervals, [], "No preset, no background read")
+    }
+
     /// T02-6: stopping the runtime (what quitting does) saves a pending search.
     func testStopSavesPendingSettingsWritesAndStopsPolling() async {
         let rig = Batch02RuntimeRig()

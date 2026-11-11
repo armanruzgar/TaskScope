@@ -58,6 +58,11 @@ final class SettingsStore: ObservableObject {
     @Published var treeMode: Bool {
         didSet { save() }
     }
+    /// The menu-bar icon shows TaskScope's state. While it does, watched status
+    /// is read in the background so the icon stays current.
+    @Published var showsMenuBarStatus: Bool {
+        didSet { save() }
+    }
     @Published private(set) var recoveryMessage: String?
 
     private let persistence: RecoveringCodableStorage<CodableSettings>
@@ -111,6 +116,7 @@ final class SettingsStore: ObservableObject {
         sortDirectionRaw = decoded.sortDirectionRaw
         filterModeRaw = decoded.filterModeRaw
         treeMode = decoded.treeMode
+        showsMenuBarStatus = decoded.showsMenuBarStatus
     }
 
     var filterMode: ProcessFilterMode {
@@ -230,7 +236,8 @@ final class SettingsStore: ObservableObject {
             sortKeyRaw: sortKeyRaw,
             sortDirectionRaw: sortDirectionRaw,
             filterModeRaw: filterModeRaw,
-            treeMode: treeMode
+            treeMode: treeMode,
+            showsMenuBarStatus: showsMenuBarStatus
         )
     }
 
@@ -307,6 +314,7 @@ final class SettingsStore: ObservableObject {
         var sortDirectionRaw: String
         var filterModeRaw: String
         var treeMode: Bool
+        var showsMenuBarStatus: Bool
 
         private enum CodingKeys: String, CodingKey {
             case schemaVersion
@@ -323,6 +331,7 @@ final class SettingsStore: ObservableObject {
             case sortDirectionRaw
             case filterModeRaw
             case treeMode
+            case showsMenuBarStatus
         }
 
         init(
@@ -339,7 +348,8 @@ final class SettingsStore: ObservableObject {
             sortKeyRaw: String,
             sortDirectionRaw: String = "",
             filterModeRaw: String = ProcessFilterMode.all.rawValue,
-            treeMode: Bool = false
+            treeMode: Bool = false,
+            showsMenuBarStatus: Bool = true
         ) {
             self.schemaVersion = schemaVersion
             self.refreshIntervalSeconds = refreshIntervalSeconds
@@ -355,6 +365,7 @@ final class SettingsStore: ObservableObject {
             self.sortDirectionRaw = sortDirectionRaw
             self.filterModeRaw = filterModeRaw
             self.treeMode = treeMode
+            self.showsMenuBarStatus = showsMenuBarStatus
         }
 
         init(from decoder: Decoder) throws {
@@ -418,6 +429,12 @@ final class SettingsStore: ObservableObject {
                 Bool.self,
                 forKey: .treeMode
             ) ?? defaults.treeMode
+            // Added after 1.1.0: a payload without it shows the state, and
+            // older builds ignore the field and keep it when they save.
+            showsMenuBarStatus = try container.decodeIfPresent(
+                Bool.self,
+                forKey: .showsMenuBarStatus
+            ) ?? defaults.showsMenuBarStatus
         }
 
         func normalized() -> CodableSettings {
