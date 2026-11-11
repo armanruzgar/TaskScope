@@ -489,11 +489,18 @@ final class Batch10WiringTests: XCTestCase {
         let startTime = try XCTUnwrap(SystemProcessDetailReader.parseDetailLine(line, expectedStartTime: nil)).startTime
         let reader = SystemProcessDetailReader()
 
-        let current = Batch10.process(pid, startTime: startTime)
+        // The identity includes the kernel executable path, so the row carries
+        // this process's real one.
+        var current = Batch10.process(pid, startTime: startTime)
+        current.executablePath = ProcessListReader.executablePath(for: pid)
         guard case .loaded(let detail) = await reader.readResult(for: current) else {
             return XCTFail("This test process must load")
         }
         XCTAssertEqual(detail.pid, pid)
+        // L11-18: the same PID and start time running another executable is
+        // another process.
+        let otherExecutable = await reader.readResult(for: Batch10.process(pid, startTime: startTime))
+        XCTAssertEqual(otherExecutable, .identityChanged)
 
         let earlierOccupant = Batch10.process(pid, startTime: "Mon Jan  1 00:00:00 2001")
         let changed = await reader.readResult(for: earlierOccupant)

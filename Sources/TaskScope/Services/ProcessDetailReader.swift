@@ -38,6 +38,7 @@ struct SystemProcessDetailReader: ProcessDetailReading {
     static let detailColumnCount = 8
 
     var commandLineReader: any ProcessCommandLineReading = SystemProcessCommandLineReader()
+    var kernelReads = ProcessDetailKernelReads()
 
     func commandLine(for identity: ProcessIdentity) async -> CommandLineReadResult {
         await commandLineReader.commandLine(for: identity)
@@ -87,11 +88,110 @@ struct SystemProcessDetailReader: ProcessDetailReading {
         }
         // A PID can be reused between rendering the row and requesting details.
         guard detail.startTime == process.identity.startTime else { return .identityChanged }
+        switch readKernelDetails(for: process.identity, parentPID: detail.parentPID) {
+        case .gone:
+            return .gone
+        case .identityChanged:
+            return .identityChanged
+        case .read(let kernel):
+            detail.executablePath = kernel.executablePath
+            detail.parent = kernel.parent
+            detail.threadCount = kernel.threadCount
+            detail.openFiles = kernel.openFiles
+            detail.codeSignature = kernel.codeSignature
+        }
         // The command line is read only for the detail sheet the user asked
         // for, and kept only there: it can contain secrets. The reader checks
         // the row's identity again around its own read.
         detail.commandLine = await commandLineReader.commandLine(for: process.identity)
         return .loaded(detail)
+    }
+
+    /// The extra rows' kernel reads, between two checks that the PID still
+    /// has the row's start time (and executable path, when both are known),
+    /// so no value can come from a later occupant of the PID.
+    enum KernelDetailsRead: Equatable {
+        case read(KernelDetails)
+        case gone
+        case identityChanged
+    }
+
+    struct KernelDetails: Equatable {
+        var executablePath: ProcessDetailValue<String>
+        var parent: ProcessParent
+        var threadCount: ProcessDetailValue<Int>
+        var openFiles: ProcessDetailValue<ProcessOpenFiles>
+        var codeSignature: ProcessCodeSignature
+
+        static func unavailable(_ reason: String) -> KernelDetails {
+            KernelDetails(
+                executablePath: .unavailable(reason), parent: .unavailable(reason),
+                threadCount: .unavailable(reason), openFiles: .unavailable(reason),
+                codeSignature: .unavailable(reason)
+            )
+        }
+    }
+
+    func readKernelDetails(for identity: ProcessIdentity, parentPID: Int32) -> KernelDetailsRead {
+        let before: KernelProcessEntry
+        switch kernelReads.entry(identity.pid) {
+        case .notFound:
+            return .gone
+        case .failed(let code):
+            return .read(.unavailable("The process table could not be read (\(String(cString: strerror(code))))."))
+        case .found(let entry):
+            guard !entry.isZombie else { return .gone }
+            guard entry.startTimeText == identity.startTime else { return .identityChanged }
+            before = entry
+        }
+        let path = kernelReads.executablePath(identity.pid)
+        if let path, let expected = identity.executablePath, !Self.samePath(path, expected) {
+            return .identityChanged
+        }
+        let details = KernelDetails(
+            executablePath: path.map { .available($0) } ?? .unavailable("macOS did not report it."),
+            parent: parent(parentPID, of: before),
+            threadCount: kernelReads.threadCount(identity.pid),
+            openFiles: kernelReads.openFiles(identity.pid),
+            codeSignature: kernelReads.codeSignature(identity.pid)
+        )
+        switch kernelReads.entry(identity.pid) {
+        case .found(let after) where !after.isZombie && after.startTimeText == identity.startTime:
+            if let path, let pathAfter = kernelReads.executablePath(identity.pid), !Self.samePath(path, pathAfter) {
+                return .identityChanged
+            }
+            return .read(details)
+        case .found(let after) where after.isZombie:
+            return .gone
+        case .notFound:
+            return .gone
+        case .found:
+            return .identityChanged
+        case .failed(let code):
+            return .read(.unavailable("The process table could not be read (\(String(cString: strerror(code))))."))
+        }
+    }
+
+    /// The parent PID names the parent only while it still belongs to a
+    /// process that started no later than this one.
+    private func parent(_ parentPID: Int32, of child: KernelProcessEntry) -> ProcessParent {
+        guard parentPID > 0 else { return .unavailable("This process has no parent process.") }
+        switch kernelReads.entry(parentPID) {
+        case .notFound:
+            return .exited
+        case .failed(let code):
+            return .unavailable("It could not be read (\(String(cString: strerror(code)))).")
+        case .found(let parent):
+            let startedFirst = (parent.startSeconds, parent.startMicroseconds) <= (child.startSeconds, child.startMicroseconds)
+            guard !parent.isZombie, startedFirst else { return .exited }
+            let name = kernelReads.executablePath(parentPID).map { ($0 as NSString).lastPathComponent }
+            return .running(name: name.flatMap { $0.isEmpty ? nil : $0 } ?? parent.command)
+        }
+    }
+
+    private static func samePath(_ kernelPath: String, _ identityPath: String) -> Bool {
+        URL(fileURLWithPath: kernelPath).standardizedFileURL.path
+            == URL(fileURLWithPath: identityPath).standardizedFileURL.path
     }
 
     /// `pid ppid user lstart(5) comm`. The command is the raw text after the

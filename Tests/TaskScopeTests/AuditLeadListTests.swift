@@ -72,6 +72,10 @@ final class AuditLeadListTests: XCTestCase {
         process.netOutKB = 3.5
         process.diskReadBytes = 2 * 1_048_576
         process.diskWriteBytes = 524_288
+        process.netInRateKBps = 12.5
+        process.netOutRateKBps = 3.5
+        process.diskReadRateBytesPerSecond = 2 * 1_048_576
+        process.diskWriteRateBytesPerSecond = 524_288
         func summary(expanded: Bool) throws -> String {
             let row = ProcessRow(
                 process: process, isCurrentProcess: false, isSelected: false, isKeyboardSelected: false,
@@ -83,8 +87,8 @@ final class AuditLeadListTests: XCTestCase {
         }
         XCTAssertEqual(
             try summary(expanded: true),
-            "CPU 1.0 percent, memory 128 megabytes, parent PID 1288, network received 12.5, sent 3.5 kilobytes, "
-                + "disk read 2.0, written 0.5 megabytes"
+            "CPU 1.0 percent, memory 128 megabytes, parent PID 1288, user \(ProcessOwnerNames.name(for: getuid())), "
+                + "network received 12.5, sent 3.5 kilobytes per second, disk read 2.0, written 0.5 megabytes per second"
         )
         XCTAssertEqual(try summary(expanded: false), "CPU 1.0 percent, memory 128 megabytes",
                        "the popover has no such columns")

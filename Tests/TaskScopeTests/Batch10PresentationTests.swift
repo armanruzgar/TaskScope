@@ -31,10 +31,13 @@ final class Batch10PresentationTests: XCTestCase {
     }
 
     // A12-9: a busy process's NET / DISK pair shrinks instead of wrapping.
+    // L11-18: the cells show per-second rates.
     func testTrafficPairsStayOnOneLine() throws {
         var process = Batch10.process(51)
-        process.diskReadBytes = 123_456_789_000
-        process.diskWriteBytes = 98_765_432_000
+        process.netInRateKBps = 123_456_789
+        process.netOutRateKBps = 123_456_789
+        process.diskReadRateBytesPerSecond = 123_456_789_000
+        process.diskWriteRateBytesPerSecond = 98_765_432_000
         let row = ProcessRow(
             process: process, isCurrentProcess: false, isSelected: false, isKeyboardSelected: false,
             isHighlightedCPU: false, isHighlightedMEM: false, showsExpandedMetrics: true,
@@ -263,13 +266,17 @@ final class Batch10PresentationTests: XCTestCase {
         }
         XCTAssertEqual(try header.spacing(), 10)
         XCTAssertEqual(
-            try inspected.find(button: "NET KB TOTAL").help().string(),
-            "Kilobytes received / sent since the process started. Click to sort by Network."
+            try inspected.find(button: "NET KB/S").help().string(),
+            TaskScopePopoverView.networkColumnExplanation + " Click to sort by Network."
         )
+        XCTAssertTrue(TaskScopePopoverView.networkColumnExplanation.hasPrefix("Kilobytes per second received / sent"))
+        XCTAssertNoThrow(try inspected.find(button: "NET KB/S").find(text: "IN / OUT"))
         XCTAssertEqual(
-            try inspected.find(button: "DISK MB TOTAL").help().string(),
-            "Megabytes read / written since the process started. Click to sort by Disk."
+            try inspected.find(button: "DISK MB/S").help().string(),
+            TaskScopePopoverView.diskColumnExplanation + " Click to sort by Disk."
         )
+        XCTAssertTrue(TaskScopePopoverView.diskColumnExplanation.hasPrefix("Megabytes per second read / written"))
+        XCTAssertNoThrow(try inspected.find(button: "DISK MB/S").find(text: "READ / WRITE"))
 
         let cpuHeader = try inspected.find(button: "CPU")
         XCTAssertEqual(try cpuHeader.accessibilityValue().string(), "sorted descending")

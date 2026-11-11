@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// Column widths shared by the list's header and its rows, so every title
+/// sits over its values.
+enum ProcessListColumns {
+    static let pid: CGFloat = 60
+    static let parentPID: CGFloat = 60
+    static let user: CGFloat = 76
+    static let network: CGFloat = 96
+    static let disk: CGFloat = 96
+    static let cpu: CGFloat = 54
+    static let memory: CGFloat = 64
+    static let stopButton: CGFloat = 28
+}
+
 struct ProcessRow: View {
     var process: AppProcess
     var isCurrentProcess: Bool
@@ -80,34 +93,47 @@ struct ProcessRow: View {
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 70, alignment: .trailing)
+                    .frame(width: ProcessListColumns.pid, alignment: .trailing)
                     .accessibilityHidden(true)
 
                 Text(verbatim: String(process.parentPID))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .frame(width: 70, alignment: .trailing)
+                    .frame(width: ProcessListColumns.parentPID, alignment: .trailing)
+                    .accessibilityHidden(true)
+
+                Text(verbatim: process.ownerName ?? "—")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: ProcessListColumns.user, alignment: .leading)
+                    .help(process.ownerName ?? "Owner unknown")
                     .accessibilityHidden(true)
 
                 // A busy process's pair can be wider than the column; shrink it
                 // rather than wrap it onto a second line.
-                Text(metricPair(process.netInKB, process.netOutKB, decimals: 1))
+                Text(metricPair(process.netInRateKBps, process.netOutRateKBps, decimals: 1))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                    .frame(width: 96, alignment: .trailing)
+                    .frame(width: ProcessListColumns.network, alignment: .trailing)
                     .accessibilityHidden(true)
 
-                Text(metricPair(process.diskReadBytes.map { $0 / 1_048_576 }, process.diskWriteBytes.map { $0 / 1_048_576 }, decimals: 1))
+                Text(metricPair(
+                    process.diskReadRateBytesPerSecond.map { $0 / 1_048_576 },
+                    process.diskWriteRateBytesPerSecond.map { $0 / 1_048_576 },
+                    decimals: 1
+                ))
                     .monospacedDigit()
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                    .frame(width: 96, alignment: .trailing)
+                    .frame(width: ProcessListColumns.disk, alignment: .trailing)
                     .accessibilityHidden(true)
             }
 
@@ -115,14 +141,14 @@ struct ProcessRow: View {
                 Text(process.cpu, format: .number.precision(.fractionLength(1))),
                 isHighlighted: isHighlightedCPU
             )
-            .frame(width: 54, alignment: .trailing)
+            .frame(width: ProcessListColumns.cpu, alignment: .trailing)
             .accessibilityHidden(true)
 
             metricValue(
                 Text(process.memoryMB, format: .number.precision(.fractionLength(0))),
                 isHighlighted: isHighlightedMEM
             )
-            .frame(width: 64, alignment: .trailing)
+            .frame(width: ProcessListColumns.memory, alignment: .trailing)
             .accessibilityHidden(true)
 
             Button(role: .destructive) {
@@ -134,7 +160,7 @@ struct ProcessRow: View {
             .disabled(isCurrentProcess)
             .help(isCurrentProcess ? "Use Quit TaskScope" : "Stop Process")
             .accessibilityLabel(isCurrentProcess ? "TaskScope cannot be stopped here" : "Stop \(processDescription)")
-            .frame(width: 28)
+            .frame(width: ProcessListColumns.stopButton)
         }
         .padding(.leading, 16 + leadingInset)
         .padding(.trailing, 16)
@@ -171,11 +197,15 @@ struct ProcessRow: View {
         "\(process.name), PID \(String(process.pid))"
     }
 
-    private func accessibilityTotals(
-        _ name: String, _ firstValue: Double?, _ secondValue: Double?,
+    /// A rate pair for VoiceOver. Without a rate, it says whether one is
+    /// coming (the counters were read once) or the counters are unavailable.
+    private func accessibilityRates(
+        _ name: String, _ firstValue: Double?, _ secondValue: Double?, hasCounters: Bool,
         unit: String, first: String, second: String
     ) -> String {
-        guard let firstValue, let secondValue else { return "\(name) totals unavailable" }
+        guard let firstValue, let secondValue else {
+            return hasCounters ? "\(name) rate shown after the next refresh" : "\(name) unavailable"
+        }
         let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(1))
         return "\(name) \(first) \(firstValue.formatted(format)), \(second) \(secondValue.formatted(format)) \(unit)"
     }
@@ -189,16 +219,21 @@ struct ProcessRow: View {
         var values = ["CPU \(process.cpu.formatted(.number.precision(.fractionLength(1)))) percent"]
         values.append("memory \(process.memoryMB.formatted(.number.precision(.fractionLength(0)))) megabytes")
         if showsExpandedMetrics {
-            // The window's PPID, NET and DISK cells are hidden from VoiceOver
-            // as separate elements, so the row's summary reads them out.
+            // The window's PPID, USER, NET and DISK cells are hidden from
+            // VoiceOver as separate elements, so the row's summary reads them.
             values.append("parent PID \(String(process.parentPID))")
-            values.append(accessibilityTotals(
-                "network", process.netInKB, process.netOutKB,
-                unit: "kilobytes", first: "received", second: "sent"
+            values.append("user \(process.ownerName ?? "unknown")")
+            values.append(accessibilityRates(
+                "network", process.netInRateKBps, process.netOutRateKBps,
+                hasCounters: process.netInKB != nil && process.netOutKB != nil,
+                unit: "kilobytes per second", first: "received", second: "sent"
             ))
-            values.append(accessibilityTotals(
-                "disk", process.diskReadBytes.map { $0 / 1_048_576 }, process.diskWriteBytes.map { $0 / 1_048_576 },
-                unit: "megabytes", first: "read", second: "written"
+            values.append(accessibilityRates(
+                "disk",
+                process.diskReadRateBytesPerSecond.map { $0 / 1_048_576 },
+                process.diskWriteRateBytesPerSecond.map { $0 / 1_048_576 },
+                hasCounters: process.diskReadBytes != nil && process.diskWriteBytes != nil,
+                unit: "megabytes per second", first: "read", second: "written"
             ))
         }
         if isHighlightedCPU { values.append("high CPU") }

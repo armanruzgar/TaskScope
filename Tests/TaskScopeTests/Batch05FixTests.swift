@@ -277,7 +277,13 @@ final class Batch05ReaderFixTests: XCTestCase {
                 executablePath: { _ in nil },
                 run: { await runner.run($0) }
             )
-            let reader = SystemProcessDetailReader(commandLineReader: commandLines)
+            var kernel = ProcessDetailKernelReads()
+            kernel.entry = { .found(KernelProcessEntry(pid: $0, parentPID: 1, uid: 0, startSeconds: 1_791_392_687)) }
+            kernel.executablePath = { _ in nil }
+            kernel.threadCount = { _ in .unavailable("not scripted") }
+            kernel.openFiles = { _ in .unavailable("not scripted") }
+            kernel.codeSignature = { _ in .unavailable("not scripted") }
+            let reader = SystemProcessDetailReader(commandLineReader: commandLines, kernelReads: kernel)
 
             let detail = await reader.readDetail(for: process, run: { await runner.run($0) })
 

@@ -664,7 +664,9 @@ struct TaskScopeApp: App {
                         openFullWindow: { showTaskScopeWindow() },
                         activityMonitor: activityMonitor
                     )
-                    .frame(minWidth: 760, minHeight: 560)
+                    // Wide enough for the name column beside PID, PPID, USER,
+                    // NET, DISK, CPU and MEM (`ProcessListColumns`).
+                    .frame(minWidth: 830, minHeight: 560)
                     .environmentObject(settings)
                     .environmentObject(watchedApps)
                     .task {

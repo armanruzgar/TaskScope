@@ -16,11 +16,17 @@ final class ProcessSortOrderTests: XCTestCase {
         net: (Double, Double)? = nil,
         disk: (Double, Double)? = nil
     ) -> AppProcess {
-        AppProcess(
+        var row = AppProcess(
             pid: pid, parentPID: parent, uid: uid, cpu: cpu, memoryMB: memory,
             command: name, elapsedTime: "00:01", startTime: "Wed Oct 7 17:04:47 2026",
-            netInKB: net?.0, netOutKB: net?.1, diskReadBytes: disk?.0, diskWriteBytes: disk?.1
+            netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
         )
+        // The Network and Disk columns sort by their per-second rates.
+        row.netInRateKBps = net?.0
+        row.netOutRateKBps = net?.1
+        row.diskReadRateBytesPerSecond = disk?.0
+        row.diskWriteRateBytesPerSecond = disk?.1
+        return row
     }
 
     private func query(_ search: String = "") -> ProcessListQuery {
@@ -199,8 +205,8 @@ final class ProcessSortControlTests: XCTestCase {
         let fixture = await Batch10.fixture(processes: [Batch10.process(51)])
         defer { fixture.stores.cleanup() }
         let titles: [(String, ProcessSortKey)] = [
-            ("PID", .pid), ("PPID", .parentPID), ("NET KB TOTAL", .network),
-            ("DISK MB TOTAL", .disk), ("CPU", .cpu), ("MEM MB", .memory)
+            ("PID", .pid), ("PPID", .parentPID), ("USER", .user), ("NET KB/S", .network),
+            ("DISK MB/S", .disk), ("CPU", .cpu), ("MEM MB", .memory)
         ]
         for (title, key) in titles {
             let button = try Batch10.popover(fixture).inspect().find(button: title)

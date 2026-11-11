@@ -50,6 +50,13 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     /// process (typically another user's), never fabricated as zero.
     var diskReadBytes: Double?
     var diskWriteBytes: Double?
+    /// Per-second rates from this read's counters and an earlier read's, set
+    /// by the process list; nil until a process has two samples, and when its
+    /// counters are unavailable. See `ProcessIORateTracker`.
+    var netInRateKBps: Double?
+    var netOutRateKBps: Double?
+    var diskReadRateBytesPerSecond: Double?
+    var diskWriteRateBytesPerSecond: Double?
 
     init(
         pid: Int32,
@@ -100,18 +107,23 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         pid
     }
 
-    /// The Network column's value, received plus sent; nil when the
-    /// counters were not read for this process.
+    /// The Network column's value: kilobytes per second received plus sent;
+    /// nil until the process has a rate.
     var networkSortValue: Double? {
-        guard let netInKB, let netOutKB else { return nil }
-        return netInKB + netOutKB
+        guard let netInRateKBps, let netOutRateKBps else { return nil }
+        return netInRateKBps + netOutRateKBps
     }
 
-    /// The Disk column's value, read plus written; nil when the kernel did not
-    /// report the counters for this process.
+    /// The Disk column's value: bytes per second read plus written; nil until
+    /// the process has a rate.
     var diskSortValue: Double? {
-        guard let diskReadBytes, let diskWriteBytes else { return nil }
-        return diskReadBytes + diskWriteBytes
+        guard let diskReadRateBytesPerSecond, let diskWriteRateBytesPerSecond else { return nil }
+        return diskReadRateBytesPerSecond + diskWriteRateBytesPerSecond
+    }
+
+    /// The owner's account name, as the User column shows it.
+    var ownerName: String? {
+        uid.map { ProcessOwnerNames.name(for: $0) }
     }
 
     /// `command` is the argv-backed `ps comm` value. An absolute path names its
@@ -225,6 +237,14 @@ struct ProcessDetail: Equatable, Sendable {
     /// with the row's identity checked around the read. It can contain
     /// secrets, so it is never logged, persisted or exported.
     var commandLine: CommandLineReadResult = .unavailable("The command line was not read.")
+    /// Read from the kernel, with the row's identity checked before and after.
+    var executablePath: ProcessDetailValue<String> = .unavailable(Self.notRead)
+    var parent: ProcessParent = .unavailable(Self.notRead)
+    var threadCount: ProcessDetailValue<Int> = .unavailable(Self.notRead)
+    var openFiles: ProcessDetailValue<ProcessOpenFiles> = .unavailable(Self.notRead)
+    var codeSignature: ProcessCodeSignature = .unavailable(Self.notRead)
+
+    static let notRead = "It was not read."
 
     /// `ps lstart` runs in UTC (see ShellCommandRunner) so identities survive
     /// time-zone changes; show it in the viewer's time zone.

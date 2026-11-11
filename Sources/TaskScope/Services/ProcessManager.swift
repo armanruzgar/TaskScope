@@ -111,10 +111,13 @@ final class ProcessManager: ObservableObject {
     private let operationGate = ProcessOperationGate()
     private var operationGateCancellable: AnyCancellable?
     private var listProjection = ProcessListProjection()
+    /// Turns the network and disk counters of consecutive inventories into
+    /// the per-second rates the list shows and sorts by.
+    private var ioRates = ProcessIORateTracker()
     private var fullProcessInventory: [AppProcess] {
         get { listProjection.inventory }
         set {
-            listProjection = ProcessListProjection(inventory: newValue)
+            listProjection = ProcessListProjection(inventory: ioRates.apply(to: newValue, at: now()))
             inventoryGeneration &+= 1
             lastSuccessfulInventoryAt = now()
             processListLoadError = nil

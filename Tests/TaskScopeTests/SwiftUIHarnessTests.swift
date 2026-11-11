@@ -698,8 +698,8 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertEqual(try identity.accessibilityLabel().string(), "Accessible, PID 70")
         XCTAssertEqual(
             try identity.accessibilityValue().string(),
-            "CPU 42.5 percent, memory 2,048 megabytes, parent PID 1, network totals unavailable, "
-                + "disk totals unavailable, high CPU, high memory"
+            "CPU 42.5 percent, memory 2,048 megabytes, parent PID 1, user unknown, network unavailable, "
+                + "disk unavailable, high CPU, high memory"
         )
         XCTAssertEqual(
             try identity.accessibilityHint().string(),

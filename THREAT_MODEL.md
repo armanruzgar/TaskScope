@@ -514,6 +514,10 @@ Required invariants:
   condition, the command lines of the current user's processes that match the
   rule's name and path are read the same identity-checked way on each engine
   check, and only whether they contain the rule's text is kept;
+- read Process Detail's executable path, parent, code signature, threads, open
+  files, and listening ports from the kernel on request only, without a child
+  process, between two checks that the PID still has the row's start time;
+  show them only in that sheet, and never store, log, or export them;
 - record every signal TaskScope sends, and every launchd change, app open, and
   administrator request it runs, in the Unified Log's `Actions` category with
   the outcome, so its actions can be reconstructed after it quits; signal,

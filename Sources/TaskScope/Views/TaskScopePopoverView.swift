@@ -748,28 +748,30 @@ struct TaskScopePopoverView: View {
                 if isExpandedWindow {
                     Spacer()
                     columnHeader("PID", sortKey: .pid)
-                        .frame(width: 70, alignment: .trailing)
+                        .frame(width: ProcessListColumns.pid, alignment: .trailing)
                     columnHeader("PPID", sortKey: .parentPID)
-                        .frame(width: 70, alignment: .trailing)
+                        .frame(width: ProcessListColumns.parentPID, alignment: .trailing)
+                    columnHeader("USER", sortKey: .user, explanation: "The account that owns the process.")
+                        .frame(width: ProcessListColumns.user, alignment: .leading)
                     columnHeader(
-                        "NET KB TOTAL", sortKey: .network,
-                        explanation: "Kilobytes received / sent since the process started."
+                        "NET KB/S", sortKey: .network, detail: "IN / OUT",
+                        explanation: Self.networkColumnExplanation
                     )
-                    .frame(width: 96, alignment: .trailing)
+                    .frame(width: ProcessListColumns.network, alignment: .trailing)
                     columnHeader(
-                        "DISK MB TOTAL", sortKey: .disk,
-                        explanation: "Megabytes read / written since the process started."
+                        "DISK MB/S", sortKey: .disk, detail: "READ / WRITE",
+                        explanation: Self.diskColumnExplanation
                     )
-                    .frame(width: 96, alignment: .trailing)
+                    .frame(width: ProcessListColumns.disk, alignment: .trailing)
                 } else {
                     Spacer()
                 }
                 columnHeader("CPU", sortKey: .cpu)
-                    .frame(width: 54, alignment: .trailing)
+                    .frame(width: ProcessListColumns.cpu, alignment: .trailing)
                 columnHeader("MEM MB", sortKey: .memory)
-                    .frame(width: 64, alignment: .trailing)
+                    .frame(width: ProcessListColumns.memory, alignment: .trailing)
                 Text("")
-                    .frame(width: 28)
+                    .frame(width: ProcessListColumns.stopButton)
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1211,11 +1213,21 @@ struct TaskScopePopoverView: View {
         .accessibilityValue("\(order.key.label), \(order.direction.label.lowercased())")
     }
 
+    static let networkColumnExplanation = "Kilobytes per second received / sent, averaged since the previous refresh; "
+        + "shown from the second refresh, and only for processes macOS reports network counters for."
+    static let diskColumnExplanation = "Megabytes per second read / written, averaged since the previous refresh; "
+        + "shown from the second refresh, and only for processes macOS reports disk counters for."
+
     /// A column title that sorts by its column. The active column shows a
     /// chevron for its direction, and VoiceOver reads the direction as its
-    /// value.
+    /// value. `detail` is a second line naming the parts of a pair.
     @ViewBuilder
-    private func columnHeader(_ title: String, sortKey: ProcessSortKey, explanation: String? = nil) -> some View {
+    private func columnHeader(
+        _ title: String,
+        sortKey: ProcessSortKey,
+        detail: String? = nil,
+        explanation: String? = nil
+    ) -> some View {
         let order = settings.sortOrder
         let isActive = order.key == sortKey
         Button {
@@ -1227,8 +1239,14 @@ struct TaskScopePopoverView: View {
                         .font(.system(size: 7, weight: .bold))
                         .accessibilityHidden(true)
                 }
-                Text(title)
-                    .fontWeight(isActive ? .semibold : .regular)
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text(title)
+                        .fontWeight(isActive ? .semibold : .regular)
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 8))
+                    }
+                }
             }
             .foregroundStyle(isActive ? Color.primary : Color.secondary)
         }

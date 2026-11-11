@@ -168,6 +168,9 @@ On a new install the list stays empty until you choose **Load Processes**. With
 **Settings > General > Auto-refresh process list** on, it loads and refreshes
 by itself; otherwise it is a snapshot that shows when it was updated. See
 [first launch](docs/USING_TASKSCOPE.md#first-launch-and-general-settings).
+The window adds PID, parent PID, owner, and per-second network and disk
+columns, and **Show Detail** shows a process's executable, parent, elapsed
+time, command line, code signature, threads, open files, and listening ports.
 Search names, commands, PIDs, paths, and your own processes' command lines;
 filter; and sort by CPU, memory, name, PID, parent PID, user, network, or disk,
 in either direction, from the Sort menu or by clicking a column title (click it

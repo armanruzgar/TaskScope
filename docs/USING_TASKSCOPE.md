@@ -102,9 +102,12 @@ rotor.
 
 The process list supports search, sorting, filters, and flat or expandable tree
 views. When the display limit truncates results, **Showing N of M** includes
-the total matching rows, including search results. In the window, **NET KB
-TOTAL** and **DISK MB TOTAL** show data received / sent and read / written
-since the process started. Tree view follows the selected sort at every level,
+the total matching rows, including search results. In the window, **USER**
+shows the account that owns each process, and **NET KB/S** (in / out) and
+**DISK MB/S** (read / write) show how fast the process received and sent, or
+read and wrote, averaged since the previous refresh. A rate shows a dash until
+the second refresh after the window opens, and for processes macOS reports no
+counters for. Tree view follows the selected sort at every level,
 for the roots and for each parent's children; rows with equal values are
 ordered by name, then PID. A parent shown only to place a match in its
 hierarchy is dimmed and sorted by its own value, so an idle parent can sit
@@ -226,9 +229,18 @@ Preset stops also unload the preset's user launch agents before signalling
 
 A row's context menu offers **Show Detail** (Command-I for the keyboard row),
 **Copy Executable Path**, **Copy Command Line**, and **Open in Activity
-Monitor**. Show Detail opens a read-only sheet with the name, PID, parent PID,
-owner's account name, start time, `ps` command name, **Command Line**, CPU, and
-memory. Command Line is the process's full command line, its arguments
+Monitor**. Show Detail opens a read-only sheet with the name, PID, the parent's
+name and PID, the owner's account name, the start time and the time elapsed
+since, the kernel's **Executable** path, the `ps` command name, **Command
+Line**, the **Code Signature** (signing identifier and Team ID, or Apple, ad
+hoc, or Unsigned), **Threads**, **Open Files** (file descriptors, including
+sockets and pipes), **Listening Ports** (listening TCP and bound UDP ports),
+CPU, and memory. TaskScope reads these from the kernel without starting another
+program, between two checks that the PID still has the row's start time; macOS
+shows threads, open files, and ports only for your own processes, and any
+value it does not give reads **Unavailable** with the reason. A parent that has
+exited since is shown by its PID only. Command Line is the process's full
+command line, its arguments
 separated by spaces as `ps` prints them. It is read only when you open the
 sheet, and only while the PID still has the row's start time and executable
 path, checked before and after the read; otherwise it reads **Unavailable**
