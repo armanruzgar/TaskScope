@@ -87,7 +87,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         inventory.result = .success([])
         let result = await manager.terminate(captured)
         XCTAssertEqual(result, .stale)
-        XCTAssertTrue(manager.processes.isEmpty, "A proven absent row must leave the displayed list")
+        XCTAssertTrue(manager.displayProcesses().isEmpty, "A proven absent row must leave the displayed list")
         XCTAssertTrue(manager.selectedPids.isEmpty)
     }
 
@@ -168,7 +168,8 @@ final class ProcessManualRegressionTests: XCTestCase {
 
     func testCancelledManualVerificationIsNotAnInventoryFailure() async {
         let verification = ManualBlockingInventory(result: .success([row()]), honorsCancellation: true)
-        let manager = manager(ManualInventory([]), verification: verification)
+        let signaler = ManualSignaler()
+        let manager = manager(ManualInventory([]), verification: verification, signaler: signaler)
         let stop = Task { await manager.terminate(self.row()) }
         await verification.waitUntilEntered()
         stop.cancel()
@@ -176,6 +177,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         let result = await stop.value
         XCTAssertEqual(result, .rejected)
         XCTAssertEqual(manager.message, "Stop for Example was cancelled.")
+        XCTAssertTrue(signaler.sent.isEmpty)
         XCTAssertNil(manager.processLoadError)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: nil).isEmpty)
     }
@@ -183,7 +185,8 @@ final class ProcessManualRegressionTests: XCTestCase {
     func testCancelledBatchVerificationDoesNotPublishInventoryFailure() async {
         let captured = row()
         let verification = ManualBlockingInventory(result: .success([captured]), honorsCancellation: true)
-        let manager = manager(ManualInventory([]), verification: verification)
+        let signaler = ManualSignaler()
+        let manager = manager(ManualInventory([]), verification: verification, signaler: signaler)
         manager.setMessage("existing status")
         let stop = Task { await manager.batchTerminate([captured.identity]) }
         await verification.waitUntilEntered()
@@ -191,6 +194,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         await verification.release()
         await stop.value
         XCTAssertEqual(manager.message, "existing status")
+        XCTAssertTrue(signaler.sent.isEmpty)
         XCTAssertNil(manager.processLoadError)
         XCTAssertNil(manager.batchActionReport)
     }

@@ -52,9 +52,13 @@ final class ProcessOperationGate: ObservableObject {
         activeOperation?.kind.isMutation == true
     }
 
+    /// `reportsProgress: false` keeps `isWorking` down for a read nobody is
+    /// waiting on, such as a silent background poll, so the footer keeps its
+    /// last result. Mutations always report progress.
     @discardableResult
     func run(
         kind: Kind,
+        reportsProgress: Bool = true,
         _ operation: () async -> Void
     ) async -> Bool {
         guard await acquire(for: kind) else {
@@ -65,7 +69,7 @@ final class ProcessOperationGate: ObservableObject {
             return false
         }
 
-        isWorking = true
+        isWorking = kind.isMutation || reportsProgress
         state = kind.isMutation ? .runningMutation : .runningRefresh
         defer {
             isWorking = false

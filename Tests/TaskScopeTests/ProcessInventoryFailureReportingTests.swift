@@ -27,7 +27,7 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.loadProcessList()
-        manager.select(manager.processes)
+        manager.select(manager.displayProcesses())
         XCTAssertEqual(manager.selectedPids, [40, 41, 42], "precondition: three processes selected")
 
         let result = await manager.terminate(target)
@@ -86,7 +86,7 @@ final class ProcessInventoryFailureReportingTests: XCTestCase {
         let manager = makeManager(inventory: inventory, signaler: signaler)
 
         await manager.loadProcessList()
-        manager.select(manager.processes)
+        manager.select(manager.displayProcesses())
         let targets = manager.selectionSnapshot()
         XCTAssertEqual(targets.count, 3, "precondition: three targets requested")
 

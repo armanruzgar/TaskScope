@@ -7,6 +7,9 @@ protocol ProcessTerminating: Sendable {
     func settleAfterProcessChange() async
     func terminateMainProcess(for preset: WatchedAppPreset) async -> ProcessTerminationOutcome
     func terminateHelperProcess(named name: String, for preset: WatchedAppPreset) async -> ProcessTerminationOutcome
+    /// Stops everything `scope` covers for a preset: the main process first,
+    /// then its helpers. Returns one outcome per name, main process first.
+    func terminateProcesses(for preset: WatchedAppPreset, scope: PresetStopScope) async -> [ProcessTerminationOutcome]
     func waitForMainProcess(for preset: WatchedAppPreset, timeoutSeconds: TimeInterval) async -> Bool
 }
 
@@ -53,6 +56,23 @@ enum AppBundleOpenResult: Equatable, Sendable {
     case opened
     case failed(String)
     var succeeded: Bool { if case .opened = self { return true }; return false }
+}
+
+extension ProcessTerminating {
+    /// One name at a time, through the conformer's own single-name stops. Not
+    /// a fail-open default: every outcome comes from a required method.
+    func terminateProcesses(for preset: WatchedAppPreset, scope: PresetStopScope) async -> [ProcessTerminationOutcome] {
+        var outcomes: [ProcessTerminationOutcome] = []
+        if scope != .helpers {
+            outcomes.append(await terminateMainProcess(for: preset))
+        }
+        if scope != .app {
+            for name in preset.helperProcessNames {
+                outcomes.append(await terminateHelperProcess(named: name, for: preset))
+            }
+        }
+        return outcomes
+    }
 }
 
 struct SystemProcessLifecycleService: ProcessLifecycleServicing {
@@ -124,6 +144,11 @@ struct SystemProcessLifecycleService: ProcessLifecycleServicing {
             expectedExecutableDirectory: preset.bundleContentsDirectory,
             runtime: runtime
         )
+    }
+
+    /// Helper names share one graceful window instead of one window each.
+    func terminateProcesses(for preset: WatchedAppPreset, scope: PresetStopScope) async -> [ProcessTerminationOutcome] {
+        await ProcessLifecycleController.terminateProcesses(for: preset, scope: scope, runtime: runtime)
     }
 
     func unloadUserLaunchAgents(for preset: WatchedAppPreset) async -> LifecycleBatchResult {

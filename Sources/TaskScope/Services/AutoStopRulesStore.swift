@@ -794,10 +794,7 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
     private func refusalDetail(for process: AppProcess) -> String {
-        if process.pid == currentPID { return "TaskScope cannot stop itself; use Quit to close TaskScope." }
-        if !ProcessSignalGuard.isSignalablePID(process.pid) { return "This PID cannot be signalled." }
-        if process.uid != currentUID { return "The process is not owned by the current user." }
-        return "The system refused the stop request."
+        ProcessSignalGuard.refusalDetail(for: process, currentPID: currentPID, currentUID: currentUID)
     }
 
     /// Cancels every in-flight automatic stop whose captured rule is no longer

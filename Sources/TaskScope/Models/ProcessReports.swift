@@ -37,6 +37,7 @@ struct ProcessTargetActionResult: Identifiable, Equatable {
     var identity: ProcessIdentity
     var name: String
     var state: ProcessTargetActionState
+    var detail: String? = nil
 
     var id: ProcessIdentity {
         identity

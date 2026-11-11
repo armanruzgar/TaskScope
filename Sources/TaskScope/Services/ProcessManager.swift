@@ -4,10 +4,8 @@ import Combine
 
 @MainActor
 final class ProcessManager: ObservableObject {
-    @Published private(set) var status: ProcessStatus = .idle
     @Published private(set) var snapshots: [WatchedAppSnapshot] = []
     @Published private(set) var watchedStatusAvailability: WatchedStatusAvailability = .unknown
-    @Published private(set) var processes: [AppProcess] = []
     @Published private(set) var hasLoadedProcessList = false
     @Published private(set) var hasAttemptedProcessListLoad = false
     @Published private(set) var message: String = "Idle."
@@ -19,6 +17,7 @@ final class ProcessManager: ObservableObject {
         operationGate.isWorking
     }
 
+    /// Test observation of queue admission; UI progress uses `isWorking`.
     var operationState: ProcessOperationState {
         operationGate.state
     }
@@ -31,6 +30,10 @@ final class ProcessManager: ObservableObject {
     /// Increments whenever the full inventory changes. Views key derived,
     /// memoized lists on it.
     @Published private(set) var inventoryGeneration: UInt64 = 0
+    /// Failure of the last read that would have replaced the watched snapshots.
+    /// Verification and per-preset reads neither set nor clear it, so the
+    /// Presets banner and the Stale/Current labels describe the same read.
+    @Published private(set) var watchedStatusLoadError: String?
     @Published private(set) var processLoadError: String?
     /// Failure of the last attempt to replace the displayed process list. Unlike
     /// `processLoadError`, watched-status and per-preset reads never clear it:
@@ -42,9 +45,14 @@ final class ProcessManager: ObservableObject {
     @Published private(set) var lastSuccessfulWatchedReadAt: Date?
     @Published private(set) var lifecycleReport: LifecycleReport?
     /// One explicit failed disconnect may be followed by a separately confirmed
-    /// service stop. Never persisted, exposed to URLs, or used by polling.
+    /// service stop. Never persisted or exposed to URLs. Polling reads it only
+    /// to leave GlobalProtect's UI open for the user during the grace period.
     @Published private(set) var globalProtectDisconnectFailureID: UUID?
     @Published private(set) var isGlobalProtectKeepOffPending = false
+    /// How long background enforcement leaves GlobalProtect's UI alone after an
+    /// explicit disconnect failed and told the user to complete its request.
+    static let disconnectFailureGraceSeconds: TimeInterval = 180
+    private var globalProtectDisconnectGraceUntil: Date?
     private var pendingGlobalProtectKeepOffCount = 0
     private struct BackgroundKeepOffFailure: Equatable {
         var message: String
@@ -70,6 +78,9 @@ final class ProcessManager: ObservableObject {
 
     private var pollInterval: TimeInterval = 10
     private var pollProcessList = false
+    private var isPollingConfigured = false
+    private var backgroundPollingNeeded = true
+    private var visibleConsumers = 0
 
     private let currentPID: Int32
     private let processInventory: any ProcessInventoryProviding
@@ -100,7 +111,6 @@ final class ProcessManager: ObservableObject {
     private var appliedExtendedProcessListReads = 0
     private var extendedMetricsConsumers = 0
     private let now: () -> Date
-    private var successfulInventoryReads: UInt64 = 0
     private var lastInventoryFailure: String?
     private(set) var lastInventoryReadWasCancelled = false
 
@@ -140,32 +150,71 @@ final class ProcessManager: ObservableObject {
         }
     }
 
-    func setPolling(interval: TimeInterval, includeProcessList: Bool) {
+    /// Configures the poll. `backgroundActivity` says whether anything needs
+    /// the poll while no window or popover shows status: notifications diff its
+    /// reads and Keep Off enforcement runs on its ticks. Without it, polling
+    /// runs only between `beginObservingStatus` and `endObservingStatus`.
+    func setPolling(interval: TimeInterval, includeProcessList: Bool, backgroundActivity: Bool = true) {
+        isPollingConfigured = true
         pollInterval = max(2, interval)
         pollProcessList = includeProcessList
+        backgroundPollingNeeded = backgroundActivity
         restartPolling()
     }
 
-    func restartPolling() {
-        processHistory?.setPollingActive(true)
-        pollInterval = max(2, pollInterval)
-        let interval = pollInterval
-        let includeList = pollProcessList
-        pollingController.restart(interval: interval) { [weak self] in
-            guard let self else { return }
-            // Each tick's read also feeds the history while a window shows it,
-            // so the history runs no read loop of its own while polling.
-            await self.refreshWatchedStatus(showMessage: false, sampleHistory: true)
-            await self.enforceKeptOffPresets()
-            if includeList, self.hasLoadedProcessList {
-                await self.loadProcessList(showMessage: false)
-            }
+    private var pollingIsNeeded: Bool {
+        isPollingConfigured && (visibleConsumers > 0 || backgroundPollingNeeded)
+    }
+
+    /// A window or popover that shows status appeared. Starts polling if
+    /// nothing else needed it, and brings status up to date at once, since the
+    /// poll may have been off. Pair every call with `endObservingStatus`; like
+    /// the extended-metrics count, an early release is allowed to go negative.
+    func beginObservingStatus() async {
+        let wasNeeded = pollingIsNeeded
+        visibleConsumers += 1
+        // Until the app configures polling (it never does for startup
+        // verification or a rejected duplicate launch), showing status starts
+        // no automatic work.
+        guard isPollingConfigured else { return }
+        if !wasNeeded, pollingIsNeeded { restartPolling() }
+        if pollProcessList {
+            await loadProcessList(showMessage: false)
+        } else {
+            await refreshWatchedStatus(showMessage: false)
         }
     }
 
-    func stopPolling() {
-        pollingController.stop()
-        processHistory?.setPollingActive(false)
+    func endObservingStatus() {
+        let wasNeeded = pollingIsNeeded
+        visibleConsumers -= 1
+        if wasNeeded, !pollingIsNeeded { restartPolling() }
+    }
+
+    func restartPolling() {
+        guard pollingIsNeeded else {
+            pollingController.stop()
+            // The history runs its own sampler for a visible chart again.
+            processHistory?.setPollingActive(false)
+            return
+        }
+        processHistory?.setPollingActive(true)
+        pollingController.restart(interval: pollInterval) { [weak self] in
+            guard let self else { return }
+            // With Auto-refresh on, the list read is the tick's only read: it
+            // also applies the watched snapshots, and it performs the first
+            // load as well. A watched-only read is the fallback. Each tick's
+            // read also feeds the history while a window shows it, so the
+            // history runs no read loop of its own while polling.
+            var refreshed = false
+            if self.pollProcessList {
+                refreshed = await self.loadProcessList(showMessage: false, sampleHistory: true)
+            }
+            if !refreshed {
+                refreshed = await self.refreshWatchedStatus(showMessage: false, sampleHistory: true)
+            }
+            await self.enforceKeptOffPresets(usingFreshSnapshots: refreshed)
+        }
     }
 
     func toggleSelection(_ pid: Int32) {
@@ -266,7 +315,9 @@ final class ProcessManager: ObservableObject {
             message = outcome.message
             batchActionReport = outcome.report
             if outcome.shouldClearSelection {
-                clearSelection()
+                let requested = Set(requestedIdentities)
+                selectedIdentities = selectedIdentities.filter { !requested.contains($0.value) }
+                selectedPids = Set(selectedIdentities.keys)
             }
             if outcome.shouldRefresh {
                 await refreshAfterMutation()
@@ -284,13 +335,14 @@ final class ProcessManager: ObservableObject {
         // read counter also moves for reads made inside a queued mutation, which
         // would report a refresh that this call never delivered.
         let appliedBefore = appliedWatchedStatusReads
-        await runAction(kind: .read(.watchedStatus)) {
+        await runAction(kind: .read(.watchedStatus), reportsProgress: showMessage) {
             switch await currentSnapshots(sampleHistory: sampleHistory) {
             case .success(let watched):
                 apply(watched)
                 appliedWatchedStatusReads &+= 1
             case .failure(let error):
                 recordInventoryFailure(error)
+                recordWatchedStatusFailure(error)
             }
         }
         guard !Task.isCancelled, !lastInventoryReadWasCancelled else { return false }
@@ -309,14 +361,20 @@ final class ProcessManager: ObservableObject {
     }
 
     /// Returns whether a fresh list was applied by this call or the equivalent
-    /// read it joined.
+    /// read it joined. With `sampleHistory`, a successful read also feeds the
+    /// history; a poll tick whose list read fails falls back to a watched read,
+    /// which reports to the history instead.
     @discardableResult
-    func loadProcessList(showMessage: Bool = true) async -> Bool {
+    func loadProcessList(showMessage: Bool = true, sampleHistory: Bool = false) async -> Bool {
         let appliedBefore = appliedProcessListReads
-        await runAction(kind: .read(.processList)) {
+        await runAction(kind: .read(.processList), reportsProgress: showMessage) {
             hasAttemptedProcessListLoad = true
             let includesExtendedStats = fetchExtendedStats
-            switch await processInventory.load(fetchExtendedStats: includesExtendedStats) {
+            let result = await processInventory.load(fetchExtendedStats: includesExtendedStats)
+            if sampleHistory, case .success = result {
+                processHistory?.receivePolledInventory(result)
+            }
+            switch result {
             case .success(let inventory):
                 recordInventorySuccess()
                 fullProcessInventory = inventory
@@ -329,6 +387,7 @@ final class ProcessManager: ObservableObject {
                 let failure = Task.isCancelled ? ProcessInventoryError.cancelled : error
                 recordInventoryFailure(failure)
                 recordProcessListFailure(failure)
+                recordWatchedStatusFailure(failure)
             }
         }
         guard !Task.isCancelled, !lastInventoryReadWasCancelled else { return false }
@@ -337,7 +396,7 @@ final class ProcessManager: ObservableObject {
         // its result after the gate returns, even when its closure did not run.
         if showMessage {
             message = refreshed
-                ? "Loaded \(processes.count) of \(fullProcessInventory.count) processes."
+                ? "Loaded \(displayProcesses().count) of \(fullProcessInventory.count) processes."
                 : "Could not load processes: \(lastInventoryFailure ?? "the process list could not be read")"
         }
         return refreshed
@@ -424,6 +483,8 @@ final class ProcessManager: ObservableObject {
             }
 
             mayHaveChangedState = true
+            // Whether the app was running before Open changed anything.
+            var mainWasRunning = beforeServices.isMainRunning
             // A UI started directly while PanGPS was stopped can remain stuck
             // retrieving configuration even after the service returns. Restart
             // that orphaned UI before restoration; never unload the VPN job.
@@ -450,6 +511,7 @@ final class ProcessManager: ObservableObject {
                     commandResult = TaskScopeCommandResult(status: .failed, message: message)
                     return
                 }
+                mainWasRunning = false
             }
 
             let ensuredDaemon = await lifecycle.ensureSystemLaunchDaemons(for: preset)
@@ -525,6 +587,16 @@ final class ProcessManager: ObservableObject {
                     jobs: serviceJobs
                 )
 
+            // Late failures happen after Keep Off may have been cleared and the
+            // services restored, so their messages say what already changed.
+            var changes: [String] = []
+            if wasKeptOff { changes.append("Keep Off was turned off") }
+            if restored { changes.append("required services were restored") }
+            let changeText = changes.joined(separator: " and ")
+            let changeDetail = changeText.isEmpty
+                ? ""
+                : changeText.prefix(1).uppercased() + changeText.dropFirst() + ". "
+
             // Restoring the user launch agents can itself start the main process
             // (GlobalProtect's `pangpa` agent runs the main binary). Re-check with
             // a fresh inventory before opening so a second instance is never
@@ -533,17 +605,30 @@ final class ProcessManager: ObservableObject {
             if case .failure(.cancelled) = afterServiceRead { cancelledRead = true; return }
             guard !Task.isCancelled else { return }
             guard case .success(let afterServices) = afterServiceRead else {
-                message = "Could not verify whether \(preset.displayName) started with its services; nothing was opened."
+                message = changeDetail + "Could not verify whether \(preset.displayName) started with its services; no app launch was requested."
                 diagnosticReason = .inventoryUnavailable
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
                 return
             }
             let alreadyRunning = afterServices.isMainRunning
+            // An app that was already running before Open changed anything is
+            // brought forward by a plain `open`, which reuses the running
+            // instance. One that appeared only after its agents were restored was
+            // started by launchd and is not opened again. GlobalProtect's UI is
+            // never opened over a running one.
+            let activatesRunningApp = alreadyRunning
+                && mainWasRunning
+                && !preset.hasSupportedGlobalProtectIdentity
+            let reportsAlreadyRunning = alreadyRunning
+                && mainWasRunning
+                && !activatesRunningApp
 
-            let openResult: AppBundleOpenResult = alreadyRunning ? .opened : await lifecycle.openAppBundle(at: preset.appPath)
+            let openResult: AppBundleOpenResult = alreadyRunning && !activatesRunningApp
+                ? .opened
+                : await lifecycle.openAppBundle(at: preset.appPath)
             if case .failed(let detail) = openResult {
                 let reason = detail.hasSuffix(".") ? String(detail.dropLast()) : detail
-                message = "Could not open \(preset.displayName): \(reason)."
+                message = changeDetail + "Could not open \(preset.displayName): \(reason)."
                 diagnosticReason = .launchFailed
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
                 return
@@ -559,18 +644,23 @@ final class ProcessManager: ObservableObject {
             let finalInventory = await refreshInventoryAfterMutation()
             if finalInventory == nil, lastInventoryReadWasCancelled { cancelledRead = true; return }
 
+            let priorState = alreadyRunning ? "was running" : "was launched"
             if finalInventory == nil {
-                message = "\(preset.displayName) was launched, but TaskScope could not verify its final state."
+                message = changeDetail + "\(preset.displayName) \(priorState), but TaskScope could not verify its final state."
                 diagnosticReason = .verificationUnavailable
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
             } else if let finalInventory,
                       snapshot(for: preset, inventory: finalInventory).isMainRunning {
-                message = restored
-                    ? "Opened \(preset.displayName) after restoring required services."
-                    : "Opened \(preset.displayName)."
+                if reportsAlreadyRunning {
+                    message = changeDetail + "\(preset.displayName) is already running."
+                } else {
+                    message = restored
+                        ? "Opened \(preset.displayName) after restoring required services."
+                        : "Opened \(preset.displayName)."
+                }
                 commandResult = TaskScopeCommandResult(status: .completed, message: message)
             } else {
-                message = "\(preset.displayName) was launched, but its main process could not be verified."
+                message = changeDetail + "\(preset.displayName) \(priorState), but its main process could not be verified."
                 diagnosticReason = .verificationUnavailable
                 commandResult = TaskScopeCommandResult(status: .failed, message: message)
             }
@@ -696,6 +786,7 @@ final class ProcessManager: ObservableObject {
                     message = "Disconnecting GlobalProtect before stopping its services…"
                     if case .failed(let detail) = await lifecycle.disconnectGlobalProtectIfNeeded() {
                         globalProtectDisconnectFailureID = UUID()
+                        globalProtectDisconnectGraceUntil = now().addingTimeInterval(Self.disconnectFailureGraceSeconds)
                         message = detail
                         diagnosticReason = .disconnectFailed
                         commandResult = TaskScopeCommandResult(status: .failed, message: detail)
@@ -823,35 +914,9 @@ final class ProcessManager: ObservableObject {
         return commandResult
     }
 
-    /// Clears suppression of the services required by this installation without
-    /// launching the app. A separate system daemon stays disabled when the
-    /// installed session agent supplies the VPN service. Only Open starts it.
-    @discardableResult
-    func allowToRun(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
-        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
-        var commandResult = TaskScopeCommandResult(
-            status: .failed,
-            message: "Could not allow \(preset.displayName) to run."
-        )
-        await runAction(kind: .mutation) {
-            if preset.hasCanonicalGlobalProtectIdentity { globalProtectDisconnectFailureID = nil }
-            let allowed = await clearKeepOffOverrides(preset)
-            commandResult = allowed.result
-            if commandResult.status == .failed {
-                lifecycleDiagnostics.record(
-                    presetID: preset.id, action: .allowToRun,
-                    backgroundEnforcement: false, reason: allowed.reason,
-                    jobs: allowed.jobs, at: now()
-                )
-            }
-        }
-        return commandResult
-    }
-
-    /// The body of Allow to Run, for callers already holding the mutation gate.
     private func clearKeepOffOverrides(
         _ preset: WatchedAppPreset
-    ) async -> (result: TaskScopeCommandResult, reason: LifecycleDiagnosticFailure.Reason, jobs: [LifecycleJobResult]) {
+    ) async -> (result: TaskScopeCommandResult, jobs: [LifecycleJobResult]) {
         let systemEnable = preset.hasCanonicalGlobalProtectIdentity
             ? await lifecycle.enableSystemLaunchDaemons(for: preset) : .notNeeded
         // Do not start restoring user jobs after a cancelled system request.
@@ -873,13 +938,12 @@ final class ProcessManager: ObservableObject {
                 : "Could not allow \(preset.displayName) to run: \(failure)."
             return (
                 TaskScopeCommandResult(status: .failed, message: message),
-                systemEnable.succeeded ? .userLaunchAgentFailed : .systemServiceFailed,
                 enableResult.jobs
             )
         }
         setPresetKeptOffHandler?(preset, false)
         message = "\(preset.displayName) is allowed to run. Nothing was started."
-        return (TaskScopeCommandResult(status: .completed, message: message), .incomplete, enableResult.jobs)
+        return (TaskScopeCommandResult(status: .completed, message: message), enableResult.jobs)
     }
 
     /// Enforces persisted Keep Off intent after startup and if a user-facing job
@@ -891,11 +955,31 @@ final class ProcessManager: ObservableObject {
     /// the user is changing exactly the state enforcement would act on, and the
     /// gated re-check inside `keepOff` is the last line of defence for a tick
     /// that had already decided before the mutation started.
-    func enforceKeptOffPresets(force: Bool = false) async {
+    ///
+    /// A tick that has just applied fresh snapshots passes `usingFreshSnapshots`,
+    /// so deciding whether enforcement is needed costs no second read. `keepOff`
+    /// still reads uncached inside the gate before it disables or signals.
+    func enforceKeptOffPresets(force: Bool = false, usingFreshSnapshots: Bool = false) async {
         for preset in keptOffPresetsProvider?() ?? [] {
             guard !operationGate.isMutationActive else { continue }
+            // A failed explicit disconnect sent the user to GlobalProtect to
+            // answer its request, and enforcement would close that UI. Leave it
+            // for a bounded time, or until the next explicit action clears the
+            // failure.
+            if preset.hasCanonicalGlobalProtectIdentity,
+               globalProtectDisconnectFailureID != nil,
+               let graceUntil = globalProtectDisconnectGraceUntil,
+               now() < graceUntil {
+                continue
+            }
             if !force {
-                guard case .success(let current) = await currentSnapshot(for: preset) else { continue }
+                let current: WatchedAppSnapshot
+                if usingFreshSnapshots, let fresh = snapshots.first(where: { $0.preset == preset }) {
+                    current = fresh
+                } else {
+                    guard case .success(let fresh) = await currentSnapshot(for: preset) else { continue }
+                    current = fresh
+                }
                 guard current.hasBackgroundKeepOffTargets else {
                     backgroundKeepOffFailures[preset.id] = nil
                     continue
@@ -996,16 +1080,7 @@ final class ProcessManager: ObservableObject {
         for preset: WatchedAppPreset,
         scope: PresetStopScope
     ) async -> [ProcessTerminationOutcome] {
-        var outcomes: [ProcessTerminationOutcome] = []
-        if scope != .helpers {
-            outcomes.append(await lifecycle.terminateMainProcess(for: preset))
-        }
-        if scope != .app {
-            for name in preset.helperProcessNames {
-                outcomes.append(await lifecycle.terminateHelperProcess(named: name, for: preset))
-            }
-        }
-        return outcomes
+        await lifecycle.terminateProcesses(for: preset, scope: scope)
     }
 
     @discardableResult
@@ -1025,7 +1100,7 @@ final class ProcessManager: ObservableObject {
 
         var result: ProcessActionResult = .rejected
         await runAction(kind: .mutation) {
-            let verificationResult = await verificationInventory.load(fetchExtendedStats: hasLoadedProcessList && fetchExtendedStats)
+            let verificationResult = await verificationInventory.load(fetchExtendedStats: false)
             // An unreadable process list says nothing about this target. Treating it
             // as an identity change both lied to the user and wiped the whole
             // selection by reconciling against an empty inventory.
@@ -1050,7 +1125,22 @@ final class ProcessManager: ObservableObject {
                 result = identityChanged ? .identityChanged : .stale
                 apply(snapshots(from: currentProcesses))
                 if hasLoadedProcessList {
-                    fullProcessInventory = currentProcesses
+                    // Verification reads no Net/Disk figures, so keep the last
+                    // observed ones for every row whose identity is unchanged.
+                    let previous = Dictionary(
+                        fullProcessInventory.map { ($0.identity, $0) },
+                        uniquingKeysWith: { first, _ in first }
+                    )
+                    fullProcessInventory = currentProcesses.map { process in
+                        var row = process
+                        if let old = previous[row.identity] {
+                            row.netInKB = old.netInKB
+                            row.netOutKB = old.netOutKB
+                            row.diskReadBytes = old.diskReadBytes
+                            row.diskWriteBytes = old.diskWriteBytes
+                        }
+                        return row
+                    }
                     publishDisplayProcesses()
                 } else {
                     reconcileSelection(with: currentProcesses)
@@ -1069,11 +1159,22 @@ final class ProcessManager: ObservableObject {
 
             let signal: Int32 = forceKill ? SIGKILL : SIGTERM
             let delivery = processSignaler.deliver(signal, to: process.pid)
-            await settleAfterProcessChange()
+            if delivery == .delivered, !forceKill {
+                await ProcessBatchTerminator.waitForExit(
+                    of: [process.pid],
+                    signaler: processSignaler,
+                    settle: settleAfterProcessChange
+                )
+            } else {
+                await settleAfterProcessChange()
+            }
 
             switch delivery {
-            case .rejected:
-                message = "Could not send \(forceKill ? "force stop" : "stop") to \(process.name)."
+            case .rejected(let code):
+                let detail = ProcessSignalGuard.refusalDetail(
+                    for: process, currentPID: currentPID, currentUID: getuid(), errno: code
+                )
+                message = "Could not send \(forceKill ? "force stop" : "stop") to \(process.name). \(detail)"
                 result = .refused
             case .noSuchProcess:
                 // It exited between the identity check and the signal; the
@@ -1106,6 +1207,7 @@ final class ProcessManager: ObservableObject {
         process.pid == currentPID
     }
 
+    /// Test observation of the projection used by `treeRoots(for:)`.
     var ppidMap: [Int32: Int32] {
         listProjection.ppidMap
     }
@@ -1127,13 +1229,10 @@ final class ProcessManager: ObservableObject {
             return inventory
         case .failure(let error):
             recordInventoryFailure(error)
+            recordWatchedStatusFailure(error)
             if hasLoadedProcessList { recordProcessListFailure(error) }
             return nil
         }
-    }
-
-    private func snapshot(for preset: WatchedAppPreset) -> WatchedAppSnapshot {
-        snapshots.first(where: { $0.preset.id == preset.id }) ?? WatchedAppSnapshot(preset: preset, runningNames: [])
     }
 
     private func currentSnapshots(
@@ -1168,7 +1267,6 @@ final class ProcessManager: ObservableObject {
         processLoadError = nil
         lastInventoryReadWasCancelled = false
         lastInventoryFailure = nil
-        successfulInventoryReads &+= 1
     }
 
     /// A cancelled read (a poll restart, a torn-down view) says nothing about
@@ -1179,6 +1277,11 @@ final class ProcessManager: ObservableObject {
         lastInventoryReadWasCancelled = failure == .cancelled
         guard failure != .cancelled else { return }
         processLoadError = failure.localizedDescription
+    }
+
+    private func recordWatchedStatusFailure(_ error: ProcessInventoryError) {
+        guard !Task.isCancelled, error != .cancelled else { return }
+        watchedStatusLoadError = error.localizedDescription
         if watchedStatusAvailability != .unknown { watchedStatusAvailability = .stale }
     }
 
@@ -1242,7 +1345,6 @@ final class ProcessManager: ObservableObject {
     /// display limit and must survive a poll or a sort change. Exited or
     /// recycled PIDs are still pruned because their identity is gone.
     private func publishDisplayProcesses() {
-        processes = displayProcesses()
         reconcileSelection(with: fullProcessInventory)
     }
 
@@ -1301,7 +1403,7 @@ final class ProcessManager: ObservableObject {
         snapshots = watched
         lastSuccessfulWatchedReadAt = now()
         watchedStatusAvailability = .current
-        status = watched.aggregateStatus
+        watchedStatusLoadError = nil
 
         guard enableNotifications else { return }
 
@@ -1321,9 +1423,10 @@ final class ProcessManager: ObservableObject {
     @discardableResult
     private func runAction(
         kind: ProcessOperationGate.Kind,
+        reportsProgress: Bool = true,
         _ operation: () async -> Void
     ) async -> Bool {
-        await operationGate.run(kind: kind) {
+        await operationGate.run(kind: kind, reportsProgress: reportsProgress) {
             await operation()
             if kind == .mutation, let shared = processInventory as? CoalescingProcessInventory {
                 // Reads queued behind this mutation, and observers outside the

@@ -119,7 +119,7 @@ struct SupportDiagnosticsReport: Encodable, Equatable, Sendable {
 
 struct LifecycleDiagnosticFailure: Encodable, Equatable, Sendable {
     enum Action: String, Encodable, CaseIterable, Sendable {
-        case open, quitApp, quitHelpers, close, keepOff, allowToRun
+        case open, quitApp, quitHelpers, close, keepOff
     }
     enum Reason: String, Encodable, CaseIterable, Sendable {
         case disconnectFailed

@@ -15,7 +15,7 @@ final class ProcessManagerTests: XCTestCase {
 
         await manager.loadProcessList()
 
-        XCTAssertEqual(manager.processes.map(\.pid), [3, 2])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [3, 2])
         XCTAssertEqual(manager.message, "Loaded 2 of 3 processes.")
     }
 
@@ -28,11 +28,11 @@ final class ProcessManagerTests: XCTestCase {
         manager.processListLimitProvider = { 2 }
 
         await manager.loadProcessList()
-        XCTAssertEqual(manager.processes.map(\.pid), [1, 2])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [1, 2])
 
         manager.sortKey = .memory
 
-        XCTAssertEqual(manager.processes.map(\.pid), [3, 2])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [3, 2])
     }
 
     func testFilteringOccursBeforeLimitSoOffscreenWatchedTargetIsDiscoverable() async {
@@ -44,7 +44,7 @@ final class ProcessManagerTests: XCTestCase {
 
         await manager.loadProcessList()
 
-        XCTAssertEqual(manager.processes.map(\.pid), [highCPU.pid])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [highCPU.pid])
         XCTAssertEqual(
             manager.displayProcesses { $0.name == "Watched" }.map(\.pid),
             [watched.pid]
@@ -86,10 +86,10 @@ final class ProcessManagerTests: XCTestCase {
         let roots = ProcessTreeBuilder.build(
             from: manager.inventorySnapshot,
             ppidMap: manager.ppidMap,
-            matchingPIDs: Set(manager.processes.map(\.pid))
+            matchingPIDs: Set(manager.displayProcesses().map(\.pid))
         )
 
-        XCTAssertEqual(manager.processes.map(\.pid), [child.pid])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [child.pid])
         XCTAssertEqual(roots.map(\.process.pid), [parent.pid])
         XCTAssertEqual(roots.first?.children.map(\.process.pid), [child.pid])
     }
@@ -112,7 +112,7 @@ final class ProcessManagerTests: XCTestCase {
         await manager.refreshWatchedStatus()
 
         XCTAssertEqual(manager.snapshots.first?.runningNames, ["Codex (Renderer)"])
-        XCTAssertEqual(manager.status, .watchedRunning)
+        XCTAssertEqual(manager.snapshots.aggregateStatus, .watchedRunning)
     }
 
     func testWatchedStatusRequiresExecutablePathFromLivePSSchema() async {
@@ -156,7 +156,7 @@ final class ProcessManagerTests: XCTestCase {
         let lastSuccess = manager.lastSuccessfulInventoryAt
         await manager.loadProcessList()
 
-        XCTAssertEqual(manager.processes, [original])
+        XCTAssertEqual(manager.displayProcesses(), [original])
         XCTAssertNotNil(lastSuccess)
         XCTAssertEqual(manager.lastSuccessfulInventoryAt, lastSuccess)
         XCTAssertEqual(manager.processLoadError, "temporary failure")
@@ -180,7 +180,7 @@ final class ProcessManagerTests: XCTestCase {
         _ = await reload.value
 
         XCTAssertNil(manager.processLoadError, "a cancelled read must not become a persistent load error")
-        XCTAssertEqual(manager.processes, [original])
+        XCTAssertEqual(manager.displayProcesses(), [original])
         XCTAssertEqual(manager.operationState, .idle)
     }
 
@@ -251,7 +251,7 @@ final class ProcessManagerTests: XCTestCase {
 
         await manager.loadProcessList()
 
-        XCTAssertEqual(manager.processes.map(\.pid), [promoted.pid])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [promoted.pid])
         XCTAssertEqual(manager.selectedPids, [target.pid])
         XCTAssertEqual(manager.selectionSnapshot(), [target.identity])
     }
@@ -267,7 +267,7 @@ final class ProcessManagerTests: XCTestCase {
         manager.processListLimitProvider = { 2 }
 
         await manager.loadProcessList()
-        XCTAssertEqual(manager.processes.map(\.pid), [91, 92])
+        XCTAssertEqual(manager.displayProcesses().map(\.pid), [91, 92])
         XCTAssertEqual(manager.displayProcesses { $0.name == "Needle" }.map(\.pid), [93])
         manager.toggleSelection(needle.pid)
         XCTAssertEqual(manager.selectedPids, [93])
@@ -447,7 +447,7 @@ final class ProcessManagerTests: XCTestCase {
         )
         // The rejected signal is reported as rejected, not as a process that is
         // still running after a delivered stop.
-        XCTAssertEqual(manager.message, "Stop requested; 0 still running, 1 signal rejected, 1 no longer matched.")
+        XCTAssertEqual(manager.message, "Stopped 1 of 3 selected; 1 signal rejected, 1 no longer matched.")
     }
 
     func testBatchStopReportsTaskScopeSelfTargetInsteadOfOmittingIt() async {
@@ -795,7 +795,7 @@ final class ProcessManagerTests: XCTestCase {
         let result = await manager.openApp(lifecyclePreset())
 
         XCTAssertEqual(result.status, .failed)
-        XCTAssertTrue(result.message.contains("nothing was opened"), result.message)
+        XCTAssertTrue(result.message.contains("no app launch was requested"), result.message)
         XCTAssertEqual(lifecycle.calls, ["exists", "daemon", "agents.load"])
     }
 
@@ -1347,15 +1347,12 @@ final class ProcessManagerTests: XCTestCase {
         lifecycle.systemEnableResult = LifecycleBatchResult(jobs: [
             LifecycleJobResult(label: "com.paloaltonetworks.gp.pangpsd", state: .failed, detail: "Administrator cancelled")
         ])
-        lifecycle.daemonResult = lifecycle.systemEnableResult
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
         var keptOff = true
         manager.isPresetKeptOffProvider = { _ in keptOff }
         manager.setPresetKeptOffHandler = { _, value in keptOff = value }
         let opened = await manager.openApp(.globalProtect)
-        let allowed = await manager.allowToRun(.globalProtect)
         XCTAssertEqual(opened.status, .failed)
-        XCTAssertEqual(allowed.status, .failed)
         XCTAssertTrue(keptOff)
         XCTAssertEqual(lifecycle.calls, ["exists", "daemon", "daemon.enable"])
     }
@@ -1803,10 +1800,12 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertFalse(manager.fetchExtendedStats)
     }
 
-    func testAllowToRunRestoresFullGlobalProtectJobScope() async {
+    func testMissingBundleOpenRestoresFullGlobalProtectJobScope() async {
         let lifecycle = FakeLifecycleService()
         let manager = makeManager(inventory: FakeProcessInventory(results: [.success([])]), lifecycle: lifecycle)
-        _ = await manager.allowToRun(.globalProtect)
+        lifecycle.appExists = false
+        manager.isPresetKeptOffProvider = { _ in true }
+        _ = await manager.openApp(.globalProtect)
         assertFullGlobalProtectScope(lifecycle, calls: ["daemon.enable", "agents.enable"])
     }
 
@@ -1889,7 +1888,7 @@ final class ProcessManagerTests: XCTestCase {
     }
 }
 
-private final class FakeLifecycleService: ProcessLifecycleServicing, @unchecked Sendable {
+final class ManagerTestLifecycle: ProcessLifecycleServicing, @unchecked Sendable {
     var disconnectResult = GlobalProtectDisconnectResult.disconnected
     var appExists = true
     var daemonResult = LifecycleBatchResult.notNeeded
@@ -2188,7 +2187,7 @@ private actor OrderedBlockingProcessInventory: ProcessInventoryProviding {
     }
 }
 
-private final class FakeProcessInventory: ProcessInventoryProviding, @unchecked Sendable {
+final class ManagerTestInventory: ProcessInventoryProviding, @unchecked Sendable {
     private var results: [Result<[AppProcess], ProcessInventoryError>]
     private(set) var fetchExtendedRequests: [Bool] = []
 
@@ -2208,7 +2207,7 @@ private final class FakeProcessInventory: ProcessInventoryProviding, @unchecked 
     }
 }
 
-private final class FakeProcessSignaler: ProcessSignaling {
+final class ManagerTestSignaler: ProcessSignaling {
     struct SentSignal: Equatable {
         var signal: Int32
         var pid: Int32
@@ -2261,3 +2260,8 @@ private final class FakeProcessSignaler: ProcessSignaling {
         alivePids.contains(pid)
     }
 }
+
+// Share the existing fakes with the batch regression tests.
+private typealias FakeProcessInventory = ManagerTestInventory
+private typealias FakeProcessSignaler = ManagerTestSignaler
+private typealias FakeLifecycleService = ManagerTestLifecycle

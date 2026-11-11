@@ -73,7 +73,12 @@ struct LifecycleBatchResult: Equatable, Sendable {
     var failureSummary: String? {
         let failures = jobs.filter { !$0.succeeded }
         guard !failures.isEmpty else { return nil }
-        return failures.map { "\($0.label): \($0.detail)" }.joined(separator: "; ")
+        // Every caller ends the summary with its own period, so a detail that
+        // is a full sentence loses its own; otherwise messages end in "..".
+        return failures.map { job in
+            let detail = job.detail.hasSuffix(".") ? String(job.detail.dropLast()) : job.detail
+            return "\(job.label): \(detail)"
+        }.joined(separator: "; ")
     }
 }
 

@@ -16,6 +16,24 @@ extension ProcessSignaling {
 }
 
 struct DarwinProcessSignaler: ProcessSignaling {
+    /// `kill(2)`'s result and the `errno` it left, read together.
+    typealias KillCall = @Sendable (_ pid: Int32, _ signal: Int32) -> (result: Int32, errno: Int32)
+
+    /// The real system call. Only tests inject another, so the errno mapping
+    /// below can be checked without signalling a process; the PID guard runs
+    /// before any injected call as well.
+    static let systemKill: KillCall = { pid, signal in
+        errno = 0
+        let result = Darwin.kill(pid, signal)
+        return (result, errno)
+    }
+
+    private let kill: KillCall
+
+    init(kill: @escaping KillCall = DarwinProcessSignaler.systemKill) {
+        self.kill = kill
+    }
+
     func send(_ signal: Int32, to pid: Int32) -> Bool {
         deliver(signal, to: pid) == .delivered
     }
@@ -24,19 +42,17 @@ struct DarwinProcessSignaler: ProcessSignaling {
         guard ProcessSignalGuard.isSignalablePID(pid) else {
             return .rejected(errno: EINVAL)
         }
-        errno = 0
-        if Darwin.kill(pid, signal) == 0 {
+        let call = kill(pid, signal)
+        if call.result == 0 {
             return .delivered
         }
-        let code = errno
-        return code == ESRCH ? .noSuchProcess : .rejected(errno: code)
+        return call.errno == ESRCH ? .noSuchProcess : .rejected(errno: call.errno)
     }
 
     func isAlive(_ pid: Int32) -> Bool {
         guard ProcessSignalGuard.isSignalablePID(pid) else { return false }
-        errno = 0
-        let result = Darwin.kill(pid, 0)
-        guard result == 0 || errno == EPERM else { return false }
+        let call = kill(pid, 0)
+        guard call.result == 0 || call.errno == EPERM else { return false }
         return !ProcessSignalGuard.isZombie(pid)
     }
 }
@@ -174,15 +190,26 @@ struct ProcessBatchTerminator {
                     name: process.name,
                     state: .stopped
                 ))
-            case .rejected:
+            case .rejected(let code):
                 targetResults.append(ProcessTargetActionResult(
                     identity: process.identity,
                     name: process.name,
-                    state: .signalRejected
+                    state: .signalRejected,
+                    detail: ProcessSignalGuard.refusalDetail(
+                        for: process, currentPID: currentPID, currentUID: getuid(), errno: code
+                    )
                 ))
             }
         }
-        await settleAfterProcessChange()
+        if forceKill {
+            await settleAfterProcessChange()
+        } else {
+            await Self.waitForExit(
+                of: signalTargets.filter { acceptedIdentities.contains($0.identity) }.map(\.pid),
+                signaler: signaler,
+                settle: settleAfterProcessChange
+            )
+        }
 
         for process in signalTargets where acceptedIdentities.contains(process.identity) {
             targetResults.append(ProcessTargetActionResult(
@@ -193,28 +220,16 @@ struct ProcessBatchTerminator {
         }
         sort(&targetResults, by: requestedIdentities)
 
-        let accepted = acceptedIdentities.count
         let stopped = targetResults.filter { $0.state == .stopped }.count
-        let message: String
-        if forceKill {
-            message = "Force stopped \(stopped) of \(requestedIdentities.count) selected."
-        } else if accepted == 0, stopped == 0 {
-            message = "Could not send stop to the selected processes."
-        } else if stopped == signalTargets.count, staleCount == 0, selfTargets.isEmpty {
-            message = "Stopped \(stopped) of \(requestedIdentities.count) selected."
-        } else {
-            let stillRunning = targetResults.filter { $0.state == .requestedStillRunning }.count
-            let rejected = targetResults.filter { $0.state == .signalRejected }.count
-            var parts = ["\(stillRunning) still running"]
-            if rejected > 0 {
-                parts.append("\(rejected) signal\(rejected == 1 ? "" : "s") rejected")
-            }
-            if !selfTargets.isEmpty {
-                parts.append("\(selfTargets.count) TaskScope target rejected")
-            }
-            parts.append("\(staleCount) no longer matched")
-            message = "Stop requested; " + parts.joined(separator: ", ") + "."
-        }
+        var parts: [String] = []
+        let stillRunning = targetResults.filter { $0.state == .requestedStillRunning }.count
+        let rejected = targetResults.filter { $0.state == .signalRejected }.count
+        if stillRunning > 0 { parts.append("\(stillRunning) still running") }
+        if rejected > 0 { parts.append("\(rejected) signal\(rejected == 1 ? "" : "s") rejected") }
+        if !selfTargets.isEmpty { parts.append("\(selfTargets.count) TaskScope target rejected") }
+        if staleCount > 0 { parts.append("\(staleCount) no longer matched") }
+        let summary = "\(forceKill ? "Force stopped" : "Stopped") \(stopped) of \(requestedIdentities.count) selected"
+        let message = summary + (parts.isEmpty ? "." : "; " + parts.joined(separator: ", ") + ".")
 
         return ProcessBatchTerminationOutcome(
             report: ProcessBatchActionReport(title: title, targets: targetResults),
@@ -223,6 +238,29 @@ struct ProcessBatchTerminator {
             shouldClearSelection: true,
             shouldRefresh: true
         )
+    }
+
+    /// How many settles a delivered SIGTERM may wait for its targets to exit:
+    /// ten production settles of 300 ms are the three-second graceful window
+    /// that preset stops use.
+    static let gracefulExitSettles = 10
+
+    /// Waits after a delivered SIGTERM until every target has exited, for at
+    /// most `gracefulExitSettles` settles. Manual Stop never escalates: this
+    /// only decides when the outcome is read, so a process that needs more than
+    /// one settle to shut down is not reported as still running. The first
+    /// settle always runs, as before; the wait is attempt-bounded so a no-op
+    /// test settle cannot spin.
+    static func waitForExit(
+        of pids: [Int32],
+        signaler: any ProcessSignaling,
+        settle: () async -> Void
+    ) async {
+        await settle()
+        for _ in 1..<gracefulExitSettles {
+            guard pids.contains(where: { signaler.isAlive($0) }) else { return }
+            await settle()
+        }
     }
 
     private func displayName(for identity: ProcessIdentity) -> String {

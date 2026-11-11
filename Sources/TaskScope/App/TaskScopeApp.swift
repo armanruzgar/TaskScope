@@ -396,7 +396,6 @@ struct TaskScopeApp: App {
     @State private var showOnboarding: Bool
     @State private var didBootstrapRuntime = false
     @State private var didRequestOnboarding = false
-    @State private var commandCoordinator: AppCommandCoordinator?
     @State private var notificationEnablement = NotificationEnablementCoordinator()
     /// One coordinator for the app's lifetime. Constructing it per view init
     /// created a new Accessibility runtime on every body evaluation, whose
@@ -454,7 +453,6 @@ struct TaskScopeApp: App {
         _watchedApps = StateObject(wrappedValue: watchedApps)
         _autoStopRules = StateObject(wrappedValue: autoStopRules)
         _processHistory = StateObject(wrappedValue: processHistory)
-        _commandCoordinator = State(initialValue: coordinator)
         _activityMonitor = State(initialValue: ActivityMonitorCoordinator())
     }
 
@@ -576,6 +574,9 @@ struct TaskScopeApp: App {
             configurePolling()
             processHistory.updateConsumerCadence(settings.refreshIntervalSeconds)
         }
+        .onChange(of: settings.keepGlobalProtectOff) { _, _ in
+            configurePolling()
+        }
         .onChange(of: settings.autoRefreshProcessList) { _, _ in
             configurePolling()
         }
@@ -591,6 +592,7 @@ struct TaskScopeApp: App {
                 enabled: newValue,
                 setDeliveryEnabled: { processManager.enableNotifications = $0 }
             )
+            configurePolling()
             guard newValue else { return }
 
             Task {
@@ -673,7 +675,8 @@ struct TaskScopeApp: App {
         guard launchSession.allowsRuntime else { return }
         processManager.setPolling(
             interval: settings.refreshIntervalSeconds,
-            includeProcessList: settings.autoRefreshProcessList
+            includeProcessList: settings.autoRefreshProcessList,
+            backgroundActivity: settings.enableNotifications || settings.keepGlobalProtectOff
         )
     }
 

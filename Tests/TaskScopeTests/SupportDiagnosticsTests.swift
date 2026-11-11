@@ -213,9 +213,8 @@ final class SupportDiagnosticsTests: XCTestCase {
         await manager.quitHelpers(preset)
         await manager.quitAllKillable(preset)
         await manager.keepOff(preset)
-        await manager.allowToRun(preset)
         let failures = manager.lifecycleDiagnostics.failures(for: preset.id)
-        XCTAssertEqual(failures.map(\.action), [.allowToRun, .keepOff, .close, .quitHelpers, .quitApp, .open])
+        XCTAssertEqual(failures.map(\.action), [.keepOff, .close, .quitHelpers, .quitApp, .open])
         XCTAssertTrue(failures.allSatisfy { $0.reason == .userLaunchAgentFailed && $0.failedJobCount == 1 })
         let preview = try SupportDiagnosticsPreview(report: report(failures: failures))
         XCTAssertFalse(preview.text.contains(Self.secret))
@@ -230,10 +229,11 @@ final class SupportDiagnosticsTests: XCTestCase {
         let preset = Self.privatePreset
         let manager = ProcessManager(processInventory: DiagnosticsInventory(fails: true),
                                      verificationInventory: DiagnosticsInventory(fails: true), processSignaler: DiagnosticsSignaler(),
-                                     lifecycle: DiagnosticsLifecycleService(), settleAfterProcessChange: {})
+                                     lifecycle: DiagnosticsLifecycleService(appExists: false), settleAfterProcessChange: {})
         manager.enableNotifications = false
-        // This action does not need inventory and leaves a failed job report.
-        await manager.allowToRun(preset)
+        // Missing-bundle Open restores overrides without reading inventory.
+        manager.isPresetKeptOffProvider = { _ in true }
+        await manager.openApp(preset)
         await manager.quitAllKillable(preset)
         let failures = manager.lifecycleDiagnostics.failures(for: preset.id)
         XCTAssertEqual(failures.first?.reason, .inventoryUnavailable)
@@ -268,7 +268,6 @@ final class SupportDiagnosticsTests: XCTestCase {
         manager.enableNotifications = false
         manager.watchedAppsProvider = { [preset] }
         await manager.quitAllKillable(preset)
-        await manager.allowToRun(preset)
         await manager.keepOff(preset, recordIntent: false)
         XCTAssertTrue(manager.lifecycleDiagnostics.failures(for: preset.id).isEmpty)
 

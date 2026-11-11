@@ -275,7 +275,8 @@ final class Batch06HistoryPollingTests: XCTestCase {
         XCTAssertEqual(totalReads, 5, "Four ticks plus the one read when the window opened")
         historySleeps = await historySleeper.requestCount()
         XCTAssertEqual(historySleeps, 0)
-        manager.stopPolling()
+        // Polling stops once nothing needs it.
+        manager.setPolling(interval: 10, includeProcessList: false, backgroundActivity: false)
         await pollSleeper.resumePendingRequests(returning: false)
         await historySleeper.resumePendingRequests(returning: false)
     }
@@ -327,7 +328,8 @@ final class Batch06HistoryPollingTests: XCTestCase {
         for _ in 0..<1000 where history.samples.isEmpty { await Task.yield() }
         XCTAssertEqual(history.samples.count, 1)
 
-        manager.stopPolling()
+        // Polling stops once nothing needs it.
+        manager.setPolling(interval: 60, includeProcessList: false, backgroundActivity: false)
         await historySleeper.waitForRequestCount(1)
         let interval = await historySleeper.interval(at: 0)
         XCTAssertEqual(interval, 30)

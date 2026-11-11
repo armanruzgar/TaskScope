@@ -105,6 +105,7 @@ struct TaskScopePopoverView: View {
 
     private var observedContent: some View {
         baseContent
+        .task { await processManager.beginObservingStatus() }
         .onAppear {
             guard isExpandedWindow, !registeredExtendedMetrics else { return }
             registeredExtendedMetrics = true
@@ -112,6 +113,7 @@ struct TaskScopePopoverView: View {
             Task { await processManager.beginExtendedMetrics() }
         }
         .onDisappear {
+            processManager.endObservingStatus()
             guard registeredExtendedMetrics else { return }
             registeredExtendedMetrics = false
             history.endSampling()
@@ -576,6 +578,11 @@ struct TaskScopePopoverView: View {
 
             HStack {
                 Text(processCountTitle)
+                if let updated = processManager.lastSuccessfulInventoryAt,
+                   !settings.autoRefreshProcessList {
+                    Text("Updated \(updated.formatted(date: .omitted, time: .standard))")
+                        .help("Time the displayed process snapshot was last refreshed")
+                }
                 if isExpandedWindow {
                     Spacer()
                     Text("PID")

@@ -87,8 +87,10 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         let result = await manager.openApp(.globalProtect)
 
         XCTAssertEqual(result.status, .completed)
-        XCTAssertEqual(result.message, "Opened GlobalProtect.")
+        XCTAssertEqual(result.message, "GlobalProtect is already running.")
         XCTAssertNil(manager.lifecycleReport)
+        let calls = await lifecycle.calls.values
+        XCTAssertFalse(calls.contains("open"), "GlobalProtect's UI must never be opened over a running one")
     }
 
     func testOpenReportsActualOverrideRestoration() async {
@@ -102,7 +104,7 @@ final class LifecycleEngineRegressionTests: XCTestCase {
         let result = await manager.openApp(.globalProtect)
 
         XCTAssertEqual(result.status, .completed)
-        XCTAssertEqual(result.message, "Opened GlobalProtect after restoring required services.")
+        XCTAssertEqual(result.message, "Required services were restored. GlobalProtect is already running.")
         XCTAssertEqual(manager.lifecycleReport?.jobs.filter { $0.state == .changed }.map(\.label), [label])
     }
 

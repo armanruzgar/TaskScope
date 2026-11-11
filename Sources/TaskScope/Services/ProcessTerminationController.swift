@@ -23,63 +23,127 @@ enum ProcessTerminationController {
         excludingPID currentPID: Int32,
         runtime: ProcessLifecycleRuntime
     ) async -> ProcessTerminationOutcome {
-        guard case .success(let initialInventory) = await runtime.loadProcessInventory() else {
-            return .inventoryUnavailable
-        }
-
-        let targets = terminationTargets(
-            named: name,
-            expectedExecutableDirectory: expectedExecutableDirectory,
+        let outcomes = await terminate(
+            requests: [Request(name: name, expectedExecutableDirectory: expectedExecutableDirectory)],
+            policy: policy,
             excludingPID: currentPID,
-            currentUID: runtime.userID,
-            in: initialInventory
+            runtime: runtime
         )
-        let termTargets = targets.filter {
-            ProcessSignalGuard.isSignalablePID($0.pid)
-                && executablePathStillMatches(
-                    $0,
-                    expectedExecutableDirectory: expectedExecutableDirectory,
-                    runtime: runtime
-                )
-        }
-        guard !termTargets.isEmpty else { return .noMatchingProcesses }
+        return outcomes[0]
+    }
 
-        var signalWasRejected = false
-        for process in termTargets where !runtime.sendSignal(SIGTERM, process.pid) {
-            signalWasRejected = true
+    /// One scoped stop target: a process name and the directory its executable
+    /// must run from.
+    struct Request: Equatable, Sendable {
+        var name: String
+        var expectedExecutableDirectory: String
+    }
+
+    /// Stops several scoped names as one operation: one inventory read before
+    /// SIGTERM, one shared graceful window, and one identity-validated read
+    /// before SIGKILL. Every target passes the same checks as a single-name
+    /// stop (current user, executable directory, kernel path immediately before
+    /// signalling), and a process matched by two names is signalled only once.
+    /// Outcomes are returned per request, in request order.
+    static func terminate(
+        requests: [Request],
+        policy: TerminationPolicy,
+        excludingPID currentPID: Int32,
+        runtime: ProcessLifecycleRuntime
+    ) async -> [ProcessTerminationOutcome] {
+        guard !requests.isEmpty else { return [] }
+        guard case .success(let initialInventory) = await runtime.loadProcessInventory() else {
+            return requests.map { _ in .inventoryUnavailable }
+        }
+
+        let termTargets = requests.map { request in
+            terminationTargets(
+                named: request.name,
+                expectedExecutableDirectory: request.expectedExecutableDirectory,
+                excludingPID: currentPID,
+                currentUID: runtime.userID,
+                in: initialInventory
+            ).filter {
+                ProcessSignalGuard.isSignalablePID($0.pid)
+                    && executablePathStillMatches(
+                        $0,
+                        expectedExecutableDirectory: request.expectedExecutableDirectory,
+                        runtime: runtime
+                    )
+            }
+        }
+        guard termTargets.contains(where: { !$0.isEmpty }) else {
+            return requests.map { _ in .noMatchingProcesses }
+        }
+
+        var terms = SignalLedger(signal: SIGTERM)
+        let signalWasRejected = termTargets.map { targets in
+            targets.map { terms.send(to: $0, runtime: runtime) }.contains(false)
         }
         guard policy.allowsEscalation else {
-            return signalWasRejected ? .signalRejected : .signalled
+            return termTargets.indices.map { index in
+                termTargets[index].isEmpty
+                    ? .noMatchingProcesses
+                    : signalWasRejected[index] ? .signalRejected : .signalled
+            }
         }
 
-        await waitForGracefulExit(of: termTargets, runtime: runtime)
+        await waitForGracefulExit(of: termTargets.flatMap { $0 }, runtime: runtime)
         guard case .success(let refreshedInventory) = await runtime.loadProcessInventory() else {
-            return signalWasRejected ? .signalRejected : .escalationUnavailable
+            return termTargets.indices.map { index in
+                termTargets[index].isEmpty
+                    ? .noMatchingProcesses
+                    : signalWasRejected[index] ? .signalRejected : .escalationUnavailable
+            }
         }
 
-        let originalIdentities = Set(termTargets.map(\.identity))
-        let remainingTargets = terminationTargets(
-            named: name,
-            expectedExecutableDirectory: expectedExecutableDirectory,
-            excludingPID: currentPID,
-            currentUID: runtime.userID,
-            in: refreshedInventory
-        ).filter {
-            originalIdentities.contains($0.identity)
-                && ProcessSignalGuard.isSignalablePID($0.pid)
-                && executablePathStillMatches(
-                    $0,
-                    expectedExecutableDirectory: expectedExecutableDirectory,
-                    runtime: runtime
-                )
+        var kills = SignalLedger(signal: SIGKILL)
+        return requests.indices.map { index in
+            guard !termTargets[index].isEmpty else { return .noMatchingProcesses }
+            let request = requests[index]
+            let originalIdentities = Set(termTargets[index].map(\.identity))
+            let remainingTargets = terminationTargets(
+                named: request.name,
+                expectedExecutableDirectory: request.expectedExecutableDirectory,
+                excludingPID: currentPID,
+                currentUID: runtime.userID,
+                in: refreshedInventory
+            ).filter {
+                // Implied by the identity check (every original target passed
+                // it before SIGTERM), and kept as defence in depth.
+                originalIdentities.contains($0.identity)
+                    && ProcessSignalGuard.isSignalablePID($0.pid)
+                    && executablePathStillMatches(
+                        $0,
+                        expectedExecutableDirectory: request.expectedExecutableDirectory,
+                        runtime: runtime
+                    )
+            }
+            if signalWasRejected[index], remainingTargets.isEmpty {
+                return .targetsExited
+            }
+            let killWasRejected = remainingTargets.map { kills.send(to: $0, runtime: runtime) }.contains(false)
+            return signalWasRejected[index] || killWasRejected ? .signalRejected : .signalled
         }
-        if signalWasRejected, remainingTargets.isEmpty {
-            return .targetsExited
+    }
+
+    /// Sends one signal at most once per process identity, so a process that
+    /// two requests both match is not signalled twice; a repeated target
+    /// reports the kernel's first answer.
+    private struct SignalLedger {
+        let signal: Int32
+        private var accepted: [ProcessIdentity: Bool] = [:]
+
+        init(signal: Int32) {
+            self.signal = signal
         }
-        for process in remainingTargets where !runtime.sendSignal(SIGKILL, process.pid) {
-            signalWasRejected = true
+
+        mutating func send(to process: AppProcess, runtime: ProcessLifecycleRuntime) -> Bool {
+            if let earlier = accepted[process.identity] { return earlier }
+            let result = runtime.sendSignal(signal, process.pid)
+            accepted[process.identity] = result
+            return result
         }
-        return signalWasRejected ? .signalRejected : .signalled
     }
 
     /// Polls liveness for up to the graceful window and returns early once

@@ -10,7 +10,7 @@ struct PresetsSectionView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let error = processManager.processLoadError {
+                if let error = processManager.watchedStatusLoadError {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(processManager.watchedStatusAvailability == .unknown
                              ? "Watched status is unavailable" : "Watched status is stale")

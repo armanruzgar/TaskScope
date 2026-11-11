@@ -29,19 +29,6 @@ enum ProcessStatus: Equatable, Sendable {
             "Watched app running"
         }
     }
-
-    var menuBarSystemImage: String {
-        switch self {
-        case .idle:
-            "waveform.path.ecg"
-        case .helpersOnly:
-            "exclamationmark.triangle.fill"
-        case .protectedOnly:
-            "lock.shield.fill"
-        case .watchedRunning:
-            "waveform.path.ecg.rectangle.fill"
-        }
-    }
 }
 
 enum ProcessSortKey: String, CaseIterable, Identifiable, Sendable {

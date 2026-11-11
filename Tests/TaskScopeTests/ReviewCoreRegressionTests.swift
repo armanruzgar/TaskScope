@@ -48,7 +48,7 @@ final class ReviewCoreRegressionTests: XCTestCase {
             inventory.result = .success(changed ? [moved, bystander] : [bystander])
             let result = await manager.terminate(captured, forceKill: changed)
             XCTAssertEqual(result, changed ? .identityChanged : .stale)
-            let displayed = manager.processes.first { $0.pid == bystander.pid }
+            let displayed = manager.displayProcesses().first { $0.pid == bystander.pid }
             XCTAssertEqual(displayed?.netInKB, 12)
             XCTAssertEqual(displayed?.netOutKB, 13)
             XCTAssertEqual(displayed?.diskReadBytes, 14)

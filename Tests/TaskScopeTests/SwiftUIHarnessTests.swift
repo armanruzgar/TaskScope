@@ -178,6 +178,21 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertThrowsError(try view.inspect().find(button: "Retry"))
     }
 
+    func testVerificationFailureDoesNotShowAWatchedStatusBanner() async throws {
+        let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
+            .success([]), .failure(.commandFailed("verification failed"))
+        ]), loadList: false)
+        defer { fixture.stores.cleanup() }
+        fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
+        fixture.manager.watchedAppsProvider = { fixture.stores.watchedApps.presets }
+        await fixture.manager.refreshWatchedStatus(showMessage: false)
+        await fixture.manager.batchTerminate([process(pid: 42, parentPID: 1, name: "Example").identity])
+        XCTAssertNotNil(fixture.manager.processLoadError)
+        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        XCTAssertThrowsError(try view.inspect().find(text: "Watched status is stale"))
+        XCTAssertThrowsError(try view.inspect().find(button: "Retry"))
+    }
+
     func testFailedWatchedRefreshMarksLastObservationStale() async throws {
         let fixture = await makeFixture(inventory: UIScriptedInventory(results: [
             .success([]), .failure(.commandFailed("later read failed")), .success([])
@@ -1204,6 +1219,15 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
     }
 
+    func testManualProcessSnapshotDisplaysItsSuccessfulUpdateTime() async throws {
+        let fixture = await makeFixture(processes: [])
+        defer { fixture.stores.cleanup() }
+        fixture.stores.settings.autoRefreshProcessList = false
+        let updated = try XCTUnwrap(fixture.manager.lastSuccessfulInventoryAt)
+        let view = makePopover(fixture: fixture, confirmationState: ProcessConfirmationState())
+        XCTAssertNoThrow(try view.inspect().find(text: "Updated \(updated.formatted(date: .omitted, time: .standard))"))
+    }
+
     func testTurningKeepOffOffSubmitsFullRestoreCommand() async throws {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
@@ -1250,7 +1274,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
         // Filtering runs before the limit, so the search surfaces a row that the
         // unfiltered display slice drops.
-        XCTAssertEqual(fixture.manager.processes.map(\.pid), [hotA.pid, hotB.pid])
+        XCTAssertEqual(fixture.manager.displayProcesses().map(\.pid), [hotA.pid, hotB.pid])
 
         let view = makePopover(
             fixture: fixture,
@@ -1271,7 +1295,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertEqual(draftProcesses.map(\.pid), [needle.pid])
 
         // The collection this used to read from would have dropped it entirely.
-        let displaySliceOnly = fixture.manager.processes.filter {
+        let displaySliceOnly = fixture.manager.displayProcesses().filter {
             fixture.manager.selectedPids.contains($0.pid)
         }
         XCTAssertTrue(

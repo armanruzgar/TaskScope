@@ -59,7 +59,7 @@ final class ProcessPollingControllerTests: XCTestCase {
     }
 }
 
-private actor ControlledPollingSleeper {
+actor ControlledPollingSleeper {
     private var intervals: [TimeInterval] = []
     private var requests: [CheckedContinuation<Bool, Never>] = []
     private var requestCountWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
@@ -83,6 +83,10 @@ private actor ControlledPollingSleeper {
 
     func interval(at index: Int) -> TimeInterval {
         intervals[index]
+    }
+
+    func requestCount() -> Int {
+        intervals.count
     }
 
     func resumeRequest(at index: Int, returning value: Bool) {

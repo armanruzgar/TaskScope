@@ -54,6 +54,43 @@ enum ProcessLifecycleController {
         )
     }
 
+    /// Stops a preset's scoped processes for Quit App, Quit Helpers, Quit All
+    /// and Keep Off. The main process is stopped first, exactly as on its own,
+    /// so helpers that exit with it are never signalled. All helper names then
+    /// share one inventory read, one graceful window and one escalation pass,
+    /// rather than a window and two reads per name.
+    static func terminateProcesses(
+        for preset: WatchedAppPreset,
+        scope: PresetStopScope,
+        currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
+        runtime: ProcessLifecycleRuntime = .live
+    ) async -> [ProcessTerminationOutcome] {
+        var outcomes: [ProcessTerminationOutcome] = []
+        if scope != .helpers {
+            outcomes.append(await ProcessTerminationController.terminate(
+                named: preset.mainProcessName,
+                policy: .gracefulThenForce,
+                expectedExecutableDirectory: preset.mainExecutableDirectory,
+                excludingPID: currentPID,
+                runtime: runtime
+            ))
+        }
+        if scope != .app {
+            outcomes += await ProcessTerminationController.terminate(
+                requests: preset.helperProcessNames.map {
+                    ProcessTerminationController.Request(
+                        name: $0,
+                        expectedExecutableDirectory: preset.bundleContentsDirectory
+                    )
+                },
+                policy: .gracefulThenForce,
+                excludingPID: currentPID,
+                runtime: runtime
+            )
+        }
+        return outcomes
+    }
+
     /// Unloads the preset's per-user launch agents.
     ///
     /// A job whose loaded pid is listed in `preservingPIDs` is left loaded. Quit

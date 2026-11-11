@@ -39,6 +39,26 @@ enum ProcessSignalDelivery: Equatable, Sendable {
 /// PID values that must never reach `kill(2)`: 0 signals the caller's own
 /// process group, a negative value signals a whole group, and 1 is launchd.
 enum ProcessSignalGuard {
+    /// Why a stop request for `process` was refused, worded the same for Stop,
+    /// Force Stop, Stop Selected and Auto Stop. Retrying cannot change any of
+    /// these. `errno` is the kernel's answer when a signal was attempted; a
+    /// refusal of another user's process is explained by its owner, and `EPERM`
+    /// for an own process needs no code.
+    static func refusalDetail(
+        for process: AppProcess,
+        currentPID: Int32,
+        currentUID: uid_t,
+        errno code: Int32? = nil
+    ) -> String {
+        if process.pid == currentPID { return "TaskScope cannot stop itself; use Quit to close TaskScope." }
+        if !isSignalablePID(process.pid) { return "This PID cannot be signalled." }
+        if process.uid != currentUID { return "The process is not owned by the current user." }
+        if let code, code != EPERM {
+            return "The system refused the stop request (\(String(cString: strerror(code))))."
+        }
+        return "The system refused the stop request."
+    }
+
     static func isSignalablePID(_ pid: Int32) -> Bool {
         pid > 1
     }

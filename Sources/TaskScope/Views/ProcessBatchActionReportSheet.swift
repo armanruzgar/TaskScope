@@ -19,8 +19,13 @@ struct ProcessBatchActionReportSheet: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text(target.state.label)
-                        .foregroundStyle(target.state == .stopped ? .green : .orange)
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(target.state.label)
+                            .foregroundStyle(target.state == .stopped ? Color.green : Color.orange)
+                        if let detail = target.detail {
+                            Text(detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 .accessibilityElement(children: .combine)
             }

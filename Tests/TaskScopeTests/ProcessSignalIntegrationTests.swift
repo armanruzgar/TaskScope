@@ -8,11 +8,15 @@ final class ProcessSignalIntegrationTests: XCTestCase {
     func testGracefulStopLetsControlledChildExitWithoutSIGKILL() async throws {
         let readyMarker = FileManager.default.temporaryDirectory
             .appendingPathComponent("taskscope-signal-ready-\(UUID().uuidString)")
+        // Written by the child's own TERM handler, so it proves the stop was a
+        // delivered SIGTERM that the child handled, not a kill.
+        let handledMarker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("taskscope-signal-handled-\(UUID().uuidString)")
         let child = Process()
         child.executableURL = URL(fileURLWithPath: "/bin/sh")
         child.arguments = [
             "-c",
-            "trap 'sleep 1; exit 0' TERM; /usr/bin/touch \(ShellCommandRunner.shellQuoted(readyMarker.path)); while :; do sleep 0.05; done"
+            "trap '/usr/bin/touch \(ShellCommandRunner.shellQuoted(handledMarker.path)); sleep 1; exit 0' TERM; /usr/bin/touch \(ShellCommandRunner.shellQuoted(readyMarker.path)); while :; do sleep 0.05; done"
         ]
         try child.run()
         let pid = child.processIdentifier
@@ -22,6 +26,7 @@ final class ProcessSignalIntegrationTests: XCTestCase {
                 child.waitUntilExit()
             }
             try? FileManager.default.removeItem(at: readyMarker)
+            try? FileManager.default.removeItem(at: handledMarker)
         }
 
         guard try await waitForMarker(readyMarker) else {
@@ -52,14 +57,37 @@ final class ProcessSignalIntegrationTests: XCTestCase {
         )
         manager.enableNotifications = false
 
-        let startedAt = ContinuousClock.now
         let result = await manager.terminate(target)
-        let elapsed = startedAt.duration(to: .now)
 
         XCTAssertEqual(result, .stopped)
         XCTAssertEqual(signaler.sentSignals, [SIGTERM])
-        XCTAssertGreaterThanOrEqual(elapsed, .seconds(1))
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: handledMarker.path),
+            "the child's TERM handler did not run"
+        )
         XCTAssertFalse(child.isRunning)
+    }
+
+    /// An invalid signal number is refused by the kernel before anything is
+    /// delivered, so this exercises the real `kill(2)` errno path on the
+    /// test's own child without signalling it.
+    func testKernelRejectionKeepsItsErrno() throws {
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["30"]
+        try child.run()
+        let pid = child.processIdentifier
+        defer {
+            if child.isRunning {
+                _ = Darwin.kill(pid, SIGKILL)
+                child.waitUntilExit()
+            }
+        }
+
+        XCTAssertEqual(DarwinProcessSignaler().deliver(NSIG + 1, to: pid), .rejected(errno: EINVAL))
+        XCTAssertFalse(DarwinProcessSignaler().send(NSIG + 1, to: pid))
+        XCTAssertTrue(DarwinProcessSignaler().isAlive(pid))
+        XCTAssertTrue(child.isRunning)
     }
 
     /// `kill(pid, 0)` still succeeds for a zombie, which has already exited and
@@ -141,15 +169,15 @@ private final class RecordingDarwinSignaler: ProcessSignaling {
     }
 
     func send(_ signal: Int32, to pid: Int32) -> Bool {
-        lock.withLock {
-            signals.append(signal)
-        }
-        return Darwin.kill(pid, signal) == 0
+        deliver(signal, to: pid) == .delivered
+    }
+
+    func deliver(_ signal: Int32, to pid: Int32) -> ProcessSignalDelivery {
+        lock.withLock { signals.append(signal) }
+        return DarwinProcessSignaler().deliver(signal, to: pid)
     }
 
     func isAlive(_ pid: Int32) -> Bool {
-        errno = 0
-        let result = Darwin.kill(pid, 0)
-        return result == 0 || errno == EPERM
+        DarwinProcessSignaler().isAlive(pid)
     }
 }

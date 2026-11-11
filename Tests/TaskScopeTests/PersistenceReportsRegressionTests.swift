@@ -205,7 +205,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
     func testDiagnosticsActionAndReasonRawValuesMatchTheExportContract() throws {
         let actions = LifecycleDiagnosticFailure.Action.allCases
         let reasons = LifecycleDiagnosticFailure.Reason.allCases
-        XCTAssertEqual(actions.map(\.rawValue), ["open", "quitApp", "quitHelpers", "close", "keepOff", "allowToRun"])
+        XCTAssertEqual(actions.map(\.rawValue), ["open", "quitApp", "quitHelpers", "close", "keepOff"])
         XCTAssertEqual(reasons.map(\.rawValue), ["disconnectFailed", "incomplete", "appBundleMissing", "inventoryUnavailable",
                                                "systemServiceFailed", "userLaunchAgentFailed", "launchFailed",
                                                "signalRejected", "verificationUnavailable", "stillRunning"])
