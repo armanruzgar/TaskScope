@@ -93,8 +93,9 @@ Required invariants:
   at once, and a shared read is cancelled only when no caller waits for it;
 - retry shell child reaping after early exit notifications or stop requests
   until reaped, including after command timeout;
-- judge preset Quit and Close against the captured preset and fresh final
-  inventory even if the stored preset changes or is deleted;
+- judge preset Quit App, Quit Helpers, and Quit App and Helpers against the
+  captured preset and fresh final inventory even if the stored preset changes
+  or is deleted;
 - partial stop failures must not claim every target stopped or no target
   received a stop request;
 - never signal TaskScope itself, launchd (pid 1), the kernel task, or any
@@ -129,7 +130,7 @@ Required invariants:
   Accessibility;
 - require a separate, explicit Force Stop confirmation for `SIGKILL`; manual
   Stop never escalates, though it waits up to 3 seconds for the target to exit
-  before reporting it still running. Preset Quit, Close, and Keep Off escalate
+  before reporting it still running. Preset quits and Keep Off escalate
   to `SIGKILL` only after a disclosed graceful window (3 seconds) with the
   identity still present: first for the main process, then for all helpers in
   one shared window;
@@ -534,8 +535,8 @@ Residual risk: the hardened runtime does not protect a bundle in a
 user-writable location, such as a staged copy in a checkout or an install in a
 user-owned folder, from being modified or replaced by another process of the
 same user. Signature checks and **Settings > Health** can reveal a changed
-bundle but cannot prevent the change. The Health signature row does not report
-whether the hardened runtime is on; check it with `codesign -dv`.
+bundle but cannot prevent the change. The Health signature row reports whether
+an intact signature has the hardened runtime; `codesign -dv` shows it as well.
 
 ## Abuse cases and expected response
 

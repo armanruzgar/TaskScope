@@ -154,11 +154,11 @@ TaskScope updates them once a launch has settled and whenever a preset is
 added, renamed, or deleted.
 
 TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
-diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Command**
-in a process row's context menu, and **Copy Report** in a Stop or service
-results report. Copy Command replaces the clipboard contents with the process's
-kernel executable path, or with its `ps` command name when that path is
-unavailable. Copy Report copies the report as shown, which can include process
+diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Executable
+Path** in a process row's context menu, and **Copy Report** in a Stop or service
+results report. Copy Executable Path replaces the clipboard contents with the
+process's kernel executable path, or with its `ps` command name when that path
+is unavailable. Copy Report copies the report as shown, which can include process
 names and PIDs or launch-job labels and their results. Text you select in the
 Process Detail sheet, including a command line, is copied only by your own
 Copy command. TaskScope does not read the clipboard.

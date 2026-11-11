@@ -29,8 +29,8 @@ before installing.
 
 - Search, filter, sort, and explore processes in flat or tree views.
 - Review captured targets before Stop or Force Stop, with identity checks before signals.
-- Create watched-app presets with Open, Quit App, Quit Helpers, and Quit All
-  Killable actions; the built-in GlobalProtect preset has Quit All instead.
+- Create watched-app presets with Open, Quit App, Quit Helpers, and Quit App
+  and Helpers actions; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
 - Create Prompt, Auto Stop, or Log Only runtime rules and review their event history.
 - View CPU and memory history and opt into watched-process notifications.
@@ -186,12 +186,12 @@ Import previews every lifecycle field before saving and performs no action.
 Custom presets can configure user launch agents, but cannot define privileged
 system-daemon jobs. Main/helper detection, the Watched filter, and preset stops
 require current-user ownership and the configured bundle boundaries. Quit App,
-Quit Helpers, Quit All Killable, and GlobalProtect's Quit All and Keep Off stop
-the main process first and then all helpers together; each step waits up to
-three seconds before force stopping eligible processes, as disclosed in
-confirmation. Result messages and support diagnostics call Quit All Killable
-"Close". Read the [preset guide](docs/USING_TASKSCOPE.md#watched-app-presets)
-before importing configuration.
+Quit Helpers, Quit App and Helpers, and GlobalProtect's Quit All and Keep Off
+stop the main process first and then all helpers together; each step waits up
+to three seconds before force stopping eligible processes, as disclosed in
+confirmation. Support diagnostics record Quit App and Helpers as `close`. Read
+the [preset guide](docs/USING_TASKSCOPE.md#watched-app-presets) before
+importing configuration.
 
 TaskScope reads watched status in the background only while notifications or
 Keep GlobalProtect Off are on; otherwise it reads only while a TaskScope window
@@ -222,7 +222,7 @@ preserve an accepted request's retry budget.
 
 A properly signed, installed app exposes **Refresh TaskScope**, **Open Watched
 App**, and **Stop Watched App**. Stop runs the same stop as a custom preset's
-Quit All Killable and requires system confirmation, including direct Siri,
+Quit App and Helpers and requires system confirmation, including direct Siri,
 Spotlight, and App Shortcut invocation. The confirmation names the app and the
 user launch agents it unloads, and says that a process still running three
 seconds after the stop request is force stopped. For GlobalProtect, Shortcuts

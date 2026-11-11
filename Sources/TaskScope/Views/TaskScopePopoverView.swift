@@ -1439,8 +1439,8 @@ struct TaskScopePopoverView: View {
         Button("Show Detail") {
             showDetail(for: process)
         }
-        Button("Copy Command") {
-            copyCommand(of: process)
+        Button("Copy Executable Path") {
+            copyExecutablePath(of: process)
         }
         Divider()
         Button("Open in Activity Monitor") {
@@ -1469,8 +1469,8 @@ struct TaskScopePopoverView: View {
         Button("Show Detail") {
             showDetail(for: process)
         }
-        Button("Copy Command") {
-            copyCommand(of: process)
+        Button("Copy Executable Path") {
+            copyExecutablePath(of: process)
         }
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
@@ -1490,7 +1490,7 @@ struct TaskScopePopoverView: View {
         showDetail(for: process)
     }
 
-    private func copyCommand(of process: AppProcess) {
+    private func copyExecutablePath(of process: AppProcess) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(
             process.executablePath ?? process.command,

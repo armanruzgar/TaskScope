@@ -65,9 +65,8 @@ Failure reasons are `disconnectFailed`, `appBundleMissing`, `inventoryUnavailabl
 `verificationUnavailable`, `stillRunning`, or the fallback `incomplete`.
 `disconnectFailed` means automatic GlobalProtect disconnect could not be verified.
 Turning Keep Off off is recorded as `open`; in-app GlobalProtect Quit All and
-Stop Services Anyway are recorded as `keepOff`. A custom preset's **Quit All
-Killable** button, which result messages call Close, and Stop Watched App are
-recorded as `close`.
+Stop Services Anyway are recorded as `keepOff`. A custom preset's **Quit App
+and Helpers** button and Stop Watched App are recorded as `close`.
 
 Counts refer to job results in that action attempt; an early failure can have
 zero job failures. They do not contain job labels or raw error details, and
@@ -144,8 +143,10 @@ loads/unloads jobs, or runs a Shortcut. Use the existing explicit controls or
 the source packaging instructions below after reviewing the result.
 
 Signature checks validate local sealed content with network access disabled;
-they do not query signing identities in the keychain. Intact ad-hoc signing is
-reported as an App Intents blocker. Even a valid non-ad-hoc signature plus the
+they do not query signing identities in the keychain. For an intact signature,
+the signing row also says whether the hardened runtime is on; builds from the
+current TaskScope scripts turn it on. Intact ad-hoc signing is reported as an
+App Intents blocker. Even a valid non-ad-hoc signature plus the
 expected metadata remains **Unverified** for actual Shortcuts discovery and
 execution. Bundle identity accepts valid custom identifiers and compares the
 running code with disk; it does not scan for duplicate app copies or promise

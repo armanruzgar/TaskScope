@@ -61,8 +61,8 @@ start of each row; with a selection, the red button with the count offers
 stop button at the end of a row opens the Stop review for that process.
 Right-click a row for **Create Auto-Stop Rule…**, **Watch This Process…**,
 **Save Selection as Preset…** (when rows are selected), **Stop…**, **Force
-Stop…**, **Show Detail**, **Copy Command**, and **Open in Activity Monitor**;
-VoiceOver offers the same actions in its Actions rotor.
+Stop…**, **Show Detail**, **Copy Executable Path**, and **Open in Activity
+Monitor**; VoiceOver offers the same actions in its Actions rotor.
 
 The process list supports search, sorting, filters, and flat or expandable tree
 views. When the display limit truncates results, **Showing N of M** includes
@@ -180,7 +180,7 @@ About TaskScope and the welcome window each open as a single window.
 | Prompt rule, after **Stop Now** | One `SIGTERM`; never repeated. If the process still runs one 10-second engine cycle later, the event history records a failure that suggests Force Stop |
 | Auto Stop rule | `SIGTERM`; if the process still runs at least one 10-second engine cycle later, one more `SIGTERM`. It never sends `SIGKILL`: the event then says to use Force Stop |
 | Log Only rule | None |
-| Preset Quit App, Quit Helpers, Quit All Killable; GlobalProtect Quit All and Keep Off | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
+| Preset Quit App, Quit Helpers, Quit App and Helpers; GlobalProtect Quit All and Keep Off | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
 
 Preset stops also unload the preset's user launch agents before signalling
 (Quit Helpers keeps an agent that runs the main process); see
@@ -189,7 +189,7 @@ Preset stops also unload the preset's user launch agents before signalling
 ### Process details and Activity Monitor
 
 A row's context menu offers **Show Detail** (Command-I for the keyboard row),
-**Copy Command**, and **Open in Activity Monitor**. Show Detail opens a
+**Copy Executable Path**, and **Open in Activity Monitor**. Show Detail opens a
 read-only sheet with the name, PID, parent PID, owner's account name, start
 time, `ps` command name, **Arguments**, CPU, and memory. Arguments is the
 process's full command line, read only when you open the sheet and kept only if
@@ -202,10 +202,10 @@ date from the request. The sheet says when the process is no longer running or
 its PID now belongs to a different process, and a failed read offers
 **Retry**.
 
-Copy Command copies the process's kernel executable path, or the `ps` command
-name when that path is unavailable; it never copies arguments. For a process
-started from a shell, the sheet's Command (for example `sleep`) can therefore
-differ from what Copy Command copies (`/bin/sleep`).
+Copy Executable Path copies the process's kernel executable path, or the `ps`
+command name when that path is unavailable; it never copies arguments. For a
+process started from a shell, the sheet's Command (for example `sleep`) can
+therefore differ from what Copy Executable Path copies (`/bin/sleep`).
 
 Open in Activity Monitor requests exact selection of that process.
 The row's UTC start time and kernel executable path must match before opening,
@@ -242,7 +242,7 @@ Watched Apps has a **Notify** switch and **Dry Run** and **Delete…** buttons,
 and custom presets also have **Edit…**; deleting asks for confirmation.
 **Export…** and **Import…** handle the whole list. Each preset card in the
 **Presets** section has **Open**, **Quit App**, **Quit Helpers**, and **Quit
-All Killable**. On the built-in GlobalProtect preset, marked with a shield, the
+App and Helpers**. On the built-in GlobalProtect preset, marked with a shield, the
 fourth button is **Quit All**, a different and stronger action that disconnects
 the VPN and turns on **Keep GlobalProtect Off**; read
 [GlobalProtect](GLOBALPROTECT.md). Quit
@@ -264,11 +264,13 @@ The preset editor has these fields:
 | Labels | Optional user launch-agent labels, comma-separated |
 | Plist paths | The matching launch-agent plist paths, comma-separated, in the same order as Labels and with the same number of items |
 
-Quit App stops the main process, Quit Helpers stops the helpers, and Quit All
-Killable stops both; protected names are excluded. The dry run calls Quit All
-Killable **Close All**, its result messages say **Close** (for example "Close
-did not complete."), support diagnostics record it as `close`, and the **Stop
-Watched App** shortcut runs the same stop.
+Quit App stops the main process, Quit Helpers stops the helpers, and Quit App
+and Helpers stops both; protected names are excluded. The confirmation, the
+dry run, and the result messages use the same name (for example "Quit App and
+Helpers did not complete."), support diagnostics record it as `close`, and the
+**Stop Watched App** shortcut runs the same stop. On the built-in GlobalProtect
+preset, whose fourth button is the stronger **Quit All**, the dry run calls
+this stop **Shortcuts Stop**.
 
 Settings supports creation, editing, ordering, import, export, and a lifecycle
 dry run. Exports use a versioned archive; legacy array imports remain accepted.
@@ -316,7 +318,7 @@ process, but are not accepted as that main process. TaskScope's own row disables
 Watch This Process and Create Auto-Stop Rule.
 
 Open and preset stop actions share lifecycle checks and per-job reporting. Quit
-App, Quit Helpers, and Quit All Killable verify final inventory against the
+App, Quit Helpers, and Quit App and Helpers verify final inventory against the
 definition captured for the action even if the saved preset changes or is
 deleted. Preset stops and GlobalProtect's Quit All and Keep Off stop the main
 process first, giving it up to three seconds to exit before force stopping, and

@@ -39,7 +39,7 @@ struct PresetCard: View {
                 PresetActionButton(title: "Quit Helpers…", systemImage: "wrench.and.screwdriver", role: .destructive, action: onQuitHelpers)
                     .disabled(!hasHelperScope)
                     .help(hasHelperScope ? "Quit Helpers" : "This preset has no helper processes or user launch agents to stop.")
-                PresetActionButton(title: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "Quit All…" : "Quit All Killable…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
+                PresetActionButton(title: snapshot.preset.hasCanonicalGlobalProtectIdentity ? "Quit All…" : "Quit App and Helpers…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
                     .disabled(snapshot.preset.hasCanonicalGlobalProtectIdentity && !isKeepOffControlEnabled)
             }
             .disabled(isMutationActive)

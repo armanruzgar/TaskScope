@@ -926,7 +926,7 @@ final class ProcessManagerTests: XCTestCase {
         let cases: [(before: [AppProcess], after: [AppProcess], changed: Bool, messages: [String])] = [
             ([], [], false, ["No Example app found.", "No user helpers found.", "No watched app or user helpers found."]),
             ([main, helper], [], false, ["Example quit.", "User helpers quit.", "Example and helpers quit."]),
-            ([main, helper], [], true, ["Example quit and launch agents unloaded.", "User helpers quit and launch agents unloaded.", "Example closed and launch agents unloaded."]),
+            ([main, helper], [], true, ["Example quit and launch agents unloaded.", "User helpers quit and launch agents unloaded.", "Example and helpers quit and launch agents unloaded."]),
             ([protected], [protected], false, ["No Example app found.", "No user helpers found.", "No watched app or user helpers found."]),
             ([main, helper], [main, helper], false, ["Example may still run.", "User helpers may still run.", "Example may still run."]),
             ([main, helper], [helper], false, ["Example quit.", "User helpers may still run.", "User helpers may still run."])

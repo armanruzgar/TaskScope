@@ -320,7 +320,7 @@ final class Batch10PresentationTests: XCTestCase {
         let expected: [(ProcessConfirmationState.PresetAction, String, String)] = [
             (.quitApp, "Quit Work Browser?", "Quit App"),
             (.quitHelpers, "Quit Work Browser Helpers?", "Quit Helpers"),
-            (.quitAll, "Quit All Work Browser Processes?", "Quit All Killable")
+            (.quitAll, "Quit Work Browser and Its Helpers?", "Quit App and Helpers")
         ]
         for (action, title, button) in expected {
             let pending = ProcessConfirmationState.PendingPresetAction(preset: preset, action: action)

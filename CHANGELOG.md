@@ -23,6 +23,7 @@ All notable changes to TaskScope are documented in this file. The project uses
 - Added **Help > Welcome to TaskScope** (Command-?) to reopen the introduction, which now also covers the menu-bar item, the current global shortcut, and the Accessibility access and administrator approval that Quit All and Keep GlobalProtect Off can ask for. It replaces the Help item that opened a help book the app does not have.
 - Added menu commands: File > Refresh (Command-R) replaces File > New, which opened duplicate main windows; Edit > Find… (Command-F) focuses the search field; View > Tree View, Processes, and Presets; and a Process menu with Show Detail (Command-I), Stop…, and Force Stop…, which still ask for confirmation. Edit > Select All adds the displayed matching rows when the list has focus.
 - Added a Unified Log record, in the `Actions` category, of every signal TaskScope sends and every launchd change, app open, and administrator request it runs, with its outcome; process names and command lines are private.
+- Added to Settings > Health's signing row whether an intact signature has the hardened runtime.
 
 ### Changed
 
@@ -99,6 +100,8 @@ All notable changes to TaskScope are documented in this file. The project uses
 - After a successful Activity Monitor handoff, keep the search and scope that show the row and hide a PID column TaskScope showed after about four seconds; restore changed fields only after a failed handoff. Selection gives up after about five seconds, reporting "Activity Monitor is not responding." when it stopped answering, and overlapping handoffs run one after another.
 - Take hotkey recording keystrokes only from the Settings window, cancel recording when that window loses focus or closes, and pause the current hotkey while recording; refuse Control-letter keys and Command with an arrow, Delete, Forward Delete, Return, or a digit.
 - Stop Health file and signature checks after 10 seconds, reporting a still-blocked check as pending instead of starting it again.
+- Call a custom preset's full stop **Quit App and Helpers** on its button and confirmation, in the dry run, and in its result messages, instead of Quit All Killable, Close All, and Close; support diagnostics still record it as `close`, Shortcuts still call it Stop Watched App, and GlobalProtect keeps its stronger Quit All.
+- Rename the row action Copy Command to **Copy Executable Path**, which is what it copies.
 
 ### Fixed
 
@@ -121,7 +124,7 @@ All notable changes to TaskScope are documented in this file. The project uses
 - Strengthen inventory-failure regressions to require unverified targets and the current verification-failure messages.
 - Report explicit refresh results when joining silent reads, without treating cancellation or an unrelated prior error as the refresh result.
 - Reject queued cancellations without failure diagnostics; finish admitted preset Stops and keep Open readiness cancellable with truthful partial-change messages.
-- Verify Quit App, Quit Helpers, and Close against the captured preset even if its stored definition changes or is deleted.
+- Verify Quit App, Quit Helpers, and Quit App and Helpers against the captured preset even if its stored definition changes or is deleted.
 - Verify user-agent removal after nonzero bootout exits; still-loaded or unreadable final states remain failures.
 - Recover required GlobalProtect overrides on Open without saved intent or an app bundle, reporting missing-bundle and recovery failures together.
 - Report service restoration only for observed changes and suppress the service sheet for healthy unchanged GlobalProtect Open.

@@ -298,6 +298,7 @@ enum InstallationHealthProbe {
         var diskCode: SecStaticCode?
         let created = SecStaticCodeCreateWithPath(app as CFURL, [], &diskCode)
         var signature = HealthSignature.unverified
+        var hardenedRuntime: Bool?
         var signingIdentifier: String?
         if created == errSecSuccess, let diskCode {
             let status = SecStaticCodeCheckValidity(diskCode,
@@ -306,8 +307,9 @@ enum InstallationHealthProbe {
             let copied = SecCodeCopySigningInformation(diskCode, [], &dictionary)
             let signing = dictionary as? [String: Any]
             signingIdentifier = signing?[kSecCodeInfoIdentifier as String] as? String
-            signature = signatureState(status: status, informationStatus: copied,
-                                       flags: (signing?[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value)
+            let flags = (signing?[kSecCodeInfoFlags as String] as? NSNumber)?.uint32Value
+            signature = signatureState(status: status, informationStatus: copied, flags: flags)
+            hardenedRuntime = hardenedRuntimeState(status: status, informationStatus: copied, flags: flags)
         }
         var runningCode: SecCode?
         let selfStatus = SecCodeCopySelf([], &runningCode)
@@ -327,7 +329,15 @@ enum InstallationHealthProbe {
         default:
             detail = "The bundle identifier or running/on-disk code relationship could not be verified. A custom identifier is allowed; changing it can create separate preferences and permissions."
         }
-        return .init(identity: identity, identityDetail: detail, signature: signature, metadata: metadataState(at: app))
+        return .init(identity: identity, identityDetail: detail, signature: signature,
+                     metadata: metadataState(at: app), hardenedRuntime: hardenedRuntime)
+    }
+
+    /// The hardened runtime flag of a signature that validated; nil when the
+    /// signature or its flags could not be read, so nothing is claimed.
+    static func hardenedRuntimeState(status: OSStatus, informationStatus: OSStatus, flags: UInt32?) -> Bool? {
+        guard status == errSecSuccess, informationStatus == errSecSuccess, let flags else { return nil }
+        return flags & SecCodeSignatureFlags.runtime.rawValue != 0
     }
 
     static func identityState(info: [String: Any], runningIdentifier: String?, signingIdentifier: String?,

@@ -124,7 +124,7 @@ final class ProcessConfirmationState: ObservableObject {
     enum PresetAction: String, Equatable {
         case quitApp = "Quit App"
         case quitHelpers = "Quit Helpers"
-        case quitAll = "Quit All Killable"
+        case quitAll = "Quit App and Helpers"
         case keepOff = "Keep GlobalProtect Off"
         case stopServices = "Stop Services Anyway"
     }
@@ -145,7 +145,12 @@ final class ProcessConfirmationState: ObservableObject {
             switch action {
             case .quitApp: return "Quit \(name)?"
             case .quitHelpers: return "Quit \(name) Helpers?"
-            case .quitAll: return "Quit All \(name) Processes?"
+            case .quitAll:
+                // GlobalProtect's button is the stronger Quit All; a custom
+                // preset's is Quit App and Helpers, so its question says that.
+                return preset.hasCanonicalGlobalProtectIdentity
+                    ? "Quit All \(name) Processes?"
+                    : "Quit \(name) and Its Helpers?"
             case .keepOff: return "Keep \(name) Off?"
             case .stopServices: return "Stop \(name) Services Anyway?"
             }

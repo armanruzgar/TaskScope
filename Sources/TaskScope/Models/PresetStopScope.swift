@@ -15,7 +15,7 @@ enum PresetStopScope {
         switch self {
         case .app: "Quit did not complete."
         case .helpers: "Helper stop did not complete."
-        case .all: "Close did not complete."
+        case .all: "Quit App and Helpers did not complete."
         }
     }
 
@@ -76,7 +76,7 @@ enum PresetStopScope {
             case .helpers:
                 message = "Helper stop was incomplete: \(agents.failureSummary ?? "relaunch job failure")."
             case .all:
-                message = "Close was incomplete: \(agents.failureSummary ?? "relaunch job failure")."
+                message = "Quit App and Helpers was incomplete: \(agents.failureSummary ?? "relaunch job failure")."
             }
             return .failed(message, reason: .userLaunchAgentFailed)
         }
@@ -88,7 +88,7 @@ enum PresetStopScope {
             case .helpers:
                 message = "Helper stop was requested, but TaskScope could not verify the final state."
             case .all:
-                message = "Close was requested, but TaskScope could not verify the final \(name) state."
+                message = "Quit App and Helpers was requested, but TaskScope could not verify the final \(name) state."
             }
             return .failed(message, reason: .verificationUnavailable)
         }
@@ -134,7 +134,7 @@ enum PresetStopScope {
                 return .failed("User helpers may still run.", reason: .stillRunning)
             }
             return completed(agents.didChangeState
-                ? "\(name) closed and launch agents unloaded."
+                ? "\(name) and helpers quit and launch agents unloaded."
                 : "\(name) and helpers quit.")
         }
     }

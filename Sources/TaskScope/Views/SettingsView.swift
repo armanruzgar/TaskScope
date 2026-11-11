@@ -498,9 +498,13 @@ struct SettingsView: View {
         )
         let agentPreset = preset.hasSupportedGlobalProtectIdentity ? preset.globalProtectInterfaceOnly : preset
         let agentLabels = agentPreset.lifecycleUserLaunchAgentJobs.map(\.label)
+        // A custom preset's card names its full stop Quit App and Helpers. The
+        // built-in GlobalProtect card has the stronger Quit All instead, so its
+        // user-scope full stop is reachable only as the Shortcuts Stop action.
+        let fullStop = preset.hasCanonicalGlobalProtectIdentity ? "Shortcuts Stop" : "Quit App and Helpers"
         if !agentLabels.isEmpty {
             operations.append(
-                "Quit App, Quit Helpers, or Close All: unload and verify the user launch agents (\(agentLabels.joined(separator: ", "))) before signaling processes; Quit Helpers preserves an agent running the main process."
+                "Quit App, Quit Helpers, or \(fullStop): unload and verify the user launch agents (\(agentLabels.joined(separator: ", "))) before signaling processes; Quit Helpers preserves an agent running the main process."
             )
         }
         operations.append(
@@ -512,11 +516,11 @@ struct SettingsView: View {
             )
         }
         operations.append(
-            "Close All: run the Quit App and Quit Helpers targets above; protected names are excluded."
+            "\(fullStop): run the Quit App and Quit Helpers targets above; protected names are excluded."
         )
         if !preset.protectedProcessNames.isEmpty {
             operations.append(
-                "Never signal protected processes through ordinary close: \(preset.protectedProcessNames.joined(separator: ", "))."
+                "Never signal protected processes through these ordinary quits: \(preset.protectedProcessNames.joined(separator: ", "))."
             )
         }
         if preset.id == WatchedAppPreset.globalProtectID {

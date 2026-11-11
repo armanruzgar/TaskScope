@@ -79,14 +79,15 @@ private struct Batch09AppFixture {
 
     /// Signs `app` ad hoc with the system codesign tool. Only the fixture in
     /// the temporary directory changes; no identity or keychain is used.
-    func signAdHoc(_ app: URL) throws {
+    func signAdHoc(_ app: URL, hardenedRuntime: Bool = false) throws {
         let codesign = URL(fileURLWithPath: "/usr/bin/codesign")
         guard FileManager.default.isExecutableFile(atPath: codesign.path) else {
             throw XCTSkip("codesign is not available")
         }
         let process = Process()
         process.executableURL = codesign
-        process.arguments = ["--force", "--sign", "-", "--timestamp=none", app.path]
+        process.arguments = ["--force", "--sign", "-", "--timestamp=none"]
+            + (hardenedRuntime ? ["--options", "runtime"] : []) + [app.path]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -174,6 +175,24 @@ final class Batch09InstallationHealthProbeTests: XCTestCase {
 
         try Data("changed".utf8).write(to: app.appendingPathComponent("Contents/Resources/data.txt"))
         XCTAssertEqual(InstallationHealthProbe.inspectBundle(at: app).signature, .invalid)
+    }
+
+    // Batch 13 follow-up: Health reads the hardened runtime flag from the same
+    // signature check, and claims nothing for an unsigned bundle.
+    func testBundleProbeReadsTheHardenedRuntimeFlag() throws {
+        let fixture = try Batch09AppFixture()
+        defer { fixture.remove() }
+        let binary = try Data(contentsOf: URL(fileURLWithPath: "/usr/bin/true"))
+        let app = try fixture.makeApp(executableContents: binary, metadata: true)
+        XCTAssertNil(InstallationHealthProbe.inspectBundle(at: app).hardenedRuntime, "an unsigned bundle has no flag to read")
+
+        try fixture.signAdHoc(app)
+        XCTAssertEqual(InstallationHealthProbe.inspectBundle(at: app).hardenedRuntime, false)
+
+        try fixture.signAdHoc(app, hardenedRuntime: true)
+        let hardened = InstallationHealthProbe.inspectBundle(at: app)
+        XCTAssertEqual(hardened.signature, .adHoc)
+        XCTAssertEqual(hardened.hardenedRuntime, true)
     }
 
     func testBundleProbeTreatsAMissingInfoPlistAsAMovedOrReplacedApp() throws {

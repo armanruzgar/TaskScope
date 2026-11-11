@@ -29,7 +29,7 @@ TaskScope**, **Open Watched App**, and **Stop Watched App**. Open and Stop use a
 user-selected entity from stored presets and share the app's lifecycle result
 reporting. Stop requests confirmation naming that app before stopping eligible
 watched processes, including direct App Shortcut invocation. It runs the same
-stop as a custom preset's **Quit All Killable** button, which support
+stop as a custom preset's **Quit App and Helpers** button, which support
 diagnostics record as `close`: it first unloads the preset's user launch agents
 (for GlobalProtect only `com.paloaltonetworks.gp.pangpa`), then sends `SIGTERM`
 and force stops a process still running three seconds after the stop request.

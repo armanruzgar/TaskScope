@@ -72,6 +72,9 @@ struct HealthBundleEvidence: Equatable, Sendable {
     var identityDetail: String
     var signature: HealthSignature
     var metadata: InstallationHealthReport.State
+    /// Whether the intact on-disk signature has the hardened runtime flag;
+    /// nil when the signature could not be read or validated.
+    var hardenedRuntime: Bool? = nil
 }
 
 struct HealthPermissionEvidence: Sendable {
@@ -168,7 +171,11 @@ enum InstallationHealthAssessment {
             signingState = .unverified
             signingDetail = "Signature integrity could not be checked for this installation."
         }
-        findings.append(.init(category: .signing, state: signingState, detail: signingDetail, recovery: .revealApp))
+        findings.append(.init(
+            category: .signing, state: signingState,
+            detail: signingDetail + Self.hardenedRuntimeSentence(bundle.hardenedRuntime, signature: bundle.signature),
+            recovery: .revealApp
+        ))
         let intentsState: InstallationHealthReport.State
         if bundle.identity == .stale { intentsState = .stale }
         else if [.adHoc, .unsigned, .invalid].contains(bundle.signature) { intentsState = .unavailable }
@@ -209,5 +216,15 @@ enum InstallationHealthAssessment {
             }
         }
         return .init(checkedAt: checkedAt, findings: findings)
+    }
+
+    /// Says whether an intact signature carries the hardened runtime, which the
+    /// TaskScope scripts set on every build. Reported, not graded: the signing
+    /// state stays what the signature check found.
+    static func hardenedRuntimeSentence(_ hardenedRuntime: Bool?, signature: HealthSignature) -> String {
+        guard signature == .signed || signature == .adHoc, let hardenedRuntime else { return "" }
+        return hardenedRuntime
+            ? " The hardened runtime is on."
+            : " The hardened runtime is off; builds made with the current TaskScope scripts turn it on."
     }
 }
