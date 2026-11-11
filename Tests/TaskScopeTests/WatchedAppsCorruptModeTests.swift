@@ -24,9 +24,10 @@ final class P10CorruptModeSilentDiscardTests: XCTestCase {
         super.tearDown()
     }
 
-    /// SettingsView.savePresetEditor() does `let saved = watchedApps.add(preset)` and, on
-    /// `true`, clears the validation error and dismisses the sheet. In corrupt mode the write
-    /// cannot happen, so `add` must not claim success.
+    /// The Settings preset editor saves through PresetSettingsActions.saveEditor, which calls
+    /// `store.add(preset)` for a new preset (`update` for an edit) and, on `true`, clears its
+    /// error and closes the sheet. In corrupt mode the write cannot happen, so `add` must not
+    /// claim success.
     func testAddInCorruptModeReportsFailureToItsCaller() {
         let store = makeCorruptStore()
 

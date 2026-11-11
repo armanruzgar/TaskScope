@@ -1,3 +1,4 @@
+import AppKit
 import Security
 import SwiftUI
 import ViewInspector
@@ -65,6 +66,10 @@ final class Batch13FollowUpTests: XCTestCase {
         XCTAssertThrowsError(try menu.find(button: "Copy Command"))
         XCTAssertNoThrow(try view.processAccessibilityActions(for: target).inspect().find(button: "Copy Executable Path"))
 
+        // OnboardingView reads NSApp's icon, and NSApp is nil until something
+        // creates the shared application: run alone (`swift test --parallel`
+        // runs each test in its own process), this test crashed without it.
+        _ = NSApplication.shared
         let onboarding = try OnboardingView(onComplete: {}).inspect()
         XCTAssertNoThrow(try onboarding.find(ViewType.Text.self, where: {
             try $0.string().contains("copy its executable path")

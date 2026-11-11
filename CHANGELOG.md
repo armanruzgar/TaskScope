@@ -8,6 +8,18 @@ All notable changes to TaskScope are documented in this file. The project uses
 ### Fixed
 
 - A launch while TaskScope is quitting no longer hands off to the quitting copy and exits, which left no TaskScope running and showed nothing. The running copy holds a per-user lock file, `~/Library/Application Support/<bundle id>/Instance.lock`, and lets it go while quitting, once its settings are saved and no action is running; the system drops it after a crash. A new launch hands off only to the copy that holds the lock, waits up to about ten seconds for a copy that is still finishing an action, and otherwise starts normally, even while the quitting or crashed copy is still listed. When two copies start together, the one that takes the lock keeps running. Startup verification never takes the lock. Only when the lock cannot be used does the earlier-start rule decide, as in 1.1.0.
+- Show the main window when TaskScope is opened from the Dock or Finder. While it decided how it was launched, TaskScope made itself a menu-bar-only app, which handed the front back to the previous app at once, so the window waited for a second click.
+- Draw tree rows when Tree View is turned on after the flat list was shown; the flat rows stayed on screen without indent or disclosure buttons, so a parent could not be expanded.
+- Match the executable path shown under each process name when the search text contains a slash or starts with `~`, as shown or in full.
+- Read a main-window row's parent PID and network and disk totals to VoiceOver.
+- Show what a preset's Quit App, Quit Helpers, or Quit App and Helpers is doing while it runs, instead of an earlier result.
+- Keep an unanswered Auto-Stop prompt in its place when its process's executable moves, without recording an "identity changed" failure for it.
+- Use Activity Monitor's search field when its window appears only after the first selection attempt, so a saved search no longer hides the row for the rest of the handoff.
+- Name ⌘⇧Tab, not ⌘Tab, when that hotkey is refused, say "1 selected process" when saving a one-process selection, and report a command that could not be started as "Could not start the command: …".
+
+### Security
+
+- Start child commands without inherited variables that change what a shell runs, exported bash functions, or `DYLD_*` variables, so a value set for the login session cannot change what the elevated `/bin/sh` of an administrator request runs.
 
 ## [1.1.0] - 2026-11-10
 

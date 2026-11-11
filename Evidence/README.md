@@ -1,7 +1,9 @@
 # Recorded observations
 
 These records are redacted observations from one configuration, retained to
-show the tested TaskScope revision, environment, actions, results, and limits.
+show the tested TaskScope build, environment, actions, results, and limits.
+Records that name a source commit identify the tested revision; the others
+identify the tested build only by its executable SHA-256.
 They are not a compatibility guarantee for another build, macOS release,
 GlobalProtect layout, login session, or management policy.
 
