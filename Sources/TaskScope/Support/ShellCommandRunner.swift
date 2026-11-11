@@ -70,14 +70,27 @@ enum ShellCommandRunner {
         return "\"\(escaped)\""
     }
 
+    /// Variables that change what a shell runs rather than what a command
+    /// reads. `do shell script` hands osascript's environment to `/bin/sh`
+    /// (bash), and with administrator privileges that shell runs as root, so
+    /// a value set for the login session (`launchctl setenv`) could otherwise
+    /// define an `echo` function or a traced `PS4` inside the elevated script.
+    static let shellControlVariables: Set<String> = [
+        "BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS", "PS4", "CDPATH", "GLOBIGNORE", "IFS"
+    ]
+
     /// Keep dates and decimals in the C locale while preserving UTF-8 names.
     /// Remove inherited locale overrides and pin UTC so `ps lstart` identities
-    /// do not change when the system time zone changes.
+    /// do not change when the system time zone changes. Drop the variables
+    /// that change how a shell or the dynamic loader runs a command, and
+    /// exported bash functions.
     static func childEnvironment(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> [String: String] {
         var sanitized = environment.filter { key, _ in
             key != "LANG" && !key.hasPrefix("LC_")
+                && !shellControlVariables.contains(key)
+                && !key.hasPrefix("BASH_FUNC_") && !key.hasPrefix("DYLD_")
         }
         sanitized["LC_CTYPE"] = "UTF-8"
         sanitized["LC_TIME"] = "C"
@@ -264,7 +277,7 @@ enum ShellCommandRunner {
                     ShellCommandResult(
                         command: command,
                         stdout: "",
-                        stderr: String(cString: strerror(errorCode)),
+                        stderr: "Could not start the command: \(String(cString: strerror(errorCode))).",
                         exitCode: -1
                     )
                 )

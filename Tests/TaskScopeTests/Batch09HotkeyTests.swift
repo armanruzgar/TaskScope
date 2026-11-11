@@ -55,6 +55,11 @@ final class Batch09HotkeyManagerTests: XCTestCase {
         let command = UInt32(cmdKey), shift = UInt32(shiftKey)
         XCTAssertEqual(
             HotkeyManager.validationFailure(keyCode: UInt32(kVK_Tab), modifiers: command | shift),
+            // T05-10 (lead): the refusal names the combination that was pressed.
+            "⌘⇧Tab (app switcher) is reserved by macOS. Choose another combination."
+        )
+        XCTAssertEqual(
+            HotkeyManager.validationFailure(keyCode: UInt32(kVK_Tab), modifiers: command),
             "⌘Tab (app switcher) is reserved by macOS. Choose another combination."
         )
         XCTAssertEqual(

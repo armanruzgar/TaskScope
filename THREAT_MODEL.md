@@ -118,6 +118,12 @@ Required invariants:
   process-action signal guard. It reaches only the command's own process tree:
   work handed to another process, such as an approved administrator script,
   is not stopped by a timeout or cancellation;
+- start child commands without the inherited variables that change what a
+  shell runs (`BASH_ENV`, `ENV`, `SHELLOPTS`, `BASHOPTS`, `PS4`, `CDPATH`,
+  `GLOBIGNORE`, `IFS`), exported bash functions (`BASH_FUNC_*`), or `DYLD_*`
+  loader variables: `do shell script` hands the `osascript` environment to
+  `/bin/sh`, which runs as root for an approved administrator request, and the
+  login session's environment can be set by any process of the same user;
 - distinguish privileged processes from launchd domains: root ownership alone
   cannot identify the system daemon, because a login-session PanGPS can elevate
   via setuid; readiness, automatic-disconnect gating, final Keep Off

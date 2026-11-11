@@ -361,8 +361,10 @@ final class HotkeyManager: ObservableObject {
             return "⌘, (Settings)"
         case (kVK_ANSI_Q, command | shift):
             return "⌘⇧Q (Log Out)"
-        case (kVK_Tab, command), (kVK_Tab, command | shift):
+        case (kVK_Tab, command):
             return "⌘Tab (app switcher)"
+        case (kVK_Tab, command | shift):
+            return "⌘⇧Tab (app switcher)"
         case (kVK_Space, command):
             return "⌘Space (Spotlight)"
         case (kVK_Space, command | option):

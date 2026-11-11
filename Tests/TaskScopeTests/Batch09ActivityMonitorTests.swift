@@ -624,6 +624,7 @@ final class Batch09FakeActivityMonitor: ActivityMonitorAXTransport, @unchecked S
     private var _search: String
     private var _selectedPID: Int32?
     private var _isResponding = true
+    private var _windowsReady = true
     private var _requestCount = 0
     private var _requestTimeouts: [Float] = []
     private var nodes: [pid_t: Node] = [:]
@@ -650,6 +651,11 @@ final class Batch09FakeActivityMonitor: ActivityMonitorAXTransport, @unchecked S
     var isResponding: Bool {
         get { lock.withLock { _isResponding } }
         set { lock.withLock { _isResponding = newValue } }
+    }
+    /// False models a cold launch whose menus exist before its window does.
+    var windowsReady: Bool {
+        get { lock.withLock { _windowsReady } }
+        set { lock.withLock { _windowsReady = newValue } }
     }
 
     func userTypesSearch(_ text: String) {
@@ -731,8 +737,8 @@ final class Batch09FakeActivityMonitor: ActivityMonitorAXTransport, @unchecked S
 
     private func attributeValue(_ node: Node, _ attribute: String) -> CFTypeRef? {
         switch (node, attribute) {
-        case (.application, kAXWindowsAttribute): return elements([.window])
-        case (.application, kAXMainWindowAttribute): return element(.window)
+        case (.application, kAXWindowsAttribute): return elements(_windowsReady ? [.window] : [])
+        case (.application, kAXMainWindowAttribute): return _windowsReady ? element(.window) : nil
         case (.application, kAXMenuBarAttribute): return element(.menuBar)
         case (.window, kAXRoleAttribute): return kAXWindowRole as CFString
         case (.window, kAXChildrenAttribute): return elements([.searchField, .outline])

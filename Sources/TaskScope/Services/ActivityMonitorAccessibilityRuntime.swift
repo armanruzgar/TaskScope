@@ -89,6 +89,31 @@ struct ActivityMonitorPreparedTableState: @unchecked Sendable {
     var hasChanges: Bool {
         processScopeChanged || processIDWasShown || searchWasChanged
     }
+
+    /// True while an element the preparation uses was not found when the
+    /// state was captured.
+    var isCaptureIncomplete: Bool {
+        searchField == nil || allProcessesItem == nil || processIDItem == nil
+    }
+
+    /// Adds what an earlier capture could not find, such as the search field
+    /// of a window Activity Monitor had not opened yet, with that element's
+    /// current setting as the one to restore. What was already captured, and
+    /// every change already made, is kept.
+    mutating func completeCapture(with fresh: ActivityMonitorPreparedTableState) {
+        if searchField == nil, let field = fresh.searchField {
+            searchField = field
+            searchValue = fresh.searchValue
+        }
+        if allProcessesItem == nil, let item = fresh.allProcessesItem {
+            allProcessesItem = item
+            previousProcessScopeItem = fresh.previousProcessScopeItem
+        }
+        if processIDItem == nil, let item = fresh.processIDItem {
+            processIDItem = item
+            processIDWasVisible = fresh.processIDWasVisible
+        }
+    }
 }
 
 @MainActor
@@ -598,6 +623,12 @@ final class ActivityMonitorAccessibilityWorker: @unchecked Sendable {
         existingState: ActivityMonitorPreparedTableState?
     ) -> ActivityMonitorPreparedTableState {
         var state = existingState ?? captureProcessTableState(in: application)
+        // A first attempt can run before Activity Monitor has created its
+        // window or menus; without this, a search, scope or PID-column change
+        // missed then was never made for the rest of the handoff.
+        if existingState != nil, state.isCaptureIncomplete {
+            state.completeCapture(with: captureProcessTableState(in: application))
+        }
 
         // Each change is recorded only after the menu confirms it took effect,
         // so restoration never presses an item that was not actually toggled.

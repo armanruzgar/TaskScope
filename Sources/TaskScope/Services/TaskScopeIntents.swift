@@ -248,8 +248,11 @@ struct OpenWatchedAppIntent: AppIntent {
 
     static var openAppWhenRun: Bool { false }
 
+    /// The bus `perform()` submits to; tests replace it and restore it.
+    @MainActor static var commandBus = AppCommandBus.shared
+
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let result = try await TaskScopeIntentExecution.perform(.openPresetEntity(app.commandTarget), bus: .shared)
+        let result = try await TaskScopeIntentExecution.perform(.openPresetEntity(app.commandTarget), bus: Self.commandBus)
         let message = try TaskScopeIntentDialog.successMessage(
             for: result,
             action: "open \(app.displayName)"
