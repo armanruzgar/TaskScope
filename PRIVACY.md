@@ -28,6 +28,13 @@ TaskScope can read local information exposed by macOS process tools, including:
   They are never shown (a matching row only carries a mark), stored, logged,
   or included in diagnostics, reports, exports, or notifications, and they are
   dropped with the list they were read for;
+- for each enabled auto-stop rule with a **Command line contains** condition,
+  on every engine check (every 10 seconds), the command lines of your own
+  processes that match the rule's name and path, read in memory without a
+  child process, only while the PID still has the listed start time and
+  executable, and only to test whether they contain the rule's text. They are
+  never shown, stored, logged, or included in the rule history, diagnostics,
+  reports, exports, or notifications;
 - observed CPU and resident memory usage;
 - extended per-process network byte counters (from `nettop`) and cumulative
   disk I/O byte counters (from the kernel's per-process resource usage) when
@@ -69,7 +76,8 @@ TaskScope uses standard macOS preferences for:
 - saved selections, including process names, executable/command paths, and the
   PID and process start time captured when saved;
 - auto-stop rules, including an optional executable path (required for enabled
-  automatic stopping) and their run-time, CPU, and memory conditions, and up to
+  automatic stopping) and their run-time, CPU, memory, and command-line text
+  conditions, and up to
   200 recent event records, which can include process name, PID, time,
   outcome, result detail, and the conditions the rule acted on;
 - global hotkey and onboarding state, including a pending hotkey migration

@@ -75,6 +75,9 @@ final class AutoStopRulesStore: ObservableObject {
     private let currentUID: uid_t
     private let currentPID: Int32
     private let inventory: any ProcessInventoryProviding
+    /// The identity-checked per-process read Process Detail uses, for rules
+    /// with a command-line condition.
+    private let commandLineReader: any ProcessCommandLineReading
     private let pollingController: ProcessPollingController
     private let eventLimit: Int
     /// Everything the engine remembers about each rule-and-process occurrence:
@@ -104,6 +107,7 @@ final class AutoStopRulesStore: ObservableObject {
         key: String = "TaskScope.autoStopRules.v1",
         eventsKey: String = "TaskScope.autoStopEvents.v1",
         inventory: any ProcessInventoryProviding = SystemProcessInventory(),
+        commandLineReader: any ProcessCommandLineReading = SystemProcessCommandLineReader(),
         eventLimit: Int = 200,
         now: @escaping () -> Date = Date.init,
         pollingController: ProcessPollingController? = nil,
@@ -124,6 +128,7 @@ final class AutoStopRulesStore: ObservableObject {
         self.rulesPersistence = rulesPersistence
         self.eventsPersistence = eventsPersistence
         self.inventory = inventory
+        self.commandLineReader = commandLineReader
         self.pollingController = pollingController ?? ProcessPollingController()
         self.eventLimit = boundedEventLimit
         self.now = now
@@ -491,6 +496,11 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
     private func evaluate(_ processes: [AppProcess]) async {
+        // Command lines are read first, and only for processes that already
+        // match a rule's name, path and owner. A pass whose task was cancelled
+        // meanwhile stops here; the next pass reads them again.
+        let commandLines = await commandLineMatches(in: processes)
+        guard !Task.isCancelled else { return }
         // The ledger follows moved and ended occurrences before it evaluates
         // the rules, so the pass cannot act on one occurrence twice. This call
         // never suspends, so no rule can change while it runs.
@@ -501,7 +511,9 @@ final class AutoStopRulesStore: ObservableObject {
             at: monotonicNow(),
             cadence: .seconds(engineCadence),
             canLogDurably: allowsEventsPersistence,
-            matches: { rule, process in matches(rule, process: process) },
+            matches: { rule, process in
+                matches(rule, process: process) && commandLines.allows(rule, process)
+            },
             runtime: { process in ruleRuntime(of: process, at: sample) }
         )
         if isEngineRunning, !needsPolling {
@@ -525,6 +537,47 @@ final class AutoStopRulesStore: ObservableObject {
             // history stays current while a later stop waits on the gate.
             await performAutomaticStop(stop)
         }
+    }
+
+    /// Which processes' command lines contained which rule's text, for one
+    /// pass. Keyed by the text too, so a rule edited while the command lines
+    /// were read matches nothing until the next pass reads them again.
+    private struct CommandLineMatches {
+        struct Key: Hashable {
+            var ruleID: UUID
+            var text: String
+            var identity: ProcessIdentity
+        }
+
+        var keys: Set<Key> = []
+
+        func allows(_ rule: AutoStopRule, _ process: AppProcess) -> Bool {
+            guard let text = rule.commandLineContains else { return true }
+            return keys.contains(Key(ruleID: rule.id, text: text, identity: process.identity))
+        }
+    }
+
+    /// Reads the command line of each process that matches an enabled rule
+    /// with a command-line condition by name, path and owner, through the read
+    /// that first checks the PID still has the listed start time and
+    /// executable. Only whether the command line contained the rule's text is
+    /// kept: command lines are never stored or logged, and an unreadable one,
+    /// or one whose process changed, matches nothing.
+    private func commandLineMatches(in processes: [AppProcess]) async -> CommandLineMatches {
+        var result = CommandLineMatches()
+        let candidates = rules.filter { $0.isEnabled && $0.commandLineContains != nil }
+        guard !candidates.isEmpty else { return result }
+        for process in processes {
+            // Names are unique among rules, so a process is read at most once.
+            for rule in candidates where matches(rule, process: process) {
+                guard !Task.isCancelled else { return result }
+                guard let text = rule.commandLineContains,
+                      case .loaded(let commandLine) = await commandLineReader.commandLine(for: process.identity),
+                      commandLine.range(of: text, options: .literal) != nil else { continue }
+                result.keys.insert(CommandLineMatches.Key(ruleID: rule.id, text: text, identity: process.identity))
+            }
+        }
+        return result
     }
 
     private func performAutomaticStop(_ stop: AutoStopDueStop) async {
@@ -594,8 +647,9 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
     /// Whether `rule` would stop `process`: an enabled Auto Stop rule that
-    /// matches it, with its run-time floor reached. The CPU and memory
-    /// conditions are judged over several checks, so an edit or a returning
+    /// matches it by name, path and owner, with its run-time floor reached.
+    /// The CPU, memory and command-line conditions are judged by each pass,
+    /// which acts only on a process that meets them, so an edit or a returning
     /// stop does not re-judge them here.
     private func qualifiesForAutomaticStop(_ rule: AutoStopRule, process: AppProcess, at sample: UptimeSample) -> Bool {
         guard rule.isEnabled, rule.action == .kill, matches(rule, process: process),

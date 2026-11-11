@@ -32,7 +32,7 @@ before installing.
 - Create watched-app presets with Open, Quit App, Quit Helpers, and Quit App
   and Helpers actions; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
-- Create Prompt, Auto Stop, or Log Only rules on run time and sustained CPU or memory use, and review their event history.
+- Create Prompt, Auto Stop, or Log Only rules on run time, sustained CPU or memory use, and command-line text, and review their event history.
 - View CPU and memory history and opt into watched-process notifications.
 - Use Shortcuts, a configurable global hotkey, and optional Launch at Login.
 - Inspect permissions and installation health, and preview redacted support reports.

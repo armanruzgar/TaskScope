@@ -154,11 +154,12 @@ Required invariants:
   and match that path again in the final inventory immediately before signal;
 - limit Prompt, Auto Stop, and Log Only candidates to current-user processes,
   excluding TaskScope and unsignalable PIDs;
-- treat CPU and memory conditions as further conditions only: they never relax
-  the ownership, self, unsignalable-PID, or trusted-path requirements, and
-  they must hold on several engine checks in a row, counted on a monotonic
-  clock, so neither one high sample nor an extra immediate pass can trigger a
-  stop;
+- treat CPU, memory, and command-line conditions as further conditions only:
+  they never relax the ownership, self, unsignalable-PID, or trusted-path
+  requirements. CPU and memory must hold on several engine checks in a row,
+  counted on a monotonic clock, so neither one high sample nor an extra
+  immediate pass can trigger a stop; a command line that cannot be read, or
+  whose process changed, never matches;
 - wait at least one engine cadence on a monotonic clock before the single
   automatic retry, retaining its budget across edits that remain enabled,
   Auto Stop, and matching. An edit still revokes captured pre-signal authority;
@@ -509,7 +510,10 @@ Required invariants:
   reports, exports, or notifications. While the search field has text, the
   current user's command lines are also read in memory, without a child
   process, to match the search; they are never shown and are dropped with the
-  list they were read for;
+  list they were read for. For an enabled auto-stop rule with a command-line
+  condition, the command lines of the current user's processes that match the
+  rule's name and path are read the same identity-checked way on each engine
+  check, and only whether they contain the rule's text is kept;
 - record every signal TaskScope sends, and every launchd change, app open, and
   administrator request it runs, in the Unified Log's `Actions` category with
   the outcome, so its actions can be reconstructed after it quits; signal,

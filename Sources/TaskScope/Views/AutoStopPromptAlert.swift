@@ -31,6 +31,9 @@ struct AutoStopPromptAlert: View {
                 "has used at least \(thresholds.joined(separator: " and "))\(span) (now \(current.joined(separator: " and ")))"
             )
         }
+        if rule.commandLineContains != nil {
+            clauses.append("its command line contains the rule's text")
+        }
         let condition = clauses.count > 1
             ? clauses.dropLast().joined(separator: ", ") + ", and " + (clauses.last ?? "")
             : clauses.first ?? "matched this rule"

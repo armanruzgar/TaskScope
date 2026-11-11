@@ -8,6 +8,7 @@ enum AutoStopRuleValidation {
     static let memoryMBRange = 1...1_048_576
     /// At the 10-second engine cadence, up to an hour.
     static let sustainedChecksRange = 1...360
+    static let maximumCommandLineTextLength = 1_000
 
     struct Failure: Error, Equatable {
         var message: String
@@ -79,6 +80,21 @@ enum AutoStopRuleValidation {
         } else {
             // Unused without a CPU or memory condition, and not stored then.
             normalized.sustainedChecks = AutoStopRule.defaultSustainedChecks
+        }
+        if let text = normalized.commandLineContains {
+            // Kept exactly as typed: it is plain text, and a leading or
+            // trailing space can be part of what it must match.
+            guard !text.trimmingCharacters(in: .whitespaces).isEmpty else {
+                return .failure(Failure(message: "Enter the text the command line must contain."))
+            }
+            guard !text.contains(where: \.isNewline) else {
+                return .failure(Failure(message: "The command line text must be on one line."))
+            }
+            guard text.count <= maximumCommandLineTextLength else {
+                return .failure(Failure(
+                    message: "The command line text can be at most \(maximumCommandLineTextLength.formatted(.number)) characters."
+                ))
+            }
         }
         if normalized.action == .kill,
            normalized.isEnabled,

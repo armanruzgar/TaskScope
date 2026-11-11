@@ -355,7 +355,7 @@ struct QuickAutoStopRuleSheet: View {
     /// others a rule has, which an update keeps.
     static func otherConditionsNote(for rule: AutoStopRule?) -> String? {
         guard let rule, !rule.isRuntimeOnly else { return nil }
-        return "This rule's conditions: \(rule.conditionSummary). Updating keeps them; change them in Settings > Auto-Stop."
+        return "This rule's conditions: \(rule.conditionSummary(showingCommandLineText: true)). Updating keeps them; change them in Settings > Auto-Stop."
     }
 
     static func otherOwnerExplanation(processName: String) -> String {

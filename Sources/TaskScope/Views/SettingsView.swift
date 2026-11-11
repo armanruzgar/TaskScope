@@ -581,7 +581,7 @@ struct SettingsView: View {
                                     Text("Requires a newer build — disabled and read-only")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
-                                Text("\(rule.conditionSummary) — \(rule.action.label)")
+                                Text("\(rule.conditionSummary(showingCommandLineText: true)) — \(rule.action.label)")
                                     .font(.caption).foregroundStyle(.secondary)
                                 if let path = rule.executablePath {
                                     Text(path)
@@ -692,9 +692,15 @@ struct SettingsView: View {
                 )
                 DisclosureGroup(Self.moreConditionsTitle(newRuleConditions)) {
                     AutoStopSampledConditionFields(conditions: $newRuleConditions)
+                    AutoStopCommandLineField(conditions: $newRuleConditions)
                 }
                 if !newRuleConditions.hasCondition {
                     Text(AutoStopConditionsDraft.missingConditionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let problem = newRuleConditions.commandLineProblem {
+                    Text(problem)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -721,7 +727,7 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                     newRuleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || !newRuleConditions.hasCondition
+                        || !newRuleConditions.canSave
                 )
 
                 // Only this form's own error: the store's shared message may
@@ -763,14 +769,15 @@ struct SettingsView: View {
 
     static let noRulesMessage = "No rules yet. Add one below, or right-click a process and choose Create Auto-Stop Rule…"
 
-    /// The Add Rule form's CPU and memory section, with what it is set to while
-    /// it is collapsed.
+    /// The Add Rule form's section for CPU, memory and the command line, with
+    /// what it is set to while it is collapsed.
     static func moreConditionsTitle(_ conditions: AutoStopConditionsDraft) -> String {
         // Run time has its own row above the section.
-        var sampled = conditions
-        sampled.checksRuntime = false
-        let rule = sampled.applied(to: AutoStopRule(processName: "", runtimeMinutes: 1, action: .prompt))
-        return rule.hasSampledConditions ? "More conditions: \(rule.conditionSummary)" : "More conditions"
+        var others = conditions
+        others.checksRuntime = false
+        let summary = others.applied(to: AutoStopRule(processName: "", runtimeMinutes: 1, action: .prompt))
+            .conditionSummary(showingCommandLineText: true)
+        return summary.isEmpty ? "More conditions" : "More conditions: \(summary)"
     }
 
     /// Shows a refusal at once; otherwise asks for confirmation before deleting.

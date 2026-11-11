@@ -406,7 +406,7 @@ the built-in definition.
 Create a rule under **Add Rule** in **Settings > Auto-Stop**: enter the process
 name, an executable path (required for Auto Stop), the rule's conditions, and
 the action. A rule acts once all of its conditions hold, and it needs at least
-one of them:
+one of run time, CPU, and memory:
 
 - **Runtime minutes**: the process has run at least this long. Type the runtime
   (1 to 1,440 minutes, so at most 24 hours; a value outside that range is
@@ -425,6 +425,17 @@ one of them:
   that could not be read) the count starts over. Checks count before a
   run-time floor is reached. Changing the CPU or memory value or the number of
   checks starts the count over; other edits, such as a new action, keep it.
+- **Command line contains**, also under **More conditions** and in the Edit
+  sheet: text the process's command line must contain. It is plain text, not a
+  pattern, compared case-sensitively and kept exactly as typed, spaces included
+  (one line, up to 1,000 characters). It narrows which processes the rule is
+  about, so a rule still needs run time, CPU, or memory as well. On every check
+  TaskScope reads the command line of each of your processes that matches the
+  rule's name and path, with the same read Process Detail uses (only while the
+  PID still has the listed start time and executable), and keeps only whether
+  it contained the text. A command line that cannot be read does not match.
+  Command lines are never stored or logged; prompts and history say only that
+  the command line contains the rule's text.
 
 You can also right-click a process and choose **Create Auto-Stop Rule…**. That
 sheet sets the run time; updating a rule there keeps any CPU and memory

@@ -13,6 +13,8 @@ struct AutoStopConditionsDraft: Equatable {
     var checksMemory = false
     var memoryMB = AutoStopConditionsDraft.defaultMemoryMB
     var sustainedChecks = AutoStopRule.defaultSustainedChecks
+    var checksCommandLine = false
+    var commandLineText = ""
 
     init() {}
 
@@ -24,6 +26,8 @@ struct AutoStopConditionsDraft: Equatable {
         checksMemory = rule.memoryMBAtLeast != nil
         memoryMB = rule.memoryMBAtLeast ?? Self.defaultMemoryMB
         sustainedChecks = rule.sustainedChecks
+        checksCommandLine = rule.commandLineContains != nil
+        commandLineText = rule.commandLineContains ?? ""
     }
 
     /// A rule needs at least one of run time, CPU and memory.
@@ -35,6 +39,18 @@ struct AutoStopConditionsDraft: Equatable {
         checksCPU || checksMemory
     }
 
+    /// Why the command-line condition cannot be saved as it is, or nil.
+    var commandLineProblem: String? {
+        guard checksCommandLine,
+              commandLineText.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return "Enter the text the command line must contain."
+    }
+
+    /// Whether a rule with these conditions can be saved.
+    var canSave: Bool {
+        hasCondition && commandLineProblem == nil
+    }
+
     func applied(to rule: AutoStopRule) -> AutoStopRule {
         var rule = rule
         rule.checksRuntime = checksRuntime
@@ -42,10 +58,32 @@ struct AutoStopConditionsDraft: Equatable {
         rule.cpuPercentAtLeast = checksCPU ? cpuPercent : nil
         rule.memoryMBAtLeast = checksMemory ? memoryMB : nil
         rule.sustainedChecks = sustainedChecks
+        rule.commandLineContains = checksCommandLine ? commandLineText : nil
         return rule
     }
 
     static let missingConditionMessage = "Choose at least one condition: run time, CPU, or memory."
+}
+
+/// The rule editors' "Command line contains" row: plain text, compared
+/// case-sensitively, kept exactly as typed.
+struct AutoStopCommandLineField: View {
+    @Binding var conditions: AutoStopConditionsDraft
+
+    var body: some View {
+        LabeledContent("Command line contains") {
+            HStack(spacing: 6) {
+                Toggle("Check command line", isOn: $conditions.checksCommandLine)
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                TextField("Command line text", text: $conditions.commandLineText, prompt: Text("for example server.js"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(!conditions.checksCommandLine)
+            }
+        }
+        .help("Plain text, case-sensitive. Checked only for processes that match the name, path and owner; TaskScope keeps only whether it matched, never the command line.")
+    }
 }
 
 /// The CPU, memory and checks-in-a-row rows of the rule editors. Typed values

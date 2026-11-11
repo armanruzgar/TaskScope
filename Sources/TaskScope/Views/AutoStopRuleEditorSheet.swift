@@ -45,6 +45,7 @@ struct AutoStopRuleEditorSheet: View {
                 Section("Conditions (all must hold)") {
                     RuntimeMinutesControl(minutes: $conditions.runtimeMinutes, isChecked: $conditions.checksRuntime)
                     AutoStopSampledConditionFields(conditions: $conditions)
+                    AutoStopCommandLineField(conditions: $conditions)
                 }
 
                 Picker("Action", selection: $draft.action) {
@@ -66,6 +67,11 @@ struct AutoStopRuleEditorSheet: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if let problem = conditions.commandLineProblem {
+                Text(problem)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if let validationError {
                 Text(validationError)
@@ -83,11 +89,11 @@ struct AutoStopRuleEditorSheet: View {
                     .keyboardShortcut(.defaultAction)
                     .disabled(
                         draft.processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || !conditions.hasCondition
+                            || !conditions.canSave
                     )
             }
         }
         .padding(20)
-        .frame(width: 520, height: 600)
+        .frame(width: 520, height: 640)
     }
 }

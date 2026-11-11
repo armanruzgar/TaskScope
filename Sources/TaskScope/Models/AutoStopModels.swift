@@ -23,6 +23,12 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
     /// hold. `ps` reports CPU as a decaying average, so a single high sample
     /// is weak evidence.
     var sustainedChecks = AutoStopRule.defaultSustainedChecks
+    /// Plain text, compared case-sensitively, that the process's command line
+    /// must contain. It narrows which processes the rule is about; it is
+    /// checked only for processes that already match the name, path and
+    /// owner, and only whether it matched is kept: command lines are never
+    /// stored or logged.
+    var commandLineContains: String?
     var action: Action
     var isEnabled: Bool = true
     private(set) var hasUnknownFields = false
@@ -45,7 +51,7 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case id, processName, executablePath, runtimeMinutes, action, isEnabled
-        case checksRuntime, cpuPercentAtLeast, memoryMBAtLeast, sustainedChecks
+        case checksRuntime, cpuPercentAtLeast, memoryMBAtLeast, sustainedChecks, commandLineContains
     }
 
     init(
@@ -57,6 +63,7 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
         cpuPercentAtLeast: Int? = nil,
         memoryMBAtLeast: Int? = nil,
         sustainedChecks: Int = AutoStopRule.defaultSustainedChecks,
+        commandLineContains: String? = nil,
         action: Action,
         isEnabled: Bool = true
     ) {
@@ -68,6 +75,7 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
         self.cpuPercentAtLeast = cpuPercentAtLeast
         self.memoryMBAtLeast = memoryMBAtLeast
         self.sustainedChecks = sustainedChecks
+        self.commandLineContains = commandLineContains
         self.action = action
         self.isEnabled = isEnabled
     }
@@ -83,6 +91,7 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
         memoryMBAtLeast = try container.decodeIfPresent(Int.self, forKey: .memoryMBAtLeast)
         sustainedChecks = try container.decodeIfPresent(Int.self, forKey: .sustainedChecks)
             ?? Self.defaultSustainedChecks
+        commandLineContains = try container.decodeIfPresent(String.self, forKey: .commandLineContains)
         action = try container.decode(Action.self, forKey: .action)
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         let allKeys = try decoder.container(keyedBy: AnyRuleCodingKey.self).allKeys
@@ -104,6 +113,7 @@ struct AutoStopRule: Codable, Identifiable, Equatable {
         try container.encodeIfPresent(cpuPercentAtLeast, forKey: .cpuPercentAtLeast)
         try container.encodeIfPresent(memoryMBAtLeast, forKey: .memoryMBAtLeast)
         if hasSampledConditions { try container.encode(sustainedChecks, forKey: .sustainedChecks) }
+        try container.encodeIfPresent(commandLineContains, forKey: .commandLineContains)
         try container.encode(action, forKey: .action)
         try container.encode(isEnabled, forKey: .isEnabled)
     }
@@ -117,9 +127,9 @@ extension AutoStopRule {
     }
 
     /// Whether run time is the rule's only condition, as for every rule made
-    /// before the CPU and memory conditions.
+    /// before the CPU, memory and command-line conditions.
     var isRuntimeOnly: Bool {
-        checksRuntime && !hasSampledConditions
+        checksRuntime && !hasSampledConditions && commandLineContains == nil
     }
 
     /// The least run time, in seconds, before the rule acts; nil when the rule
@@ -135,9 +145,16 @@ extension AutoStopRule {
             && (memoryMBAtLeast.map { process.memoryMB >= Double($0) } ?? true)
     }
 
-    /// The rule's conditions for its row, its history and its prompt, for
-    /// example "After 5 min" or "CPU ≥ 150% for 3 checks".
+    /// The rule's conditions for its history and its prompt, for example
+    /// "After 5 min" or "CPU ≥ 150% for 3 checks". A command-line condition
+    /// is named without its text; see `conditionSummary(showingCommandLineText:)`.
     var conditionSummary: String {
+        conditionSummary(showingCommandLineText: false)
+    }
+
+    /// The rule's conditions; with `showingCommandLineText`, the rule's own
+    /// command-line text too, as the rules list and the editors show it.
+    func conditionSummary(showingCommandLineText: Bool) -> String {
         var parts: [String] = []
         if checksRuntime { parts.append("After \(runtimeMinutes) min") }
         if hasSampledConditions {
@@ -148,6 +165,9 @@ extension AutoStopRule {
             let checks = sustainedChecks == 1 ? "1 check" : "\(sustainedChecks) checks"
             let clause = "\(sampled) for \(checks)"
             parts.append(parts.isEmpty ? clause.prefix(1).uppercased() + clause.dropFirst() : clause)
+        }
+        if let text = commandLineContains {
+            parts.append(showingCommandLineText ? "command line contains “\(text)”" : "command line contains the rule's text")
         }
         return parts.joined(separator: ", ")
     }
