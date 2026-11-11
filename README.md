@@ -27,7 +27,8 @@ before installing.
 
 ## Features
 
-- Search, filter, sort, and explore processes in flat or tree views.
+- Search, filter, sort, and explore processes in flat or tree views, and copy
+  or export the visible rows as text or CSV.
 - Review captured targets before Stop or Force Stop, with identity checks before signals.
 - Create watched-app presets with Open, Quit App, Quit Helpers, and Quit App
   and Helpers actions; the built-in GlobalProtect preset has Quit All instead.

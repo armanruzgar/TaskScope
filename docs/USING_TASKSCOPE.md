@@ -96,9 +96,20 @@ start of each row; with a selection, the red button with the count offers
 stop button at the end of a row opens the Stop review for that process.
 Right-click a row for **Create Auto-Stop Rule…**, **Watch This Process…**,
 **Save Selection as Preset…** (when rows are selected), **Stop…**, **Force
-Stop…**, **Show Detail**, **Copy Executable Path**, **Copy Command Line**, and
-**Open in Activity Monitor**; VoiceOver offers the same actions in its Actions
-rotor.
+Stop…**, **Show Detail**, **Copy Executable Path**, **Copy Command Line**,
+**Copy Visible Rows**, **Export Visible Rows…**, and **Open in Activity
+Monitor**; VoiceOver offers the same actions in its Actions rotor.
+
+**Copy Visible Rows** copies the rows on screen, with the columns on screen and a
+title row, as tab-separated text that a spreadsheet pastes as a table.
+**Export Visible Rows…** saves the same rows as a CSV file where you choose.
+"On screen" means after search, filter, sort, and the display limit, and in
+tree view the rows the tree draws, ancestors included; the menu-bar popover's
+columns are name, PID, executable, CPU, and memory, and the window adds parent
+PID, user, and the network and disk rates. A value the list shows as a dash is
+empty. Neither includes command lines. Text that begins with `=`, `+`, `-`, or
+`@`, such as a login shell named `-zsh`, gets a leading `'` so that a
+spreadsheet keeps it as text instead of reading a formula.
 
 The process list supports search, sorting, filters, and flat or expandable tree
 views. When the display limit truncates results, **Showing N of M** includes
@@ -205,6 +216,7 @@ When the TaskScope window is in front, its menus offer these commands:
 | View > Tree View | Turn tree view on or off |
 | View > Processes, View > Presets | Show that section |
 | Process > Show Detail (Command-I) | Show Detail for the keyboard row |
+| Process > Copy Visible Rows, Process > Export Visible Rows… | Copy or export the rows and columns on screen |
 | Process > Stop…, Process > Force Stop… | Open the review for the selected rows or, with nothing selected, for the keyboard row |
 | Help > Welcome to TaskScope (Command-?) | Show the introduction again |
 

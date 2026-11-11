@@ -721,6 +721,11 @@ struct TaskScopeApp: App {
                     .keyboardShortcut("i")
                     .disabled(focusedCommands?.hasKeyboardProcess != true)
                 Divider()
+                Button("Copy Visible Rows") { focusedCommands?.copyVisibleRows() }
+                    .disabled(focusedCommands?.hasVisibleRows != true)
+                Button("Export Visible Rows…") { focusedCommands?.exportVisibleRows() }
+                    .disabled(focusedCommands?.hasVisibleRows != true)
+                Divider()
                 Button("Stop…") { focusedCommands?.stop(.normal) }
                     .disabled(focusedCommands?.canStop != true)
                 Button("Force Stop…") { focusedCommands?.stop(.force) }

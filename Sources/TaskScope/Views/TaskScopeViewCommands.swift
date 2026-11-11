@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// What the menu-bar commands (Refresh, Find, Tree View, sections, Show Detail,
-/// Stop and Force Stop) act on: the TaskScope view in the key window. Each
+/// Copy and Export Visible Rows, Stop and Force Stop) act on: the TaskScope
+/// view in the key window. Each
 /// action goes through the same path as the matching control in that view, so
 /// a stop from the menu still asks for confirmation.
 struct TaskScopeViewCommands {
@@ -12,6 +13,9 @@ struct TaskScopeViewCommands {
     var showSection: (TaskScopeSection) -> Void
     var hasKeyboardProcess: Bool
     var showDetail: () -> Void
+    var hasVisibleRows: Bool = false
+    var copyVisibleRows: () -> Void = {}
+    var exportVisibleRows: () -> Void = {}
     var canStop: Bool
     var stop: (ProcessConfirmationState.TerminationMode) -> Void
 }

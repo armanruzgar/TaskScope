@@ -127,6 +127,9 @@ struct TaskScopePopoverView: View {
             showSection: { settings.selectedSectionRaw = $0.rawValue },
             hasKeyboardProcess: keyboardProcess != nil,
             showDetail: { showKeyboardDetail() },
+            hasVisibleRows: !keyboardNavigationProcesses.isEmpty,
+            copyVisibleRows: { copyVisibleRows() },
+            exportVisibleRows: { exportVisibleRows() },
             canStop: !processManager.selectedPids.isEmpty
                 || keyboardProcess.map { !processManager.isCurrentProcess($0) } == true,
             stop: { mode in
@@ -1553,6 +1556,13 @@ struct TaskScopePopoverView: View {
             copyCommandLine(of: process)
         }
         Divider()
+        Button("Copy Visible Rows") {
+            copyVisibleRows()
+        }
+        Button("Export Visible Rows…") {
+            exportVisibleRows()
+        }
+        Divider()
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
         }
@@ -1585,6 +1595,12 @@ struct TaskScopePopoverView: View {
         Button("Copy Command Line") {
             copyCommandLine(of: process)
         }
+        Button("Copy Visible Rows") {
+            copyVisibleRows()
+        }
+        Button("Export Visible Rows…") {
+            exportVisibleRows()
+        }
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
         }
@@ -1609,6 +1625,45 @@ struct TaskScopePopoverView: View {
             process.executablePath ?? process.command,
             forType: .string
         )
+    }
+
+    /// The rows on screen (the tree's drawn rows in tree view) with the
+    /// columns this presentation shows. Never a command line.
+    var visibleRowsTable: ProcessListTable {
+        ProcessListTable(
+            columns: ProcessListTable.columns(expandedWindow: isExpandedWindow),
+            rows: keyboardNavigationProcesses
+        )
+    }
+
+    /// Copies the visible rows as tab-separated text with a title row.
+    func copyVisibleRows(write: @MainActor (ProcessListTable) -> Void = { ProcessListExport.writeToClipboard($0) }) {
+        let table = visibleRowsTable
+        guard !table.rows.isEmpty else {
+            processManager.setMessage("There are no rows to copy.")
+            return
+        }
+        write(table)
+        processManager.setMessage("Copied \(ProcessListExport.rowCount(table.rows.count)) with their column titles.")
+    }
+
+    /// Saves the visible rows as CSV where the user chooses.
+    func exportVisibleRows(
+        chooseDestination: @MainActor (String) -> URL? = { ProcessListExport.chooseDestination(suggestedName: $0) },
+        write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }
+    ) {
+        let table = visibleRowsTable
+        guard !table.rows.isEmpty else {
+            processManager.setMessage("There are no rows to export.")
+            return
+        }
+        guard let destination = chooseDestination(ProcessListExport.suggestedFileName()) else { return }
+        do {
+            try write(Data(table.commaSeparated.utf8), destination)
+            processManager.setMessage("Exported \(ProcessListExport.rowCount(table.rows.count)) to \(destination.lastPathComponent).")
+        } catch {
+            processManager.setMessage("Could not export the rows: \(UIMessage.sentence(error.localizedDescription))")
+        }
     }
 
     /// Reads the command line only now, on request, and copies it only if the

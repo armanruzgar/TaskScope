@@ -195,13 +195,18 @@ command lines, and TaskScope sends the value nowhere else.
 TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
 diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Executable
 Path** and **Copy Command Line** in a process row's context menu, and **Copy
-Report** in a Stop or service results report. Copy Executable Path replaces the
+Report** in a Stop or service results report, and **Copy Visible Rows** in a
+process row's context menu or the Process menu. Copy Executable Path replaces the
 clipboard contents with the process's kernel executable path, or with its `ps`
 command name when that path is unavailable. Copy Command Line replaces them
 with the process's command line, marked confidential
 (`org.nspasteboard.ConcealedType`) so that clipboard-history tools that honor
 that marker do not keep it; its status message says only whether it was
-copied. Copy Report copies the report as shown, which can include process
+copied. Copy Visible Rows copies the process rows and columns on screen
+(names, PIDs, executable paths, and, in the window, parent PIDs, owners, and
+network and disk rates, with CPU and memory) as text; **Export Visible Rows…**
+writes the same table to a CSV file only where you choose in the save panel.
+Neither includes command lines. Copy Report copies the report as shown, which can include process
 names and PIDs or launch-job labels and their results. Text you select in the
 Process Detail sheet, including a command line, is copied only by your own
 Copy command. TaskScope does not read the clipboard.
