@@ -222,11 +222,23 @@ struct RecoveringCodableStorage<Value: Codable> {
 
 /// The baseline and raw arrays have the same order, including entries whose
 /// legacy decoder supplied an ID. Later saves match those entries by that ID.
-private final class StoredJSONSnapshot {
+final class StoredJSONSnapshot {
     var raw: Any?
     var baseline: Any?
 
-    static func merge(raw: Any?, baseline: Any?, current: Any) -> Any {
+    /// The stored JSON with this build's changes applied: `raw` as stored,
+    /// `baseline` as this build last read or wrote it, and `current` as it
+    /// encodes now. Array elements are matched to their stored copies by
+    /// identity (see `identity(of:)`).
+    ///
+    /// - Parameter identity: how an element is identified. The default is
+    ///   `identity(of:)`; tests pass a counting wrapper to bound the work.
+    static func merge(
+        raw: Any?,
+        baseline: Any?,
+        current: Any,
+        identity: (Any) -> String? = StoredJSONSnapshot.identity(of:)
+    ) -> Any {
         guard let raw, let baseline else { return current }
         if let old = baseline as? NSObject, old.isEqual(current) { return raw }
         if let old = baseline as? [String: Any],
@@ -234,7 +246,7 @@ private final class StoredJSONSnapshot {
            var result = raw as? [String: Any] {
             for key in Set(old.keys).union(new.keys) {
                 if let value = new[key] {
-                    result[key] = merge(raw: result[key], baseline: old[key], current: value)
+                    result[key] = merge(raw: result[key], baseline: old[key], current: value, identity: identity)
                 } else {
                     result.removeValue(forKey: key)
                 }
@@ -242,20 +254,30 @@ private final class StoredJSONSnapshot {
             return result
         }
         if let old = baseline as? [Any], let new = current as? [Any], let stored = raw as? [Any] {
-            var used: Set<Int> = []
+            // Each identity's positions in `old`, in order, found in one pass.
+            // An element takes the first position of its identity that no
+            // earlier element took, so a log of n events is merged in linear
+            // time instead of scanning `old` again for every element.
+            var positions: [String: [Int]] = [:]
+            for index in old.indices {
+                if let key = identity(old[index]) { positions[key, default: []].append(index) }
+            }
+            var taken: [String: Int] = [:]
             return new.map { value in
-                guard let identity = identity(value),
-                      let index = old.indices.first(where: {
-                          !used.contains($0) && self.identity(old[$0]) == identity
-                      }), stored.indices.contains(index) else { return value }
-                used.insert(index)
-                return merge(raw: stored[index], baseline: old[index], current: value)
+                guard let key = identity(value), let candidates = positions[key] else { return value }
+                let next = taken[key, default: 0]
+                // A position past the end of the stored array matches nothing,
+                // and every later position of the same identity is further on.
+                guard next < candidates.count, stored.indices.contains(candidates[next]) else { return value }
+                taken[key] = next + 1
+                let index = candidates[next]
+                return merge(raw: stored[index], baseline: old[index], current: value, identity: identity)
             }
         }
         return current
     }
 
-    private static func identity(_ value: Any) -> String? {
+    static func identity(of value: Any) -> String? {
         guard let object = value as? [String: Any] else { return nil }
         if let id = object["id"] as? String { return "id:" + id }
         if let label = object["label"] as? String { return "label:" + label }
