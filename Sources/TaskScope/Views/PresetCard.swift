@@ -50,7 +50,7 @@ struct PresetCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            if snapshot.preset.isBuiltInGlobalProtect {
+            if hasKeepOffScope {
                 Divider()
                 if isKeepOffControlEnabled {
                     Toggle(
@@ -60,22 +60,20 @@ struct PresetCard: View {
                         )
                     ) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Keep GlobalProtect Off")
+                            Text(keepOffTitle)
                                 .fontWeight(.medium)
-                            Text("Quit All disconnects and stops GlobalProtect. Open or turning this switch off restores it.")
+                            Text(keepOffCaption)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                     }
                     .toggleStyle(.switch)
                     .disabled(isMutationActive)
-                    .accessibilityHint(
-                        "Automatically disconnects and stops GlobalProtect. Turning this off restores its VPN service and opens the app."
-                    )
+                    .accessibilityHint(keepOffHint)
                 } else {
                     // The saved intent is inside the unreadable payload, so it is
                     // unknown here (not Off), and background enforcement is paused.
-                    Text("Keep GlobalProtect Off: Unknown")
+                    Text("\(keepOffTitle): Unknown")
                         .fontWeight(.medium)
                     Text("Settings are unreadable. Reset settings in Settings → General before changing Keep Off.")
                         .font(.caption)
@@ -87,7 +85,9 @@ struct PresetCard: View {
                 if isKeptOff {
                     Button("Apply Keep Off…", role: .destructive) { onKeepOffChanged(true) }
                         .disabled(!isKeepOffControlEnabled || isMutationActive)
-                        .help("Retry the confirmed disconnect and service stop. A system daemon preserved on a session installation remains running.")
+                        .help(snapshot.preset.isBuiltInGlobalProtect
+                            ? "Retry the confirmed disconnect and service stop. A system daemon preserved on a session installation remains running."
+                            : "Disable its user launch agents again and stop its running processes now.")
                 }
                 if let onStopWithoutDisconnect {
                     Text(isKeepOffControlEnabled
@@ -98,14 +98,44 @@ struct PresetCard: View {
                     Button("Stop Services Anyway…", role: .destructive, action: onStopWithoutDisconnect)
                         .disabled(!isKeepOffControlEnabled || isMutationActive)
                 }
-                GlobalProtectCompatibilityButton(
-                    keepOffRequested: isKeepOffControlEnabled ? isKeptOff : nil
-                )
-                .buttonStyle(.bordered)
+                if snapshot.preset.isBuiltInGlobalProtect {
+                    GlobalProtectCompatibilityButton(
+                        keepOffRequested: isKeepOffControlEnabled ? isKeptOff : nil
+                    )
+                    .buttonStyle(.bordered)
+                }
             }
         }
         .padding(12)
         .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Keep Off acts on the main process, helpers and user launch agents; a
+    /// preset with any of them can be kept off.
+    private var hasKeepOffScope: Bool {
+        let preset = snapshot.preset
+        return !preset.mainProcessName.isEmpty || !preset.helperProcessNames.isEmpty
+            || !preset.lifecycleUserLaunchAgentJobs.isEmpty
+    }
+
+    private var keepOffTitle: String {
+        "Keep \(snapshot.preset.displayName) Off"
+    }
+
+    private var keepOffCaption: String {
+        if snapshot.preset.isBuiltInGlobalProtect {
+            return "Quit All disconnects and stops GlobalProtect. Open or turning this switch off restores it."
+        }
+        return snapshot.preset.lifecycleUserLaunchAgentJobs.isEmpty
+            ? "Stops it whenever it is running. Turning this switch off allows it to run again."
+            : "Disables its launch agents and stops it whenever it is running. Turning this switch off allows it to run again."
+    }
+
+    private var keepOffHint: String {
+        if snapshot.preset.isBuiltInGlobalProtect {
+            return "Automatically disconnects and stops GlobalProtect. Turning this off restores its VPN service and opens the app."
+        }
+        return "Keeps \(snapshot.preset.displayName) from running: TaskScope stops its processes whenever they appear. Turning this off allows it to run again without opening it."
     }
 
     /// Quit Helpers acts on helper processes and, with launch agents

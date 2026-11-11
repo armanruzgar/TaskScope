@@ -514,6 +514,11 @@ that migration was tested.
    Deleting preferences does not clear launchd overrides. If policy rejects a
    command or Open reports failure, use the organization's managed support path.
 
+   If you used **Keep Off** on any other preset that has launch agents, turn
+   its Keep Off off (or choose **Open**) first as well. Keep Off disabled those
+   agents in your launchd domain; if TaskScope is already gone, run
+   `launchctl enable gui/$UID/<label>` for each agent label the preset listed.
+
 2. Turn off Launch at Login in the Presets section of the main window or
    menu-bar popover. For Requires Approval, choose **Turn Off Launch at
    Login**; for Unavailable, choose **Remove Stale Login Item**. Resolve any

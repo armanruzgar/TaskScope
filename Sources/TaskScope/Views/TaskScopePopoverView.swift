@@ -1700,9 +1700,10 @@ struct TaskScopePopoverView: View {
         switch pending.action {
         case .stopServices:
             return "GlobalProtect did not complete a normal disconnect. TaskScope will stop and disable its services anyway and keep them off until you choose Open. This can interrupt network access or leave VPN DNS settings behind. If internet access stops working, choose Open to restore the service. Administrator approval may be required. \(forceStopDisclosure)"
-        case .keepOff:
-            // Keep Off is offered only for the built-in GlobalProtect preset.
+        case .keepOff where preset.isBuiltInGlobalProtect:
             return globalProtectStopMessage
+        case .keepOff:
+            return customKeepOffMessage(for: preset)
         case .quitAll where preset.isBuiltInGlobalProtect:
             return globalProtectStopMessage
         case .quitApp:
@@ -1724,6 +1725,27 @@ struct TaskScopePopoverView: View {
         }
         sentences.append("\(agentLabels.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(targets).")
         sentences.append(forceStopDisclosure)
+        return sentences.joined(separator: " ")
+    }
+
+    /// Keep Off of a custom preset. Background enforcement stops the preset on
+    /// every poll while Keep Off is on, so a mistaken preset would be stopped
+    /// again and again: the confirmation says so.
+    static func customKeepOffMessage(for preset: WatchedAppPreset) -> String {
+        let agents = preset.lifecycleUserLaunchAgentJobs.map(\.label)
+        var sentences: [String] = []
+        if !agents.isEmpty {
+            sentences.append(
+                "TaskScope will persistently disable the user launch agents (\(agents.joined(separator: ", "))), so they do not start again, even at login."
+            )
+        }
+        sentences.append(
+            "\(agents.isEmpty ? "TaskScope will stop" : "It will then stop") the currently running matches for: \(preset.killableNames.joined(separator: ", "))."
+        )
+        sentences.append(
+            "While Keep Off is on, background enforcement stops matching processes whenever they appear. Turning Keep Off off, or Open, allows \(preset.displayName) to run again."
+        )
+        sentences.append(PresetStopScope.forceStopDisclosure)
         return sentences.joined(separator: " ")
     }
 

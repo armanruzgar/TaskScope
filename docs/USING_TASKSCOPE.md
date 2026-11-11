@@ -26,7 +26,7 @@ itself and reloads at every watched-status read.
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while the menu-bar icon shows status, notifications are on, or Keep GlobalProtect Off is on; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
+| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while the menu-bar icon shows status, notifications are on, or Keep Off is on for a preset; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
 | Auto-refresh process list | Off | Load the process list without **Load Processes** and reload it at every watched-status read |
 | Show all processes | Off | List every matching process in any sort order and in tree view; the process list limit then does not apply |
 | Process list limit | 80 rows (10 to 200, in steps of 10) | Rows shown while Show all processes is off; a longer result shows **Showing N of M** |
@@ -231,7 +231,7 @@ About TaskScope and the welcome window each open as a single window.
 | Prompt rule, after **Stop Now** | One `SIGTERM`; never repeated. If the process still runs one 10-second engine cycle later, the event history records a failure that suggests Force Stop |
 | Auto Stop rule | `SIGTERM`; if the process still runs at least one 10-second engine cycle later, one more `SIGTERM`. It never sends `SIGKILL`: the event then says to use Force Stop |
 | Log Only rule | None |
-| Preset Quit App, Quit Helpers, Quit App and Helpers; GlobalProtect Quit All and Keep Off | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
+| Preset Quit App, Quit Helpers, Quit App and Helpers, and Keep Off; GlobalProtect Quit All | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
 
 Preset stops also unload the preset's user launch agents before signalling
 (Quit Helpers keeps an agent that runs the main process); see
@@ -314,15 +314,16 @@ Watched Apps has a **Notify** switch and **Dry Run** and **Delete…** buttons,
 and custom presets also have **Edit…**; deleting asks for confirmation.
 **Export…** and **Import…** handle the whole list. Each preset card in the
 **Presets** section has **Open**, **Quit App**, **Quit Helpers**, and **Quit
-App and Helpers**. On the built-in GlobalProtect preset, marked with a shield, the
+App and Helpers**, and a **Keep <name> Off** switch (see [Keep Off](#keep-off)).
+On the built-in GlobalProtect preset, marked with a shield, the
 fourth button is **Quit All**, a different and stronger action that disconnects
 the VPN and turns on **Keep GlobalProtect Off**; read
 [GlobalProtect](GLOBALPROTECT.md). Quit
 Helpers is unavailable for a preset with no helpers and no user launch agents,
 and card actions are unavailable while another action runs. Confirmations name
 the preset. If stored presets are unreadable or partly rejected, the Presets
-section shows a recovery notice instead of an empty list and says that Keep
-GlobalProtect Off is not enforced until presets are reset.
+section shows a recovery notice instead of an empty list and says when Keep
+Off is not enforced for a preset missing from the list until presets are reset.
 
 The preset editor has these fields:
 
@@ -392,7 +393,7 @@ Watch This Process and Create Auto-Stop Rule.
 Open and preset stop actions share lifecycle checks and per-job reporting. Quit
 App, Quit Helpers, and Quit App and Helpers verify final inventory against the
 definition captured for the action even if the saved preset changes or is
-deleted. Preset stops and GlobalProtect's Quit All and Keep Off stop the main
+deleted. Preset stops, Keep Off, and GlobalProtect's Quit All stop the main
 process first, giving it up to three seconds to exit before force stopping, and
 then stop all helpers together in one shared three-second window; confirmations
 disclose escalation. Partial reports do not imply every target stopped or that
@@ -414,11 +415,37 @@ For GlobalProtect's distinct full-stop and restoration behavior, read
 [GlobalProtect](GLOBALPROTECT.md). Ordinary Quit App, Quit Helpers, and Shortcuts
 Stop do not disconnect it and leave its VPN services alone.
 
+### Keep Off
+
+Turn on **Keep <name> Off** on a preset's card to keep that app from running,
+for example an app whose updater or helper agent keeps relaunching it. After
+you confirm, TaskScope persistently disables the preset's user launch agents in
+your login session (`launchctl disable gui/<uid>/<label>`, so they do not start
+again even at login), unloads any that are loaded, and stops the main process
+and helpers with the same checks as Quit App and Helpers. While Keep Off is on,
+background enforcement runs at launch and on every watched-status read: when
+the app or a helper runs again, TaskScope disables the agents again and stops
+the processes. It signals only your own processes that run from inside the
+preset's app bundle, never asks for administrator approval, and never changes
+system launch daemons. A preset without launch agents is kept off by stopping
+it only. **Apply Keep Off…** repeats the whole step at once.
+
+Turning the switch off clears the persistent disable overrides and the Keep Off
+intent without opening anything ("Example is allowed to run. Nothing was
+started."); **Open** turns Keep Off off too. A mistaken preset would be stopped
+on every read, so the confirmation, the **Dry Run** and the import preview say
+what Keep Off does for it. The built-in GlobalProtect preset's switch is the
+stronger **Keep GlobalProtect Off**, which disconnects the VPN first and can
+stop its system service with administrator approval; turning it off opens
+GlobalProtect and restores its services. Read [GlobalProtect](GLOBALPROTECT.md).
+
 Deleting the built-in GlobalProtect preset asks for confirmation and says that
 its Keep GlobalProtect Off and Disconnect controls go with it. Deletion is
 refused while Keep GlobalProtect Off is on, while an explicit Keep Off action
-is queued or running, and while settings are unreadable. A relaunch does not
-recreate a deleted built-in preset. While it is missing and preset storage is
+is queued or running, and while settings are unreadable. Any other preset
+cannot be deleted while its Keep Off is on, while its explicit Keep Off action
+is queued or running, or while settings are unreadable; turn its Keep Off off
+first. A relaunch does not recreate a deleted built-in preset. While it is missing and preset storage is
 writable, **Settings > Watched Apps > Restore Built-in GlobalProtect Preset**
 adds it back; restoring is refused, naming the preset, while a custom preset
 uses the same display name or app path, so delete or change that preset first.

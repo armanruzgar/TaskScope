@@ -111,7 +111,7 @@ final class TaskScopeRuntime {
     /// Notifications diff the background reads, Keep Off enforcement runs on
     /// them, and the menu-bar icon shows the watched status they keep current.
     private var needsBackgroundReads: Bool {
-        settings.enableNotifications || settings.keepGlobalProtectOff
+        settings.enableNotifications || !settings.keptOffPresetIDs.isEmpty
             || (settings.showsMenuBarStatus && !watchedApps.presets.isEmpty)
     }
 
@@ -127,7 +127,7 @@ final class TaskScopeRuntime {
         react(to: settings.$autoRefreshProcessList) { runtime in
             runtime.configurePolling()
         }
-        react(to: settings.$keepGlobalProtectOff) { runtime in
+        react(to: settings.$keptOffPresetIDs) { runtime in
             runtime.configurePolling()
         }
         react(to: settings.$showsMenuBarStatus) { runtime in
@@ -215,19 +215,12 @@ extension ProcessManager.Dependencies {
         Self(
             watchedPresets: { watchedApps.presets },
             processListLimit: { settings.processListLimit },
-            keptOffPresets: {
-                settings.keepGlobalProtectOff
-                    ? watchedApps.presets.filter(\.isBuiltInGlobalProtect)
-                    : []
-            },
-            isPresetKeptOff: { preset in
-                preset.isBuiltInGlobalProtect && settings.keepGlobalProtectOff
-            },
+            keptOffPresets: { watchedApps.presets.filter { settings.isKeptOff($0.id) } },
+            isPresetKeptOff: { settings.isKeptOff($0.id) },
             isKeepOffIntentWritable: { !settings.isReadOnlyAfterCorruption },
             globalProtectServiceObservation: globalProtectServiceObservation,
             setPresetKeptOff: { preset, keptOff in
-                guard preset.isBuiltInGlobalProtect else { return }
-                settings.keepGlobalProtectOff = keptOff
+                settings.setKeptOff(keptOff, for: preset.id)
             }
         )
     }

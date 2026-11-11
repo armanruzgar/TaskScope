@@ -523,6 +523,15 @@ struct SettingsView: View {
                 "Never signal protected processes through these ordinary quits: \(preset.protectedProcessNames.joined(separator: ", "))."
             )
         }
+        if !preset.isBuiltInGlobalProtect {
+            let agents = preset.lifecycleUserLaunchAgentJobs.map(\.label)
+            let disable = agents.isEmpty
+                ? ""
+                : "persistently disable the user launch agents (\(agents.joined(separator: ", "))) in this login session, then "
+            operations.append(
+                "Keep Off: \(disable)stop \(preset.killableNames.joined(separator: ", ")) after the same identity checks. While Keep Off is on, background enforcement stops them again whenever they appear. It never requests administrator approval or changes system launch daemons; turning Keep Off off or Open allows the app to run again."
+            )
+        }
         if preset.isBuiltInGlobalProtect {
             operations.append(
                 "Quit All and Keep Off: use Accessibility to disconnect GlobalProtect, verify a stable disconnected state, then disable and unload its known services and stop its processes. An unverified disconnect stops the action before new Keep Off intent is saved. An explicit action requests administrator approval only if needed for the fixed system VPN service. Background enforcement never requests privileges. Open and turning Keep Off off restore the required VPN service and app. A window started without its service is closed and restored; an already running UI is not duplicated. For session-agent installations, the unused system daemon remains disabled."

@@ -40,21 +40,28 @@ Force Stop action that sends `SIGKILL`, subject to the same macOS permission
 boundary. Only the immutable built-in GlobalProtect definition can request
 administrator approval for its fixed `system/com.paloaltonetworks.gp.pangpsd` job:
 
-- Explicit in-app Keep Off / Apply Keep Off, GlobalProtect Quit All, and the
-  separately confirmed Stop Services Anyway can disable then boot out the daemon,
+- The built-in preset's explicit in-app Keep Off / Apply Keep Off, GlobalProtect
+  Quit All, and the separately confirmed Stop Services Anyway can disable then
+  boot out the daemon,
   subject to the installed layout's preservation policy.
 - Open, turning Keep Off off, and Open Watched App can enable/bootstrap it when
   the layout requires that service; a loaded daemon is never restarted.
 
 These operations use the macOS administrator prompt. Background enforcement and
 URLs never request privileges. Custom presets cannot configure privileged jobs;
-TaskScope does not bypass authorization. See [GlobalProtect](docs/GLOBALPROTECT.md)
+their Keep Off changes only the current user's launchd domain
+(`gui/<uid>`), never asks for administrator approval, and signals only the
+current user's processes that pass the preset's bundle checks. TaskScope does
+not bypass authorization. See [GlobalProtect](docs/GLOBALPROTECT.md)
 for session-agent preservation, disconnect, timeout, and restoration limits.
 
 Imported watched-app presets are untrusted configuration. Importing a preset
 must not execute it, but a later user-approved lifecycle action can use its app
-path, user launch-agent plist path and label, and process names. Review every
-field before acting. Imports cannot create or modify privileged system-daemon
+path, user launch-agent plist path and label, and process names. Turning on a
+preset's Keep Off makes TaskScope disable those agents and stop matching
+processes whenever they appear, until Keep Off is turned off, so a mistaken
+preset is stopped again and again; the confirmation, Dry Run and import preview
+say so. Review every field before acting. Imports cannot create or modify privileged system-daemon
 behavior.
 
 The custom URL scheme accepts refresh only. Destructive preset actions and app

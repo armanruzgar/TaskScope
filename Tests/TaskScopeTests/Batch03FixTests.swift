@@ -313,6 +313,8 @@ final class Batch03FixTests: XCTestCase {
                 let lifecycle = ManagerTestLifecycle()
                 lifecycle.terminationOutcome = outcome
                 let manager = manager(ManagerTestInventory(results: [.success([row()]), .success(final)]), lifecycle: lifecycle)
+                let watched = preset
+                manager.dependencies.watchedPresets = { [watched] }
                 let result = await manager.keepOff(preset)
                 XCTAssertEqual(result.status, .failed)
                 let expected: LifecycleDiagnosticFailure.Reason = outcome == .signalRejected ? .signalRejected : .inventoryUnavailable

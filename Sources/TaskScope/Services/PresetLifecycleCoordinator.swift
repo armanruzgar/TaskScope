@@ -349,6 +349,31 @@ final class PresetLifecycleCoordinator: ObservableObject {
         return enableResult
     }
 
+    /// Turns Keep Off off without opening the app: clears the preset's launchd
+    /// disable overrides and its Keep Off intent. Nothing is started.
+    func allowToRun(_ preset: WatchedAppPreset, host: some PresetLifecycleHost) async -> PresetLifecycleOutcome {
+        var run = Run()
+        let enabled = await clearKeepOffOverrides(preset, host: host, run: &run)
+        let name = preset.displayName
+        let exit: Exit
+        if enabled.succeeded {
+            exit = .completed("\(name) is allowed to run. Nothing was started.")
+        } else {
+            let failure = enabled.failureSummary ?? "service could not be enabled"
+            let systemFailed = enabled.jobs.contains {
+                $0.label == WatchedAppPreset.globalProtectSystemDaemon.label && !$0.succeeded
+            }
+            exit = .failed(
+                host.dependencies.isPresetKeptOff(preset)
+                    ? "Keep Off remains requested: \(failure)."
+                    : "Could not allow \(name) to run: \(failure).",
+                systemFailed ? .systemServiceFailed : .userLaunchAgentFailed
+            )
+        }
+        // Recorded as Open, as turning Keep Off off always has been.
+        return outcome(of: exit, run: run, presetID: preset.id, action: .open, backgroundEnforcement: false)
+    }
+
     // MARK: - Keep Off
 
     /// Persists intent and disables user jobs. An explicit built-in GlobalProtect
@@ -423,9 +448,15 @@ final class PresetLifecycleCoordinator: ObservableObject {
         if !host.dependencies.isKeepOffIntentWritable() {
             return "Settings are unreadable. Reset settings in Settings → General before changing Keep Off."
         }
-        if preset.isBuiltInGlobalProtect,
-           !host.dependencies.watchedPresets().contains(where: { $0.id == preset.id && $0.isBuiltInGlobalProtect }) {
-            return "The built-in GlobalProtect preset was removed. Keep Off was not recorded and no services were disabled."
+        let stored = host.dependencies.watchedPresets().first { $0.id == preset.id }
+        if preset.isBuiltInGlobalProtect {
+            guard stored?.isBuiltInGlobalProtect == true else {
+                return "The built-in GlobalProtect preset was removed. Keep Off was not recorded and no services were disabled."
+            }
+        } else if stored != preset {
+            // A queued Keep Off must not act on, or record intent for, a copy
+            // the user has since edited or deleted.
+            return "\(preset.displayName) was changed or removed. Keep Off was not recorded and nothing was stopped."
         }
         return nil
     }
@@ -549,7 +580,8 @@ final class PresetLifecycleCoordinator: ObservableObject {
         }
         if nowSnapshot.hasBackgroundKeepOffTargets
             || (recordIntent && serviceObservation == nil && nowSnapshot.hasCurrentUserLaunchAgent) {
-            return .failed("Keep Off is enabled, but user-facing GlobalProtect processes may still run.", .stillRunning)
+            let processes = preset.isBuiltInGlobalProtect ? "user-facing GlobalProtect processes" : "\(name) processes"
+            return .failed("Keep Off is enabled, but \(processes) may still run.", .stillRunning)
         }
         if preset.isBuiltInGlobalProtect && !recordIntent
             && (serviceObservation?.session == .running
@@ -565,6 +597,9 @@ final class PresetLifecycleCoordinator: ObservableObject {
         if !nowSnapshot.unprivilegedProtectedRunning.isEmpty {
             let names = nowSnapshot.unprivilegedProtectedRunning.joined(separator: ", ")
             return .completed("\(name) is kept off. Its user launch agents are disabled; a per-user \(names) instance is still running and should exit as launchd finishes unloading it.")
+        }
+        if preset.lifecycleUserLaunchAgentJobs.isEmpty {
+            return .completed("\(name) is kept off. TaskScope stops it whenever it finds it running.")
         }
         return .completed("\(name) is kept off. Its user launch agents are disabled.")
     }

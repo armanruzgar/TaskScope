@@ -51,8 +51,7 @@ struct PresetsSectionView: View {
                         onQuitAll: {
                             requestPresetAction(.quitAll, id: snapshot.preset.id)
                         },
-                        isKeptOff: snapshot.preset.isBuiltInGlobalProtect
-                            && settings.keepGlobalProtectOff,
+                        isKeptOff: settings.isKeptOff(snapshot.preset.id),
                         isKeepOffControlEnabled: !settings.isReadOnlyAfterCorruption,
                         onKeepOffChanged: { keptOff in
                             if keptOff {
@@ -60,11 +59,15 @@ struct PresetsSectionView: View {
                                     .keepOff,
                                     preset: snapshot.preset
                                 )
-                            } else {
+                            } else if snapshot.preset.isBuiltInGlobalProtect {
                                 // Turning the switch off means the VPN is usable
                                 // again, including its service, not just enabled
                                 // launchd overrides with no running service.
                                 openPreset(id: snapshot.preset.id)
+                            } else {
+                                // Any other preset is allowed to run again;
+                                // nothing is opened.
+                                allowPresetToRun(id: snapshot.preset.id)
                             }
                         },
                         onStopWithoutDisconnect: stopRecoveryAction(for: snapshot.preset),
@@ -127,6 +130,10 @@ struct PresetsSectionView: View {
                 Text("Keep GlobalProtect Off is not being enforced until presets are reset.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            if missingKeptOffPresetCount > 0 {
+                Text("Keep Off is not being enforced for \(missingKeptOffPresetCount) other preset\(missingKeptOffPresetCount == 1 ? "" : "s") until presets are reset.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             OpenSettingsButton {
                 Text("Review in Settings…")
             }
@@ -135,6 +142,22 @@ struct PresetsSectionView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    /// Kept-off presets, other than the built-in one, that the recovered list
+    /// lacks.
+    private var missingKeptOffPresetCount: Int {
+        settings.keptOffPresetIDs
+            .subtracting(watchedApps.presets.map(\.id))
+            .subtracting([WatchedAppPreset.globalProtectID])
+            .count
+    }
+
+    /// Turns Keep Off off for a custom preset: its launchd overrides are
+    /// cleared and nothing is opened.
+    private func allowPresetToRun(id: UUID) {
+        guard let preset = watchedApps.presets.first(where: { $0.id == id }) else { return }
+        confirmationState.run { _ = await processManager.allowToRun(preset) }
     }
 
     /// Opens the preset the card shows, addressed by identity: a display-name

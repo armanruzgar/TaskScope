@@ -48,23 +48,35 @@ struct PresetDeletionPolicy {
         PresetDeletionPolicy { preset in
             keepOffRefusal(
                 for: preset,
-                isKeptOff: settings.keepGlobalProtectOff,
+                isKeptOff: settings.isKeptOff(preset.id),
                 isSettingsReadOnly: settings.isReadOnlyAfterCorruption,
                 isKeepOffPending: activity.isPending(preset.id)
             )
         }
     }
 
-    /// Deleting the built-in GlobalProtect preset while Keep Off is on, pending
-    /// or unknown would orphan its persistent launchd disable override: nothing
-    /// left in the app could clear it. The message names the way out.
+    /// Deleting a preset while its Keep Off is on, pending or unknown would
+    /// orphan its persistent launchd disable overrides: nothing left in the app
+    /// could clear them. The message names the way out.
     nonisolated static func keepOffRefusal(
         for preset: WatchedAppPreset,
         isKeptOff: Bool,
         isSettingsReadOnly: Bool,
         isKeepOffPending: Bool
     ) -> String? {
-        guard preset.isBuiltInGlobalProtect else { return nil }
+        guard preset.isBuiltInGlobalProtect else {
+            let name = preset.displayName
+            if isSettingsReadOnly {
+                return "Settings are unreadable, so Keep Off may still be on for \(name). Recover settings and turn its Keep Off off before deleting it."
+            }
+            if isKeepOffPending {
+                return "Wait for the pending Keep Off action for \(name) to finish before deleting it."
+            }
+            guard isKeptOff else { return nil }
+            return preset.lifecycleUserLaunchAgentJobs.isEmpty
+                ? "Turn off Keep \(name) Off before deleting it."
+                : "Turn off Keep \(name) Off before deleting it. Its user launch agents are disabled by a persistent launchd override that deleting the preset would not clear."
+        }
         if isSettingsReadOnly {
             return "Settings are unreadable, so Keep GlobalProtect Off may still be active. Recover settings and clear Keep Off before deleting the built-in preset."
         }

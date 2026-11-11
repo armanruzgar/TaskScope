@@ -80,7 +80,7 @@ struct SupportDiagnosticsView: View {
             return
         }
         let keepOff: Bool? = settings.isReadOnlyAfterCorruption
-            ? nil : preset?.isBuiltInGlobalProtect == true && settings.keepGlobalProtectOff
+            ? nil : preset.map { settings.isKeptOff($0.id) } ?? false
         let notificationsEnabled = settings.isReadOnlyAfterCorruption ? nil : settings.enableNotifications
         // Freeze history at the start so concurrent lifecycle activity does not
         // change what this collection includes.

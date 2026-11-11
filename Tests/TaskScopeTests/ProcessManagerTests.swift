@@ -1414,7 +1414,10 @@ final class ProcessManagerTests: XCTestCase {
         var keptOff = false
         manager.dependencies.setPresetKeptOff = { _, value in keptOff = value }
 
-        let result = await manager.keepOff(lifecyclePreset())
+        // Only a watched preset can be kept off.
+        let preset = lifecyclePreset()
+        manager.dependencies.watchedPresets = { [preset] }
+        let result = await manager.keepOff(preset)
 
         XCTAssertEqual(result.status, .failed)
         XCTAssertTrue(keptOff)
@@ -1588,7 +1591,9 @@ final class ProcessManagerTests: XCTestCase {
             lifecycle: lifecycle
         )
 
-        _ = await manager.keepOff(lifecyclePreset())
+        let preset = lifecyclePreset()
+        manager.dependencies.watchedPresets = { [preset] }
+        _ = await manager.keepOff(preset)
 
         XCTAssertEqual(manager.lifecycleReport?.jobs.map(\.state), [.changed])
     }

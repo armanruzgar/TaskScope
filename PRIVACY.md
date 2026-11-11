@@ -77,7 +77,8 @@ they do not automatically repair or reset permissions or installation state.
 TaskScope uses standard macOS preferences for:
 
 - refresh, display, search, sorting, threshold, notification, and the explicit
-  Keep GlobalProtect Off preference;
+  Keep Off preferences: the identifiers of the presets that are kept off, and
+  the Keep GlobalProtect Off flag older builds read;
 - watched-app presets, including app paths, user launch-agent plist paths and
   labels, process names, and notification choices; the immutable built-in
   GlobalProtect definition also contains its fixed protected-daemon fields;
@@ -279,6 +280,9 @@ administrator authorization. Fixed local launchd job PID and kernel executable
 path checks attribute VPN services before automatic disconnect and final Keep Off
 verification. These observations and duplicate-failure state stay in memory;
 no new preferences, credentials, network data, or export fields are introduced.
+Keep Off on any other preset stores launchd disable overrides only for that
+preset's user launch agents, in the current user's launchd domain, and never
+asks for administrator approval; turning it off or Open clears them.
 
 Revoking a permission in System Settings can limit the related feature without
 deleting TaskScope's preferences.
@@ -313,7 +317,8 @@ deleting TaskScope's preferences.
   intent or the app bundle. Open and toggle-off on login-session installations
   deliberately retain the separate system daemon's disable override. That
   override persists until explicitly enabled; deleting preferences does not
-  clear it.
+  clear it. Keep Off overrides for another preset's user launch agents live in
+  launchd's user database the same way.
 
 To remove the current development build and its stored data:
 
@@ -323,7 +328,10 @@ To remove the current development build and its stored data:
    `sudo launchctl enable system/com.paloaltonetworks.gp.pangpsd`, regardless of
    layout. If TaskScope is already gone, run all three enable commands in
    [Support](SUPPORT.md#uninstall-and-erase-local-data), including the system
-   command. Resolve reported restoration errors before removing the app.
+   command. Resolve reported restoration errors before removing the app. If you
+   used Keep Off on another preset with launch agents, turn its Keep Off off or
+   choose Open as well; [Support](SUPPORT.md#uninstall-and-erase-local-data)
+   lists the commands for when TaskScope is already gone.
 2. Disable Launch at Login in Presets in the window or menu-bar popover. For
    Requires Approval or Unavailable, choose **Turn Off Launch at Login** and
    resolve any reported error.

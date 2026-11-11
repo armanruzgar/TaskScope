@@ -219,6 +219,18 @@ Required invariants:
   not authority to alter arbitrary protected processes;
 - keep protected process names out of the normal killable-name set.
 
+Keep Off can be turned on for any preset. Its intent is stored per preset, by
+preset identity, in TaskScope settings. For a custom preset, explicit Keep Off
+and background enforcement persistently disable and unload only that preset's
+configured user launch agents in the current user's `gui/<uid>` domain and stop
+only current-user main/helper processes that pass the preset's executable
+bundle checks, re-reading each target's kernel path just before signalling.
+They never request administrator approval, never touch a `system/` job, and
+never disconnect anything. A preset whose Keep Off is on, or whose explicit Keep
+Off is queued or running, cannot be deleted from the preset store, so its
+launchd overrides cannot be orphaned; turning Keep Off off (or Open) clears
+them, and Open always enables a job before bootstrapping it.
+
 Keep Off polling is triggered only by current-user main/helper processes.
 Preserved PanGPS services, including non-root session instances, do not trigger
 enforcement or count as failed background session stops. Startup enforcement
@@ -232,7 +244,10 @@ alone. PanGPS is never signalled directly.
 Residual risk: a syntactically valid custom preset can intentionally point at
 the wrong local app or user launch agent. The mandatory import preview exposes
 those fields but cannot decide whether the user intended them, so users must
-still trust and inspect the source. This risk cannot create a custom privileged
+still trust and inspect the source. With Keep Off on, such a preset is stopped
+again on every watched-status read and its agents stay disabled until Keep Off
+is turned off; the Keep Off confirmation, the Dry Run and the import preview
+say so. This risk cannot create a custom privileged
 system-daemon operation, and a custom preset cannot point at GlobalProtect's
 launch agents, daemon, or PanGPS.
 
@@ -240,14 +255,15 @@ launch agents, daemon, or PanGPS.
 
 Only the immutable built-in GlobalProtect identity can disable/unload, enable,
 or bootstrap the fixed system `pangpsd` daemon with macOS administrator
-approval. Custom presets cannot configure this path. Explicit Keep Off and the
-built-in preset's Quit All disconnect an active VPN before stopping services;
+approval. Custom presets cannot configure this path. The built-in preset's
+explicit Keep Off and Quit All disconnect an active VPN before stopping services;
 their confirmation discloses the persistent stop and restoration path.
 
 Required invariants:
 
-- only explicit in-app Keep Off / Apply Keep Off, GlobalProtect Quit All, or the
-  separately confirmed Stop Services Anyway recovery may request a system stop;
+- only the built-in preset's explicit in-app Keep Off / Apply Keep Off,
+  GlobalProtect Quit All, or the separately confirmed Stop Services Anyway
+  recovery may request a system stop;
   background enforcement and startup may verify system state but never prompt
   or mutate it. Open, toggle-off, and Open Watched App may request fixed system
   enable/bootstrap when the installed layout requires it;
@@ -478,12 +494,13 @@ Required invariants:
 - refuse all Keep Off intent writers while settings are unreadable, including
   GlobalProtect Quit All and confirmed Stop Services Anyway; show the saved
   intent as unknown and pause background Keep Off enforcement until reset;
-- refuse built-in preset deletion when settings recovery makes Keep Off unknown,
-  Keep Off is enabled, or an explicit action is queued/running. The preset
+- refuse deleting a preset when settings recovery makes Keep Off unknown, its
+  Keep Off is enabled, or its explicit Keep Off is queued/running. The preset
   store applies this rule to every deletion, not only the Settings window's
   Delete button, so no other path can orphan the launchd overrides; recheck preset
   existence and settings writability after disconnect before writing intent
-  or disabling services. Restoring a deleted built-in preset adds only the
+  or disabling services, and refuse a custom preset's Keep Off if the stored
+  preset changed or was removed while the action waited. Restoring a deleted built-in preset adds only the
   fixed canonical definition and is refused while a custom preset holds its
   display name or app path;
 - label a recovery reset as "after backup" only while a recovery slot holds the

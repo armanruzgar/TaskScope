@@ -89,9 +89,29 @@ final class PresetPolicyTests: XCTestCase {
         XCTAssertTrue(PresetDeletionPolicy.keepOffRefusal(
             for: .globalProtect, isKeptOff: false, isSettingsReadOnly: true, isKeepOffPending: false
         )?.hasPrefix("Settings are unreadable") == true)
+        // Any preset can be kept off: its own name and agents are in the text.
+        let custom = customPreset()
         XCTAssertNil(PresetDeletionPolicy.keepOffRefusal(
-            for: customPreset(), isKeptOff: true, isSettingsReadOnly: true, isKeepOffPending: true
-        ), "Only the built-in preset can be kept off here")
+            for: custom, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: false
+        ))
+        XCTAssertEqual(
+            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
+            "Turn off Keep Example Off before deleting it. Its user launch agents are disabled by a persistent launchd override that deleting the preset would not clear."
+        )
+        var bare = custom
+        bare.userLaunchAgentJobs = []
+        XCTAssertEqual(
+            PresetDeletionPolicy.keepOffRefusal(for: bare, isKeptOff: true, isSettingsReadOnly: false, isKeepOffPending: false),
+            "Turn off Keep Example Off before deleting it."
+        )
+        XCTAssertEqual(
+            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: false, isKeepOffPending: true),
+            "Wait for the pending Keep Off action for Example to finish before deleting it."
+        )
+        XCTAssertEqual(
+            PresetDeletionPolicy.keepOffRefusal(for: custom, isKeptOff: false, isSettingsReadOnly: true, isKeepOffPending: false),
+            "Settings are unreadable, so Keep Off may still be on for Example. Recover settings and turn its Keep Off off before deleting it."
+        )
     }
 
     func testKeepOffActivityStaysPendingUntilTheLastOverlappingActionEnds() {

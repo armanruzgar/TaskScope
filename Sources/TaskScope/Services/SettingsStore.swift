@@ -33,7 +33,9 @@ final class SettingsStore: ObservableObject {
     @Published var enableNotifications: Bool {
         didSet { save() }
     }
-    @Published var keepGlobalProtectOff: Bool {
+    /// The presets whose Keep Off is on. TaskScope keeps each from running
+    /// until its Keep Off is turned off or the preset is opened.
+    @Published var keptOffPresetIDs: Set<UUID> {
         didSet { save() }
     }
     @Published var selectedSectionRaw: String {
@@ -111,7 +113,7 @@ final class SettingsStore: ObservableObject {
         memHighlightThresholdMB = decoded.memHighlightThresholdMB
         autoRefreshProcessList = decoded.autoRefreshProcessList
         enableNotifications = decoded.enableNotifications
-        keepGlobalProtectOff = decoded.keepGlobalProtectOff
+        keptOffPresetIDs = Set(decoded.keptOffPresetIDs)
         selectedSectionRaw = decoded.selectedSectionRaw
         searchText = decoded.searchText
         sortKeyRaw = decoded.sortKeyRaw
@@ -155,6 +157,25 @@ final class SettingsStore: ObservableObject {
 
     var isReadOnlyAfterCorruption: Bool {
         !allowsPersistence
+    }
+
+    func isKeptOff(_ presetID: UUID) -> Bool {
+        keptOffPresetIDs.contains(presetID)
+    }
+
+    func setKeptOff(_ keptOff: Bool, for presetID: UUID) {
+        guard isKeptOff(presetID) != keptOff else { return }
+        if keptOff {
+            keptOffPresetIDs.insert(presetID)
+        } else {
+            keptOffPresetIDs.remove(presetID)
+        }
+    }
+
+    /// Keep Off of the built-in GlobalProtect preset (Keep GlobalProtect Off).
+    var keepGlobalProtectOff: Bool {
+        get { isKeptOff(WatchedAppPreset.globalProtectID) }
+        set { setKeptOff(newValue, for: WatchedAppPreset.globalProtectID) }
     }
 
     /// False while the unreadable payload a reset would replace exists in no
@@ -233,6 +254,7 @@ final class SettingsStore: ObservableObject {
             autoRefreshProcessList: autoRefreshProcessList,
             enableNotifications: enableNotifications,
             keepGlobalProtectOff: keepGlobalProtectOff,
+            keptOffPresetIDs: CodableSettings.ordered(keptOffPresetIDs),
             selectedSectionRaw: selectedSectionRaw,
             searchText: searchText,
             sortKeyRaw: sortKeyRaw,
@@ -309,7 +331,14 @@ final class SettingsStore: ObservableObject {
         var memHighlightThresholdMB: Double
         var autoRefreshProcessList: Bool
         var enableNotifications: Bool
+        /// Older builds read and write only this flag, for the built-in preset.
+        /// It stays the built-in preset's answer: an older build that turns its
+        /// Keep Off off keeps the list below unchanged, and must win.
         var keepGlobalProtectOff: Bool
+        /// Every kept-off preset, the built-in one included while it is kept
+        /// off. Added after 1.1.0; older builds ignore it and keep it when they
+        /// save. A payload without it migrates from `keepGlobalProtectOff`.
+        var keptOffPresetIDs: [UUID]
         var selectedSectionRaw: String
         var searchText: String
         var sortKeyRaw: String
@@ -327,6 +356,7 @@ final class SettingsStore: ObservableObject {
             case autoRefreshProcessList
             case enableNotifications
             case keepGlobalProtectOff
+            case keptOffPresetIDs
             case selectedSectionRaw
             case searchText
             case sortKeyRaw
@@ -345,6 +375,7 @@ final class SettingsStore: ObservableObject {
             autoRefreshProcessList: Bool,
             enableNotifications: Bool,
             keepGlobalProtectOff: Bool,
+            keptOffPresetIDs: [UUID] = [],
             selectedSectionRaw: String,
             searchText: String,
             sortKeyRaw: String,
@@ -361,6 +392,7 @@ final class SettingsStore: ObservableObject {
             self.autoRefreshProcessList = autoRefreshProcessList
             self.enableNotifications = enableNotifications
             self.keepGlobalProtectOff = keepGlobalProtectOff
+            self.keptOffPresetIDs = keptOffPresetIDs
             self.selectedSectionRaw = selectedSectionRaw
             self.searchText = searchText
             self.sortKeyRaw = sortKeyRaw
@@ -402,6 +434,12 @@ final class SettingsStore: ObservableObject {
                 Bool.self,
                 forKey: .keepGlobalProtectOff
             ) ?? defaults.keepGlobalProtectOff
+            // The built-in preset's entry always follows its flag (see
+            // `keepGlobalProtectOff`); a payload without the list migrates.
+            var keptOff = Set(try container.decodeIfPresent([UUID].self, forKey: .keptOffPresetIDs) ?? [])
+            keptOff.remove(WatchedAppPreset.globalProtectID)
+            if keepGlobalProtectOff { keptOff.insert(WatchedAppPreset.globalProtectID) }
+            keptOffPresetIDs = Self.ordered(keptOff)
             selectedSectionRaw = try container.decodeIfPresent(
                 String.self,
                 forKey: .selectedSectionRaw
@@ -439,9 +477,16 @@ final class SettingsStore: ObservableObject {
             ) ?? defaults.showsMenuBarStatus
         }
 
+        /// A stable order, so an unchanged set is never written again.
+        static func ordered(_ ids: Set<UUID>) -> [UUID] {
+            ids.sorted { $0.uuidString < $1.uuidString }
+        }
+
         func normalized() -> CodableSettings {
             var value = self
             value.schemaVersion = Self.currentSchemaVersion
+            value.keptOffPresetIDs = Self.ordered(Set(keptOffPresetIDs))
+            value.keepGlobalProtectOff = value.keptOffPresetIDs.contains(WatchedAppPreset.globalProtectID)
             value.refreshIntervalSeconds = min(60, max(2, refreshIntervalSeconds))
             let limits = SettingsStore.processListLimitRange
             value.processListLimit = processListLimit == SettingsStore.allProcessesLimit

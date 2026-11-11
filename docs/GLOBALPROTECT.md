@@ -7,6 +7,11 @@ management policies remains unverified.
 
 ## Quit All and explicit Keep Off
 
+Every preset can be kept off ([Keep Off](USING_TASKSCOPE.md#keep-off)); this
+page covers the built-in GlobalProtect preset's stronger form. Only it
+disconnects the VPN first, can stop its system service with administrator
+approval, and offers Stop Services Anyway.
+
 **Quit All**, the **Keep GlobalProtect Off** switch, and **Apply Keep Off…** use
 the full shutdown path after confirmation. TaskScope attributes PanGPS to the
 fixed current-user `pangps` or system `pangpsd` launchd job using the job PID,

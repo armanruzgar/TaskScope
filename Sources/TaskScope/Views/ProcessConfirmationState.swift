@@ -134,9 +134,13 @@ final class ProcessConfirmationState: ObservableObject {
         var action: PresetAction
         var disconnectFailureID: UUID?
 
-        /// The verb, as on the card's button.
+        /// The verb, as on the card's button or switch.
         var confirmTitle: String {
-            action == .quitAll && preset.isBuiltInGlobalProtect ? "Quit All" : action.rawValue
+            switch action {
+            case .quitAll where preset.isBuiltInGlobalProtect: "Quit All"
+            case .keepOff where !preset.isBuiltInGlobalProtect: "Keep \(preset.displayName) Off"
+            default: action.rawValue
+            }
         }
 
         /// A question that names the preset the card shows.

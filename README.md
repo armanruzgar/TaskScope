@@ -198,16 +198,19 @@ Import previews every lifecycle field before saving and performs no action.
 Custom presets can configure user launch agents, but cannot define privileged
 system-daemon jobs. Main/helper detection, the Watched filter, and preset stops
 require current-user ownership and the configured bundle boundaries. Quit App,
-Quit Helpers, Quit App and Helpers, and GlobalProtect's Quit All and Keep Off
+Quit Helpers, Quit App and Helpers, Keep Off, and GlobalProtect's Quit All
 stop the main process first and then all helpers together; each step waits up
 to three seconds before force stopping eligible processes, as disclosed in
-confirmation. Support diagnostics record Quit App and Helpers as `close`. Read
+confirmation. Every preset card has a **Keep Off** switch that keeps the app
+from running: it persistently disables the preset's user launch agents and
+stops the app whenever it appears, without administrator approval, until you
+turn the switch off or choose **Open** ([Keep Off](docs/USING_TASKSCOPE.md#keep-off)). Support diagnostics record Quit App and Helpers as `close`. Read
 the [preset guide](docs/USING_TASKSCOPE.md#watched-app-presets) before
 importing configuration.
 
 TaskScope reads watched status in the background only while the menu-bar icon
 shows status (**Settings > General**, on by default), notifications are on, or
-Keep GlobalProtect Off is on; otherwise it reads only while a TaskScope window or
+Keep Off is on for a preset; otherwise it reads only while a TaskScope window or
 the menu-bar popover is open. The icon then marks a running watched app, a
 kept-off service that is running again, a status TaskScope could not verify, and
 a waiting Auto-Stop prompt. The stale watched-status banner appears when a
@@ -283,7 +286,8 @@ policy. Read [GlobalProtect behavior and recovery](docs/GLOBALPROTECT.md) and th
 - **Notifications:** off on a new install; requested only after opt-in.
 - **Launch at Login:** optional, managed in Presets and macOS Login Items.
 - **Administrator approval:** only fixed built-in GlobalProtect daemon operations:
-  disable/bootout through explicit Keep Off, Quit All, or Stop Services Anyway;
+  disable/bootout through the built-in preset's explicit Keep Off, Quit All, or
+  Stop Services Anyway;
   enable/bootstrap through Open, toggle-off, or Open Watched App. No URL or
   background enforcement requests privileges; custom presets cannot add them.
 

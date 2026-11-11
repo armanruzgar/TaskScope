@@ -86,11 +86,15 @@ Shortcuts discovery and execution require testing with an eligible signature.
 
 Only the immutable built-in GlobalProtect definition has privileged operations:
 
-- Explicit in-app Keep Off / Apply Keep Off, GlobalProtect Quit All, and the
-  separately confirmed Stop Services Anyway can disable then boot out the fixed
-  `system/com.paloaltonetworks.gp.pangpsd` job, subject to the installed layout.
-- Open, turning Keep Off off, and **Open Watched App** can enable/bootstrap that
-  fixed daemon when the layout requires it. A loaded daemon is never restarted.
+- The built-in preset's explicit in-app Keep Off / Apply Keep Off, GlobalProtect
+  Quit All, and the separately confirmed Stop Services Anyway can disable then
+  boot out the fixed `system/com.paloaltonetworks.gp.pangpsd` job, subject to
+  the installed layout.
+- Its Open, turning its Keep Off off, and **Open Watched App** can
+  enable/bootstrap that fixed daemon when the layout requires it. A loaded
+  daemon is never restarted.
+
+Keep Off on any other preset never requests administrator approval.
 
 These operations use the macOS administrator prompt. URLs and background
 enforcement never request privileges. Shortcuts Stop uses user-process scope:

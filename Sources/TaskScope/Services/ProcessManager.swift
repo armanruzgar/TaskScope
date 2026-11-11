@@ -509,7 +509,7 @@ final class ProcessManager: ObservableObject {
     ) async -> TaskScopeCommandResult {
         if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
         // Pending from the request on, including time queued behind the gate.
-        let tracksPendingAction = recordIntent && preset.isBuiltInGlobalProtect
+        let tracksPendingAction = recordIntent
         if tracksPendingAction { keepOffActivity.begin(preset.id) }
         defer {
             if tracksPendingAction { keepOffActivity.end(preset.id) }
@@ -526,6 +526,24 @@ final class ProcessManager: ObservableObject {
         }
         if !recordIntent && Task.isCancelled {
             return TaskScopeCommandResult(status: .rejected, message: "Keep Off enforcement cancelled; it will retry on the next poll.")
+        }
+        return commandResult
+    }
+
+    /// Turns Keep Off off for a preset without opening it: clears its launchd
+    /// disable overrides and its intent. The built-in GlobalProtect preset's
+    /// switch uses Open instead, which also restores its VPN service.
+    @discardableResult
+    func allowToRun(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
+        if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
+        var commandResult = TaskScopeCommandResult(status: .failed, message: "Allow to Run did not complete.")
+        let ran = await runAction(kind: .mutation, announcesTransitions: false) {
+            let outcome = await lifecycleCoordinator.allowToRun(preset, host: self)
+            publish(outcome)
+            commandResult = outcome.result
+        }
+        if !ran {
+            return TaskScopeCommandResult(status: .rejected, message: "Allow to Run for \(preset.displayName) was cancelled.")
         }
         return commandResult
     }
