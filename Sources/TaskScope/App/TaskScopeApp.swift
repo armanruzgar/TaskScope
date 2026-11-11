@@ -197,7 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         runtime.registerURLHandler { [weak self] in
             self?.prepareForIncomingAutomationCommand(source: .url)
         }
-        if launchContext.suppressesAutomaticWindowPresentation {
+        // Only a launch already known to be quiet becomes an accessory here. An
+        // app made an accessory while Launch Services activates it hands the
+        // front back to the previous app about 0.1 s later, so an undecided
+        // (pending) Dock or Finder launch would end its grace period inactive,
+        // with no window until a second click. A quiet launch recognized later
+        // (a cold-open URL, a late intent) is made an accessory when it is.
+        if launchContext != .pending, launchContext.suppressesAutomaticWindowPresentation {
             runtime.setActivationPolicy(.accessory)
         } else {
             runtime.setActivationPolicy(.regular)
@@ -468,8 +474,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// to an accessory here hid a Dock-launched app whose activation was
     /// merely slow.
     private func finalizeInactiveInteractiveLaunch() {
-        // will-finish ran while the context was still pending and made the app
-        // an accessory; an interactive launch keeps its Dock presence.
+        // An interactive launch keeps its Dock presence.
         runtime.setActivationPolicy(.regular)
         hideAutomaticWindows()
         startAutomaticWindowSuppression()
