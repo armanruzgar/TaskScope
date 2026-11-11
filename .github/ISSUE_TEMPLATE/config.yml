@@ -6,3 +6,6 @@ contact_links:
   - name: Support
     url: https://github.com/armanruzgar/TaskScope/blob/main/SUPPORT.md
     about: Read support options and troubleshooting guidance.
+  - name: Report a conduct concern
+    url: https://github.com/armanruzgar/TaskScope/blob/main/CODE_OF_CONDUCT.md#reporting
+    about: Report conduct concerns privately, including concerns about the maintainer; do not use a public issue.

@@ -178,11 +178,12 @@ fails. Source/development packaging remains available and must retain the
 
 For a candidate with `VERSION=V` and `BUILD_NUMBER=B`, retain one plain UTF-8
 `*.evidence` file per claimed macOS build / architecture / GlobalProtect version
-and agent layout under `Evidence/GlobalProtect/lifecycle/V-B/`. All manifests
-in that directory must pass; at least one is required. These files define the
-tested combinations, not a claim for other macOS releases or product versions.
-Use a separate manifest for each persistence event if claiming both logout/login
-and reboot coverage.
+and agent layout directly in `Evidence/GlobalProtect/lifecycle/V-B/`, not in a
+subdirectory. All manifests in that directory must pass; at least one is
+required, and two manifests for the same environment fail. These files define
+the tested combinations, not a claim for other macOS releases or product
+versions. Use a separate manifest for each persistence event if claiming both
+logout/login and reboot coverage.
 
 Each record is a literal `key=value` line. Values are case-sensitive, nonempty,
 and contain no whitespace. Empty or whitespace-only lines and lines beginning
@@ -196,7 +197,7 @@ code. There is no environment override or skip switch for this gate.
 | --- | --- |
 | `schema_version` | Exactly `1` |
 | `evidence_kind` | Exactly `authorized-lifecycle`; this attests that the managed test machine was approved for these operations |
-| `test_date` | Test date in `YYYY-MM-DD` syntax |
+| `test_date` | Test date in `YYYY-MM-DD` syntax: a real calendar date, not in the future, and not earlier than the `source_revision` author date (one day is allowed for time zones) |
 | `taskscope_version`, `taskscope_build` | Exact candidate `VERSION` and `BUILD_NUMBER` |
 | `source_revision` | Full 40-character lowercase Git commit SHA, present locally and an ancestor of `HEAD` (or `HEAD` itself) |
 | `bundle_id` | Exact `TASKSCOPE_BUNDLE_ID` supplied to the release script |
@@ -227,7 +228,9 @@ All referenced paths are repository-relative and must stay inside the same
 letters, digits, `.`, `_`, `-`, and `/`, starting with a letter or digit; absolute
 paths, `.`/`..` path components, doubled slashes, and symlinks (including parent
 directories) are rejected. Every manifest and referenced artifact must be a
-readable, nonempty regular file tracked by Git. Review/redact and `git add` new
+readable, nonempty regular file tracked by Git. `manual_results` and the six
+reports must be different files with different contents, and none of them may
+be a `.evidence` file. Review/redact and `git add` new
 evidence before preflight; the full release additionally requires a clean
 worktree. Keep exports unchanged after redaction review and record observed
 outcomes, signing/install details, administrator requests/results, and all nine
@@ -241,9 +244,12 @@ evidence and its documentation to be committed after testing without a circular
 commit SHA. Any other content change requires a new tested revision. Preflight
 does not replace the full release's clean-worktree check.
 
-This deliberately incomplete template illustrates all required fields for the
-current candidate. Replace the placeholders and every `not-tested` only after
-collecting the corresponding evidence; copying it unchanged must fail:
+This deliberately incomplete template illustrates all required fields, using
+version 1.0.0 build 3 as an example. Because the `v1.0.0` tag exists,
+`script/release.sh` refuses version 1.0.0: a real manifest names the raised
+`VERSION` and `BUILD_NUMBER` of the candidate actually tested. Replace the
+placeholders and every `not-tested` only after collecting the corresponding
+evidence; copying it unchanged must fail:
 
 ```text
 schema_version=1

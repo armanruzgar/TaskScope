@@ -34,20 +34,28 @@ services running without recording new Keep Off intent or changing launch jobs.
 After verified disconnect, TaskScope records Keep Off intent, persistently
 disables the known per-user jobs, unloads them, and stops eligible app/helper
 processes. The fixed system `pangpsd` daemon can be disabled then booted out
-with macOS administrator approval. After successful authorization, shutdown
-verification allows up to 30 seconds with bounded probes. Unknown reads and
-partial failures are reported, never treated as proof of an off state. Once the
-privileged script reports that its disable step succeeded, that verification
-decides the result, not bootout's exit status. Cancelled or denied approval and
-a failed disable are reported after one inspection, without waiting.
+with macOS administrator approval. The macOS prompt names TaskScope, the
+GlobalProtect system VPN service and its label, and the change: stopping and
+disabling it here, re-enabling or starting it for Open. After successful
+authorization, shutdown verification allows up to 30 seconds with bounded
+probes. Unknown reads and partial failures are reported, never treated as proof
+of an off state. Once the privileged script reports that its disable step
+succeeded, that verification decides the result, not bootout's exit status.
+Cancelled or denied approval and a failed disable are reported in plain words
+after one inspection, without waiting. A timed-out administrator request is
+reported as timed out, and launchd's state then decides whether the change
+happened.
 
 On session-agent installations, a loaded or uninspectable separate system
 daemon and its override are preserved and the stop is incomplete. Retrying
 Apply Keep Off does not override that policy. Consult the organization managing
 the Mac. Only an already-unloaded system daemon can receive the disable override
 on that layout, with a matching installed plist and administrator approval.
-PanGPS is never signalled directly, and vendor files and VPN configuration are
-never removed or rewritten.
+When no system daemon plist is installed and launchd confirms that no system
+daemon is loaded, there is nothing to disable: Keep Off completes without an
+override and without an administrator request. PanGPS is never signalled
+directly, and vendor files and VPN configuration are never removed or
+rewritten.
 
 A full stop from the menu bar opens the regular TaskScope window before vendor
 UI control; progress and the complete result remain visible. The result window
@@ -61,6 +69,11 @@ service operations and administrator authorization. It can interrupt internet
 access or leave stale VPN DNS. The exception is tied to a one-use, in-memory
 failure identifier; a new attempt, Open, or app restart clears it. URLs,
 Shortcuts, background ticks, and stored preferences cannot authorize it.
+
+When a failed disconnect asks you to complete GlobalProtect's own request,
+background enforcement leaves GlobalProtect's interface open for up to three
+minutes, or until your next explicit action (a retry, Stop Services Anyway, or
+Open), so that you can answer it.
 
 If DNS fails after stopping, choose **Open**, leave the VPN disconnected, and
 verify normal internet access before retrying Keep Off. Earlier observations on
@@ -79,10 +92,17 @@ the app bundle is missing, it attempts override recovery and reports that
 nothing could be opened. Failed user-job restoration retains Keep Off intent.
 
 When a valid `pangps` session agent is installed, Open restores and verifies it
-before opening the app. Otherwise it enables/bootstraps the fixed system daemon
-with administrator approval. Open never restarts a loaded daemon or force-restarts
-a newly bootstrapped user job. Healthy unchanged Open reports no restoration and
-shows no service sheet. Malformed or mismatched session plists fail visibly.
+before opening the app. If that job is loaded but idle, with no running
+process, Open starts it once with a plain `launchctl kickstart`; when PanGPS
+still cannot be verified, the result says to choose Quit All, then Open. A
+failed start request for a job that is already loaded is a warning, not a
+failure. Without a session agent, Open enables/bootstraps the fixed system
+daemon with administrator approval, after checking that the installed plist's
+label matches; the daemon counts as ready only when launchd's PID belongs to a
+root-owned PanGPS in a known GlobalProtect product directory. Open never
+restarts a loaded daemon or force-restarts a newly bootstrapped user job.
+Healthy unchanged Open reports no restoration and shows no service sheet.
+Malformed or mismatched session plists fail visibly.
 
 Session installations preserve the separate system daemon's disable override.
 After the initial approved full stop, subsequent cycles need no administrator
@@ -101,29 +121,42 @@ support path if the protected service cannot be restored.
 Quit App, Quit Helpers, and Shortcuts Stop do not disconnect. For GlobalProtect,
 they can unload only the `pangpa` interface agent, preserving the `pangps`
 session VPN service and system daemon. Quit Helpers also preserves an agent
-running the main process. Stopping a session VPN service under a connected
-tunnel can leave DNS unusable, so use the full explicit path when intended.
+running the main process. Their results say when the VPN service (PanGPS) is
+still running and the VPN was not disconnected, and point to Quit All. Stopping
+a session VPN service under a connected tunnel can leave DNS unusable, so use
+the full explicit path when intended.
 
 Background Keep Off runs at startup and when current-user main/helper processes
 return. It disables both fixed user jobs but unloads only `pangpa`, preserving
 a loaded `pangps`. A preserved PanGPS service is not a polling trigger or a
 failed background session stop. Background checks never request administrator
 approval or change system services. Service state and Apply Keep Off remain
-visible; unchanged failures do not repeatedly replace the footer, publish
-reports, or append diagnostics. User-job and system-state failures can produce
-reports. Older saved intent never authorizes a background privileged stop.
+visible; within one run of TaskScope, unchanged failures do not repeatedly
+replace the footer, publish reports, or append diagnostics, so each launch
+reports a still-failing background check once. User-job and system-state
+failures can produce reports. Older saved intent never authorizes a background
+privileged stop.
 
 ## Settings recovery and preset deletion
 
 Unreadable settings disable Quit All, Apply Keep Off, the Keep Off switch, and
-Stop Services Anyway with a reset-settings explanation. Preserve the recovery
-backup and use **Settings > General > Reset Settings After Backup** before
-changing Keep Off. Quit App and Quit Helpers remain available.
+Stop Services Anyway with a reset-settings explanation. The saved Keep Off
+intent is part of the unreadable data, so the card shows Keep GlobalProtect
+Off as Unknown and background Keep Off enforcement is paused. Preserve the
+recovery backup and use **Settings > General > Reset Settings After Backup**
+(or **Discard Unreadable Settings and Reset** when no backup slot was free)
+before changing Keep Off; after the reset, Keep Off is off until you turn it on
+again. Quit App and Quit Helpers remain available.
 
-The built-in preset cannot be deleted while Keep Off is enabled, an explicit
-Keep Off action is queued or running, or settings are unreadable. The action
-rechecks preset existence and settings writability after disconnect before
-recording intent or changing services; stale confirmations cannot orphan overrides.
+Deleting the built-in preset asks for confirmation and says that its Keep
+GlobalProtect Off and Disconnect controls go with it. It cannot be deleted
+while Keep Off is enabled, an explicit Keep Off action is queued or running, or
+settings are unreadable. The action rechecks preset existence and settings
+writability after disconnect before recording intent or changing services;
+stale confirmations cannot orphan overrides. **Settings > Watched Apps >
+Restore Built-in GlobalProtect Preset**, shown while the preset is missing and
+preset storage is writable, adds it back, unless a custom preset uses the same
+display name or app path.
 
 ## Compatibility and support
 

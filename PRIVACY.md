@@ -14,8 +14,11 @@ document and the in-app disclosure must be updated before that feature ships.
 TaskScope can read local information exposed by macOS process tools, including:
 
 - PID, parent PID, process owner UID, process/executable name, command path,
-  start and elapsed time; **Show Detail** also reads and shows the owner's
-  account name, which is not stored;
+  start and elapsed time;
+- for the process whose **Show Detail** sheet you open, the owner's account
+  name and the full command line (**Arguments**). A command line can contain
+  secrets such as tokens. Both are read only when you open the sheet, shown
+  only there, and never stored, logged, or included in diagnostics;
 - observed CPU and resident memory usage;
 - extended per-process network byte counters (from `nettop`) and cumulative
   disk I/O byte counters (from the kernel's per-process resource usage) when
@@ -55,7 +58,7 @@ TaskScope uses standard macOS preferences for:
   labels, process names, and notification choices; the immutable built-in
   GlobalProtect definition also contains its fixed protected-daemon fields;
 - saved selections, including process names, executable/command paths, and the
-  PID captured when saved;
+  PID and process start time captured when saved;
 - auto-stop rules, including an optional executable path (required for enabled
   automatic stopping), and up to 200 recent event records, which can include
   process name, PID, time, outcome, and result detail;
@@ -151,19 +154,37 @@ TaskScope updates them once a launch has settled and whenever a preset is
 added, renamed, or deleted.
 
 TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
-diagnostics, **Copy Summary** in the GlobalProtect self-check, and **Copy
-Command** in a process row's context menu. Copy Command replaces the clipboard
-contents with the process's kernel executable path, or with its `ps` command
-name when that path is unavailable. TaskScope does not read the clipboard.
+diagnostics, **Copy Summary** in the GlobalProtect self-check, **Copy Command**
+in a process row's context menu, and **Copy Report** in a Stop or service
+results report. Copy Command replaces the clipboard contents with the process's
+kernel executable path, or with its `ps` command name when that path is
+unavailable. Copy Report copies the report as shown, which can include process
+names and PIDs or launch-job labels and their results. Text you select in the
+Process Detail sheet, including a command line, is copied only by your own
+Copy command. TaskScope does not read the clipboard.
 
-When notifications are enabled, process names can appear in Notification
-Center. TaskScope's own Unified Log entries are limited to failed handling of
-`taskscope://` URLs: a fixed message for a malformed URL and, logged with
-private visibility, the error text of a failed refresh or a rejected URL. A
-rejected URL's text repeats the URL's action word; refresh failures name no
-preset or process. Lifecycle actions and App Intents write no log entries. The
-`build_and_run.sh --logs` and `--telemetry` modes display local Unified Logs;
-`--telemetry` does not upload them.
+When notifications are enabled, process and preset names can appear in
+Notification Center, which keeps them even when they arrive while TaskScope is
+in front.
+
+TaskScope writes these entries to the macOS Unified Log, under its bundle
+identifier as the subsystem (`com.local.TaskScope` for local builds), and keeps
+no separate journal:
+
+- in the `Actions` category, a record of every `SIGTERM` or `SIGKILL` it sends,
+  with the signal and PID public and the process name private, and of every
+  launchd change (`launchctl bootout`, `bootstrap`, `disable`, `enable`,
+  `kickstart`, and similar), app `open`, and administrator request it runs,
+  with the exit status public and the command line private. Failures are
+  logged as errors;
+- for failed handling of `taskscope://` URLs, a fixed message for a malformed
+  URL and, logged with private visibility, the error text of a failed refresh
+  or a rejected URL. A rejected URL's text repeats the URL's action word;
+  refresh failures name no preset or process.
+
+macOS shows private values as `<private>` unless a logging profile on the Mac
+reveals them. The `build_and_run.sh --logs` and `--telemetry` modes display
+local Unified Logs; `--telemetry` does not upload them.
 
 Never attach an unsanitized process list, command line, preset export, log, or
 screenshot to a public issue.
@@ -175,9 +196,12 @@ screenshot to a public issue.
 - **Accessibility:** requested for exact PID selection in Activity Monitor.
   TaskScope does not need it for ordinary process monitoring. Handoff identity
   checks read local kernel start-time and executable-path evidence for visible
-  processes, including processes owned by other users. When selection requires
-  a temporary search, process-scope, or PID-column change, TaskScope
-  restores the prior Activity Monitor state after the handoff delay.
+  processes, including processes owned by other users. To select a row,
+  TaskScope may change Activity Monitor's search text, process scope, or PID
+  column. After a successful selection it keeps the search and scope that show
+  the row and hides a PID column it showed again about four seconds later;
+  after a failed one it restores what it changed. For root-owned and other
+  users' processes the search text is the executable's file name.
   Explicit GlobalProtect Quit All and Keep Off actions also use Accessibility
   to read the fixed vendor app's connection status and press Disconnect.
   Recognizing a failed connection reads its Connection Failed text and
@@ -225,6 +249,9 @@ deleting TaskScope's preferences.
   preset reset supplies the built-in default if no presets remain. See
   [recovery details](SUPPORT.md#stored-data-is-unreadable).
 - Preset export files remain wherever the user saved them.
+- Unified Log entries, including the `Actions` record, age out under macOS's
+  own log retention; deleting TaskScope or its preferences does not remove
+  them.
 - Support diagnostics history retains the latest 20 failures in memory until
   cleared in Settings > Support or the app exits. Saved diagnostics files and
   clipboard copies remain under the user's control; clearing history does not

@@ -14,7 +14,7 @@ body:
     id: version
     attributes:
       label: TaskScope version and build
-      description: Copy the exact version and build shown in About TaskScope.
+      description: Select and copy the version line in About TaskScope. A SwiftPM executable started directly shows "Development build (no bundle version)"; then give the commit you built.
       placeholder: Copy the value shown in About TaskScope
     validations:
       required: true

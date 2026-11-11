@@ -4,13 +4,19 @@ Describe the problem and the change.
 
 ## Validation
 
+CI runs the script syntax check, the debug build, `swift test`, the strict
+step, and the compiler-warning check on this pull request. It does not run code
+coverage, the release build, or the packaging test, so check each step below
+that you ran locally.
+
 - [ ] `( for f in script/*.sh; do bash -n "$f" || exit 1; done )`
 - [ ] `swift build -c debug -Xswiftc -warnings-as-errors`
 - [ ] `swift test`
 - [ ] `swift test --enable-code-coverage`
 - [ ] `swift test --scratch-path .build/strict -Xswiftc -warnings-as-errors -Xswiftc -warn-concurrency -Xswiftc -enable-actor-data-race-checks`
+- [ ] No compiler warnings: the clean `.build/warnings` build and its `grep` step from CONTRIBUTING.md print nothing
 - [ ] `swift build -c release`
-- [ ] `./script/test_packaging.sh` (launches the staged app)
+- [ ] `./script/test_packaging.sh` (launches test copies of the app)
 - [ ] `git diff --check`
 
 Explain any check that does not apply or could not run.

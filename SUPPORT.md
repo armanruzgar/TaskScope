@@ -8,7 +8,9 @@ support channel.
 
 Record:
 
-- the exact version and build from About TaskScope;
+- the exact version and build from About TaskScope, whose version line you can
+  select and copy; a SwiftPM executable started directly shows "Development
+  build (no bundle version)", so give the commit you built instead;
 - macOS version and Mac architecture;
 - whether the app was source-built, ad-hoc signed, Apple Development-signed, or
   obtained from a published release;
@@ -30,6 +32,8 @@ choose **Preview Diagnostics**. Choose **No preset** for app and permission
 information only. The preset picker shows local display names so you can choose
 the right entry; those names are not part of the report. A screenshot of the
 picker or an ordinary lifecycle report can still expose private information.
+If the chosen preset is deleted, the choice is cleared with "The selected preset
+was removed. Choose a preset again." and no report is built from it.
 
 The preview shows the complete, read-only JSON snapshot. **Copy JSON** copies
 that exact text to the clipboard. **Save JSON…** asks for a destination and writes
@@ -111,7 +115,10 @@ Results show when collection began. They become **Stale** after one minute,
 when TaskScope becomes inactive, or while a newer collection is pending.
 Observations occur over the collection interval, not atomically. A late or
 canceled collection cannot overwrite a newer result. Refresh remains available
-for every failed or unverified result; it never requests permission.
+for every failed or unverified result; it never requests permission. File and
+signature checks have a 10-second limit: a check that takes longer, for example
+on an unresponsive volume, shows **Unavailable**, and one that is still blocked
+is reported as pending instead of being started again.
 
 | State | Meaning and next step |
 | --- | --- |
@@ -157,10 +164,12 @@ and plists in saved order without displaying their raw names, paths, or labels.
 
 Health results remain in memory. They are not added to the frozen, schema-2
 Support JSON report described above. Automated tests cover simulated revocation,
-replacement, expiry/cancellation, destination failure, metadata validation, and
-real temporary path fixtures. Live permission revocation, signed-app replacement,
-login/reboot, and Shortcuts execution still require manual testing on each
-supported macOS/signing combination; automated evidence does not certify them.
+replacement, expiry/cancellation, destination failure, metadata validation,
+real temporary path fixtures, and the signature check against unsigned,
+ad-hoc-signed, and tampered fixture bundles. Live permission revocation,
+signed-app replacement, login/reboot, and Shortcuts execution still require
+manual testing on each supported macOS/signing combination; automated evidence
+does not certify them.
 
 ## Common recovery steps
 
@@ -174,30 +183,83 @@ supported macOS/signing combination; automated evidence does not certify them.
    eligible Apple Development identity for local Shortcuts testing.
 4. Reinstall using `./script/install.sh`, launch once, and retry Shortcuts.
 
-These steps do not make the app Developer ID-signed or notarized.
+These steps do not make the app Developer ID-signed or notarized. If
+`--verify` reports that the app died during its startup check, it shows the
+app's exit status and output. A bundle staged by an older version of the
+scripts fails `--verify`; stage it again first. The copy that `--verify`
+starts rejects every URL, Shortcut, or popover command ("Commands are disabled
+during startup verification.") and quits by itself after 60 seconds.
+
+### See what TaskScope did
+
+TaskScope records every signal it sends, and every launchd change, app open,
+and administrator request it runs, in the macOS Unified Log (see
+[PRIVACY.md](PRIVACY.md)). To review the last hour:
+
+```bash
+log show --last 1h --predicate 'subsystem == "com.local.TaskScope" AND category == "Actions"'
+```
+
+Process names and command lines appear as `<private>`. If TaskScope crashes,
+macOS keeps the crash report in `~/Library/Logs/DiagnosticReports`. Sanitize
+both before sharing them.
+
+### A build or install script reports a lock
+
+The scripts hold a lock while they stage, verify, or install, and record its
+owner in a `.owner` file next to the lock. A lock whose recorded process ID now
+belongs to another process is removed automatically. Otherwise the script
+names the owner: wait for that TaskScope script to finish, or, if the owner is
+not a TaskScope script, remove the lock and its `.owner` file as the message
+says and retry.
+
+### A stop is refused or reports an error
+
+A refused Stop or Force Stop ends with the reason, such as "The process is not
+owned by the current user." or "The system refused the stop request."; Stop
+Selected's report gives the reason for each row, in the same words as Auto
+Stop's events. Errors from the commands TaskScope runs include "Could not start
+the command: Too many open files." (TaskScope ran out of file descriptors; quit
+and reopen it), "Some of its processes could not be confirmed stopped." (a
+cancelled or timed-out command left processes TaskScope could not confirm
+gone), and "The command's exit status could not be collected." (something
+else in TaskScope collected the command's result first; TaskScope does not
+signal that command again). Record the exact text when you report a problem.
 
 ### Process information is unavailable
 
 TaskScope relies on local macOS process tools. The Presets section keeps
 configured apps visible, shows read errors, and offers Retry. The header shows
 Unknown before a successful watched observation and Stale after a later read
-failure. The stale banner reports the last successful watched observation,
-separately from the process-list update time, and includes the date for
-observations before today. If inventory remains unavailable, record the exact
-in-app error rather than assuming that no process is running. Extended
-network/disk counters can be unavailable independently of the basic process list.
+failure. The stale banner appears when a watched-status read fails and reports
+the last successful watched observation, separately from the process-list
+update time, with the date for observations before today. If inventory remains
+unavailable, record the exact in-app error rather than assuming that no process
+is running. Extended network/disk counters can be unavailable independently of
+the basic process list.
 
 ### Activity Monitor opens but does not select the PID
 
 Allow TaskScope in **System Settings > Privacy & Security > Accessibility**, then
 retry. If access is intentionally denied, Activity Monitor can still open but
-exact selection is unavailable. When exact selection temporarily changes the
-Activity Monitor search, process scope, or PID column, TaskScope restores the
-prior state after a short handoff delay. A message that access is not granted
-can also appear on the first request; it does not mean you denied access. If
-TaskScope cannot verify the row's start time and kernel executable path, refresh
-the process list and retry from a current row. These identity checks support
-visible root-owned and other-user processes too.
+exact selection is unavailable. A message that access is not granted can also
+appear on the first request; it does not mean you denied access. If TaskScope
+cannot verify the row's start time and kernel executable path, refresh the
+process list and retry from a current row. These identity checks support
+visible root-owned and other-user processes and executables under
+`/private/tmp`, `/private/var`, and `/private/etc` too. Selection gives up
+about five seconds after Activity Monitor is open; "Activity Monitor is not
+responding." means it stopped answering, so wait for it or quit and reopen it,
+then retry. TaskScope drives only the Activity Monitor in
+`/System/Applications/Utilities`.
+
+After a successful selection, Activity Monitor keeps the search and process
+scope that show the row (it can stay on All Processes); only a PID column that
+TaskScope showed is hidden again about four seconds later. After a failed
+handoff, TaskScope restores what it changed unless you changed it yourself. If
+Activity Monitor quits within those four seconds, or TaskScope is force quit,
+the changes stay; reset the search, scope, or PID column in Activity Monitor
+yourself.
 
 ### Notifications do not appear
 
@@ -208,13 +270,23 @@ does not imply global notification authorization. Editing a watched preset's
 app path or process-name assignments establishes a new notification baseline;
 already-running processes are not announced as newly started.
 
+After you allow notifications in System Settings, delivery resumes at the next
+watched-status refresh; you do not need to reopen TaskScope. Each refresh sends
+at most one notification per preset and direction, and a newer one replaces the
+older one. Starts and stops caused by TaskScope's own Open, Quit, or explicit
+Keep Off are not announced; changes made by background Keep Off enforcement or
+by auto-stop rules are. Notifications that arrive while TaskScope is in front
+also stay in Notification Center.
+
 ### Launch at Login needs approval
 
 Inspect the login-item status in Settings > Health, or use Launch at Login in
 the Presets section of the main window or menu-bar popover. Requires Approval
-also offers **Open Login Item Settings**. Requires Approval and Unavailable
-offer **Turn Off Launch at Login**, which attempts removal and shows any error.
-During uninstall, remove the registration before deleting the app.
+offers **Open Login Item Settings** and **Turn Off Launch at Login**.
+Unavailable says "macOS has no login item for this copy of TaskScope. Turn the
+switch on to register it." and offers **Remove Stale Login Item**. Both
+removal buttons attempt removal and show any error. During uninstall, remove
+the registration before deleting the app.
 
 ### Stored data is unreadable
 
@@ -226,17 +298,44 @@ primary data until explicit reset. Occupied backup slots are never replaced;
 if all ten slots are full, the banner explains that the original remains only
 at its primary key. Preserve that value before resetting.
 
+A payload whose known fields can be read but which also holds a value this
+build cannot write back, such as an unknown field set to `1e400`, is used
+read-only and backed up the same way; the message says it contains a value this
+build cannot write back, and reset rewrites only the fields this build knows.
+If something outside TaskScope replaces the stored settings with an unreadable
+payload while TaskScope runs, the next settings change backs that payload up as
+`.corruptBackup` and stops writing ("Stored settings were changed outside
+TaskScope…"); the settings in use stay in effect, and reset saves them.
+
+The reset button for unreadable Settings, Presets, Auto-Stop Rules, Auto-Stop
+Events, or Hotkey Settings, and the Saved menu's reset for saved selections,
+read **Reset *data* After Backup** only while a recovery slot holds the
+unreadable payload. When all ten slots already hold other payloads, the button
+reads **Discard Unreadable *data* and Reset** and asks for confirmation, because
+the payload would be lost. To keep a copy first, export the whole preference
+domain, which includes the primary value and every backup slot:
+
+```bash
+defaults export com.local.TaskScope ~/Desktop/TaskScope-preferences.plist
+```
+
 Unreadable preset data, including wrong-type property-list values, publishes
-no default watched-app targets in Shortcuts.
+no default watched-app targets in Shortcuts. While presets are in recovery,
+**Dry Run** and the **Compatibility Self-Check** stay available in Settings >
+Watched Apps; only Edit, Delete, the Notify switch, and reordering are
+disabled.
 
 Partially decoded or validation-rejected presets, rules, saved selections, and
 auto-stop events use a second family: `.rejectedMigrationBackup`, then `.2`
 through `.10`. These are complete copies of the original payload and can contain
 names, paths, labels, and history. Valid entries remain visible in read-only
-recovery; reset commits the recovered entries, not the rejected data. Preset
+recovery; reset commits the recovered entries, not the rejected data. Stored
+rules that repeat another rule's name or ID, and saved selections that repeat
+an ID, are rejected this way; for selections the first copy is kept. Preset
 reset uses the built-in default if no presets remain. Rule reset commits only
 safe recovered rules. Selection reset preserves recovered entries and their
-unknown fields; recall remains available while mutations are locked. Event
+unknown fields; recall remains available while Rename, Delete, and Save Current
+Selection are unavailable. Event
 reset commits recovered valid events plus retained session history and resumes
 durable logging, within the 200-record limit.
 
@@ -251,9 +350,12 @@ When saving readable settings after a downgrade, TaskScope preserves unknown
 top-level settings and newer schema versions. Unreadable settings require an
 explicit reset before the primary payload can be replaced.
 
-Non-dictionary hotkey settings also enter read-only recovery. Settings > Hotkey
-shows the backup status and **Reset Hotkey Settings After Backup**. Preserve the
-named backup or primary value first; reset enables the default ⌃⌥⌘T shortcut.
+Hotkey settings that are not a dictionary, or whose fields have the wrong type
+(for example `enabled` stored as text), also enter read-only recovery.
+Settings > Hotkey shows the backup status and **Reset Hotkey Settings After
+Backup**, or **Discard Unreadable Hotkey Settings and Reset** when nothing
+could be backed up. Preserve the named backup or primary value first; reset
+enables the default ⌃⌥⌘T shortcut.
 The hotkey stays disabled during recovery. Invalid but readable saved shortcuts
 migrate to the default with a reason retained until dismissal or successful
 shortcut recording.
@@ -300,10 +402,13 @@ If the action does not finish:
 - **DNS fails after stopping.** Choose **Open**, leave the VPN disconnected,
   verify normal internet access, and retry Keep Off. TaskScope does not rewrite
   DNS, routes, or vendor settings.
-- **Settings are unreadable.** Quit All, Apply Keep Off, the switch, and Stop
-  Services Anyway are disabled. Preserve the backup and use
-  **Settings > General > Reset Settings After Backup** before changing Keep Off;
-  Quit App and Quit Helpers remain available.
+- **Settings are unreadable.** The card shows Keep GlobalProtect Off as
+  Unknown, background Keep Off enforcement is paused, and Quit All, Apply Keep
+  Off, the switch, and Stop Services Anyway are disabled. Preserve the backup
+  and use **Settings > General > Reset Settings After Backup** (or **Discard
+  Unreadable Settings and Reset**) before changing Keep Off; after the reset,
+  Keep Off is off until you turn it on again. Quit App and Quit Helpers remain
+  available.
 
 If GlobalProtect is stuck retrieving portal configuration after being opened
 directly, choose **Open** in TaskScope. It closes a UI that runs without its VPN
@@ -335,10 +440,15 @@ loaded state. Missing files do not imply unloaded jobs or cleared overrides.
 enabled. Read failures, timeouts, and unknown formats remain unknown.
 
 Process counts distinguish the current user, root, other users, and unverified
-identity/owner. A name-only match is unverified. The protected service process
-is verified only when a root `PanGPS` with a kernel executable path in a known
-product directory matches the system job's launchd PID. Loaded is different
-from running, and neither proves VPN connectivity or policy compatibility.
+identity/owner. A name-only match is unverified. A root `PanGPS` can belong to
+the login-session job, which runs it through setuid, or to the system daemon,
+so the report checks each separately: the login-session VPN service process is
+verified when a `PanGPS` owned by the current user or root, with a kernel
+executable path in a known product directory, matches the `pangps` job's
+launchd PID; the protected system-service process is verified only when a root
+`PanGPS` with such a path matches the system job's launchd PID. Loaded is
+different from running, and neither proves VPN connectivity or policy
+compatibility.
 Additional/relocated jobs are outside the fixed preset's detection scope.
 
 Review the preview, then choose **Copy Summary** or **Export…**. Both share
@@ -395,8 +505,9 @@ that migration was tested.
    command or Open reports failure, use the organization's managed support path.
 
 2. Turn off Launch at Login in the Presets section of the main window or
-   menu-bar popover. For Requires Approval or Unavailable, choose **Turn Off
-   Launch at Login** and resolve any reported error.
+   menu-bar popover. For Requires Approval, choose **Turn Off Launch at
+   Login**; for Unavailable, choose **Remove Stale Login Item**. Resolve any
+   reported error.
 3. Quit TaskScope.
 4. Delete every copy of the app: the installed `/Applications/TaskScope.app`
    (or `TaskScope.app` in the `DEST_DIR` you installed to) and, in a source
@@ -415,7 +526,8 @@ that migration was tested.
    ```
 
 7. Optionally delete files you exported (by default `TaskScope-presets.json`,
-   `TaskScope-diagnostics.json`, and `TaskScope-GlobalProtect-compatibility.txt`),
+   `TaskScope-diagnostics.json`, and `TaskScope-GlobalProtect-compatibility.txt`,
+   plus `TaskScope-preferences.plist` if you exported preferences before a reset),
    the per-user cache directory
    `"$(getconf DARWIN_USER_CACHE_DIR)com.local.TaskScope"`, and a source
    checkout's `.build` and `dist` directories.

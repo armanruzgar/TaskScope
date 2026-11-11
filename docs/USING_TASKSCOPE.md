@@ -15,43 +15,74 @@ action from you.
 
 On a new install the window opens on **Processes** and shows **Idle Until
 Needed**: TaskScope does not read the process list until you choose **Load
-Processes**, and the count line reads **Not loaded** until then. A loaded list
-is a snapshot. The **Refresh** button in the header reloads it, as do Retry and
-a saved selection's **Preview & Recall…**. It also reloads at every
-watched-status refresh, but only if **Auto-refresh process list** is on.
+Processes** or turn on **Auto-refresh process list**, and the count line reads
+**Not loaded** until then. With Auto-refresh off, a loaded list is a snapshot:
+**Updated** and a time next to the count say when it was read, and the
+**Refresh** button in the header reloads it, as do Retry and a saved
+selection's **Preview & Recall…**. With Auto-refresh on, the list loads by
+itself and reloads at every watched-status read.
 
 **Settings > General** holds these settings:
 
 | Setting | Default | Effect |
 | --- | --- | --- |
-| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status and runs Keep Off enforcement; with Auto-refresh on, also how often a loaded list reloads |
-| Auto-refresh process list | Off | Reload a loaded process list at every watched-status refresh |
-| Process list limit | 80 rows (10 to 200, in steps of 10) | Rows shown; a longer result shows **Showing N of M** |
+| Watched status interval | 10 s (2 to 60 s) | How often TaskScope reads watched-app status. It reads in the background only while notifications or Keep GlobalProtect Off are on; otherwise only while a TaskScope window or the menu-bar popover is open, and opening one reads at once. Keep Off enforcement runs on these reads |
+| Auto-refresh process list | Off | Load the process list without **Load Processes** and reload it at every watched-status read |
+| Show all processes | Off | List every matching process in any sort order and in tree view; the process list limit then does not apply |
+| Process list limit | 80 rows (10 to 200, in steps of 10) | Rows shown while Show all processes is off; a longer result shows **Showing N of M** |
 | Highlight Thresholds: CPU % | 30 % | Rows at or above either threshold are highlighted and match the **Hot** filter |
 | Highlight Thresholds: Memory (MB) | 1024 MB | See CPU % |
 | Notify on watched process changes | Off | Notifications for watched presets; see [notifications](#history-notifications-and-hotkeys) |
 
 The onboarding window opens on interactive launches until you choose **Get
-Started**.
+Started**; **Help > Welcome to TaskScope** shows it again. It introduces
+watched apps, the menu-bar item and the global shortcut (showing the current
+one), stopping processes, customizing, the keyboard, and the Accessibility
+access and administrator approval that Quit All and Keep GlobalProtect Off can
+ask for; **Settings > Health** shows the Accessibility status.
+
+A quiet launch, such as Launch at Login, a `taskscope://` URL, or a Shortcut,
+starts TaskScope in the menu bar without a window. If you then open a
+TaskScope window, closing the last one (the main window, About, or the welcome
+window) removes the Dock icon again. A launch from the Dock or Finder keeps its
+Dock icon.
 
 ## Process actions and observations
 
-Type in the search field to match a process name, command, or PID. Use the
-sort menu (CPU, memory, name, or PID), the **All / Watched / Hot** filter, and
-the **Tree view** button. Select rows with the circle at the start of each row;
-with a selection, the red button with the count offers **Stop Selected…** and
-**Force Stop Selected…**, and **Clear** deselects. Right-click a row for
-**Create Auto-Stop Rule...**, **Watch This Process...**, **Save Selection as
-Preset...** (when rows are selected), **Stop**, **Force Stop**, **Show Detail**,
-**Copy Command**, and **Open in Activity Monitor**.
+Type in the search field to match a process name, command, or PID. Sort with
+the sort menu (CPU, memory, name, or PID) or by clicking the **CPU** or **MEM
+MB** column title, or **PID** in the window: CPU and memory sort highest first,
+PID lowest first, and the active column is marked. Use the **All / Watched /
+Hot** filter and the **Tree view** button. Sort, search, the filter, and tree
+view are saved across launches and shared by the window and the popover.
+Select rows with the circle at the
+start of each row; with a selection, the red button with the count offers
+**Stop Selected…** and **Force Stop Selected…**, and **Clear** deselects. The
+stop button at the end of a row opens the Stop review for that process.
+Right-click a row for **Create Auto-Stop Rule…**, **Watch This Process…**,
+**Save Selection as Preset…** (when rows are selected), **Stop…**, **Force
+Stop…**, **Show Detail**, **Copy Command**, and **Open in Activity Monitor**;
+VoiceOver offers the same actions in its Actions rotor.
 
-The process list supports search, CPU/memory/name/PID sorting, filters, and flat
-or expandable tree views. When the display limit truncates results, **Showing
-N of M** includes the total matching rows, including search results. Command-A
-replaces the selection with the displayed matching rows, and Escape clears it.
-Otherwise, rows hidden by search, filter, or the display limit stay selected
-until the process exits or its identity changes; batch confirmation lists
-captured targets.
+The process list supports search, sorting, filters, and flat or expandable tree
+views. When the display limit truncates results, **Showing N of M** includes
+the total matching rows, including search results. In the window, **NET KB
+TOTAL** and **DISK MB TOTAL** show data received / sent and read / written
+since the process started. Tree view follows the selected sort at every level,
+for the roots and for each parent's children; rows with equal values are
+ordered by name, then PID. A parent shown only to place a match in its
+hierarchy is dimmed and sorted by its own value, so an idle parent can sit
+below busier roots even when one of its children is busy. Tree view opens the
+path to every displayed match, including matches that appear later, and the
+count line adds how many rows are visible.
+
+Rows hidden by search, filter, or the display limit stay selected until the
+process exits or its identity changes; Command-A adds the displayed matching
+rows to the selection and keeps those hidden ones. **Stop Selected…** and
+**Force Stop Selected…** open a review that lists every captured target with
+its name, PID, and path, rows on screen first, and says how many selected rows
+are not shown. In the window the review is a sheet; in the menu bar it is an
+alert with a scrolling list. A finished batch deselects only its own targets.
 Click any tree row, including the selected row or a nested child, to return
 keyboard focus for the [list's keys](#keyboard).
 
@@ -62,22 +93,44 @@ require current-user ownership and an executable inside `Contents`. Protected
 names remain classified across users for display. This display classification
 does not authorize a signal or establish a launchd service identity.
 
-Stop sends `SIGTERM`; explicit Force Stop sends `SIGKILL`. Normal process actions
-never target TaskScope itself, launchd, the kernel task, or process groups.
-Captured identities are revalidated immediately before signals. Missing PIDs,
-changed identities, and unavailable verification produce different results.
-A changed executable path is not proof that a still-running process exited.
-A `<defunct>` row with no kernel executable path is treated as already exited
-and is not signalled during manual, batch, or automatic stops; a missing path
-alone does not establish exit. A stale single-stop target is replaced with the
-verified inventory while preserving displayed Net/Disk readings.
+Stop sends `SIGTERM`; explicit Force Stop sends `SIGKILL`. An app can quit on
+`SIGTERM` without asking to save changes, and the confirmation says so. After a
+delivered `SIGTERM`, Stop and Stop Selected wait up to three seconds for the
+process to exit before reporting it still running; they never escalate to
+`SIGKILL`. Normal process actions never target TaskScope itself, launchd, the
+kernel task, or process groups. Captured identities are revalidated
+immediately before signals: a single Stop, Force Stop, or Auto Stop checks
+them with a basic process read and keeps the Net/Disk readings already shown
+for unchanged rows. Missing PIDs, changed identities, and unavailable
+verification produce different results. A refused stop says why, for example
+"The process is not owned by the current user." or "The system refused the stop
+request.", and the Stop Selected report gives the reason for each row.
 
-The displayed-list update time changes when its backing inventory is replaced.
-The stale watched-status banner tracks the last successful watched observation
-separately and includes the date for observations before today. Explicit refresh
-reports its own result even when joining a silent read. Presets remain visible
-before the first watched observation and after read failures; Unknown and Stale
-status and Retry distinguish missing evidence from a quiet app.
+A changed executable path is not proof that a still-running process exited.
+Whether a row has exited comes from the kernel's process state, read with the
+process list; an exited (zombie) process is not signalled during manual, batch,
+or automatic stops. A process can name itself `<defunct>`, so that text counts
+only when the kernel state could not be read, and then only for a row with no
+kernel executable path. A missing path alone does not establish exit.
+
+Results go to the footer, and batch results also to a report with a one-line
+summary, a line per target, and **Copy Report**; **Done** or Escape closes it,
+and a newer report waits until you close the one on screen. A batch's footer
+result leads with the stopped count, for example "Stopped 2 of 3 selected; 1
+still running.", and lists only parts that are not zero. The footer wraps long
+results and announces them to VoiceOver. On the Processes tab it also shows
+**Σ shown**, the CPU and memory total of the displayed matching rows. Its
+spinner appears only while an action or an explicit refresh runs, not during
+background reads, and **Quit** is unavailable while an action runs.
+
+The **Updated** time next to the count changes when the displayed list's
+inventory is replaced; it is hidden while Auto-refresh keeps the list current.
+In the **Presets** section, the stale watched-status banner appears only when a
+watched-status read fails. It shows the last successful watched observation,
+with the date for observations before today. Explicit refresh reports its own
+result even when joining a silent read. Presets remain visible before the first
+watched observation and after read failures; Unknown and Stale status and Retry
+distinguish missing evidence from a quiet app.
 
 ### Keyboard
 
@@ -86,25 +139,48 @@ Click a row to give the process list keyboard focus. While it has focus:
 | Key | Effect |
 | --- | --- |
 | Up Arrow, Down Arrow | Move the keyboard row |
+| Space | Select or deselect the keyboard row |
+| Left Arrow, Right Arrow | In tree view, collapse or expand the keyboard row |
 | Return | Open the Stop review for the keyboard row (never for TaskScope's own row) |
-| Escape | Clear the whole selection, including selected rows hidden by search or filter, and the keyboard row |
-| Command-A | Replace the selection with the displayed rows that match the search and filter; in tree view, only matching rows shown in the tree, not ancestors shown for context |
-| Command-Shift-A | Clear the selection |
+| Command-I | Show Detail for the keyboard row |
+| Escape | Clear the keyboard row; the selection stays |
+| Command-A | Add the displayed rows that match the search and filter to the selection; in tree view, only matching rows shown in the tree, not ancestors shown for context. Selected rows hidden by the search or filter stay selected |
+| Command-Shift-A | Clear the selection, including selected rows hidden by search or filter |
+
+VoiceOver announces the keyboard row's name and PID as it moves; in tree view,
+each row also reports its level.
 
 Elsewhere, the global shortcut (Control-Option-Command-T by default) shows the
 TaskScope window, Command-comma opens Settings, and in sheets and dialogs Return
-chooses the default button and Escape cancels.
+chooses the default button and Escape cancels. Read-only sheets, such as a
+lifecycle dry run, the GlobalProtect compatibility check, the diagnostics
+preview, and Stop or service results, close with Escape as well as Return.
+
+When the TaskScope window is in front, its menus offer these commands:
+
+| Menu command | Effect |
+| --- | --- |
+| File > Refresh (Command-R) | Reload the section shown: the process list, or watched status on Presets |
+| Edit > Find… (Command-F) | Show **Processes** and put the cursor in the search field |
+| Edit > Select All (Command-A) | With the list focused, add the displayed matching rows to the selection |
+| View > Tree View | Turn tree view on or off |
+| View > Processes, View > Presets | Show that section |
+| Process > Show Detail (Command-I) | Show Detail for the keyboard row |
+| Process > Stop…, Process > Force Stop… | Open the review for the selected rows or, with nothing selected, for the keyboard row |
+| Help > Welcome to TaskScope (Command-?) | Show the introduction again |
+
+About TaskScope and the welcome window each open as a single window.
 
 ### Signals each action sends
 
 | Action | Signals |
 | --- | --- |
-| Stop, Stop Selected… | One `SIGTERM` per target |
+| Stop, Stop Selected… | One `SIGTERM` per target; TaskScope then waits up to three seconds for the target to exit |
 | Force Stop, Force Stop Selected… | One `SIGKILL` per target |
-| Prompt rule, after **Stop Now** | One `SIGTERM`; never repeated |
+| Prompt rule, after **Stop Now** | One `SIGTERM`; never repeated. If the process still runs one 10-second engine cycle later, the event history records a failure that suggests Force Stop |
 | Auto Stop rule | `SIGTERM`; if the process still runs at least one 10-second engine cycle later, one more `SIGTERM`. It never sends `SIGKILL`: the event then says to use Force Stop |
 | Log Only rule | None |
-| Preset Quit App, Quit Helpers, Quit All Killable; GlobalProtect Quit All and Keep Off | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds |
+| Preset Quit App, Quit Helpers, Quit All Killable; GlobalProtect Quit All and Keep Off | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
 
 Preset stops also unload the preset's user launch agents before signalling
 (Quit Helpers keeps an agent that runs the main process); see
@@ -112,35 +188,69 @@ Preset stops also unload the preset's user launch agents before signalling
 
 ### Process details and Activity Monitor
 
-A row's context menu offers **Show Detail**, **Copy Command**, and **Open in
-Activity Monitor**. Show Detail opens a read-only sheet with the name, PID,
-parent PID, owner's account name, start time, `ps` command name, CPU, and
-memory; it has no copy or Activity Monitor control. Copy Command copies the
-process's kernel executable path, or the `ps` command name when that path is
-unavailable; it never copies arguments. For a process started from a shell, the
-sheet's Command (for example `sleep`) can therefore differ from what Copy
-Command copies (`/bin/sleep`).
+A row's context menu offers **Show Detail** (Command-I for the keyboard row),
+**Copy Command**, and **Open in Activity Monitor**. Show Detail opens a
+read-only sheet with the name, PID, parent PID, owner's account name, start
+time, `ps` command name, **Arguments**, CPU, and memory. Arguments is the
+process's full command line, read only when you open the sheet and kept only if
+the process still has the row's start time; it reads **Unavailable** when it
+cannot be read. Command lines can contain secrets such as tokens, so check the
+sheet before sharing a screenshot of it. You can select and copy the sheet's
+text; it has no copy button or Activity Monitor control. CPU and memory follow
+the process list while the process is listed; otherwise the sheet says they
+date from the request. The sheet says when the process is no longer running or
+its PID now belongs to a different process, and a failed read offers
+**Retry**.
+
+Copy Command copies the process's kernel executable path, or the `ps` command
+name when that path is unavailable; it never copies arguments. For a process
+started from a shell, the sheet's Command (for example `sleep`) can therefore
+differ from what Copy Command copies (`/bin/sleep`).
 
 Open in Activity Monitor requests exact selection of that process.
 The row's UTC start time and kernel executable path must match before opening,
 on each selection retry, and after selection before success is reported. These
-identity checks also support visible root-owned and other-user processes. If
-Accessibility access is not granted, Activity Monitor can still open; this status
-does not imply the user denied a request. Temporary search, scope, or PID-column
-changes are restored after the handoff. Consecutive handoffs retain the original
-state; fields subsequently changed by the user are left alone.
+identity checks also support visible root-owned and other-user processes and
+executables under `/private/tmp`, `/private/var`, and `/private/etc`. TaskScope
+drives only the Activity Monitor in `/System/Applications/Utilities` running its
+own executable. For root-owned and other users' processes it searches for the
+executable's file name; when no name is known, it clears an existing search so
+that the search cannot hide the row. Selection attempts stop about five seconds
+after Activity Monitor is open, and an Activity Monitor that stops answering
+ends the attempt with "Activity Monitor is not responding."; overlapping
+requests run one after another. If Accessibility access is not granted,
+Activity Monitor can still open; this status does not imply the user denied a
+request.
+
+After a successful selection, TaskScope keeps the search text and View scope
+that show the row; a PID column it showed is hidden again about four seconds
+later. After an unsuccessful handoff it restores each field it changed, unless
+you changed that field yourself. Restoration is best effort and only while the
+same Activity Monitor stays open: if Activity Monitor quits within those four
+seconds, or TaskScope is force quit, the changes stay, and a relaunched
+Activity Monitor is captured afresh.
 
 ## Watched-app presets
 
-Add a preset with **Settings > Watched Apps > Add**, or right-click a running
-process and choose **Watch This Process...** (or **Save Selection as
-Preset...** for the selected rows). Each preset in Settings > Watched Apps has
-a notifications switch and **Dry Run** and **Delete** buttons, and custom
-presets also have **Edit**; **Export** and **Import** handle the whole list.
-Each preset card in the **Presets** section has **Open**, **Quit App**, **Quit
-Helpers**, and **Quit All Killable**. On the built-in GlobalProtect preset the fourth button is
-**Quit All**, a different and stronger action that disconnects the VPN and
-turns on **Keep GlobalProtect Off**; read [GlobalProtect](GLOBALPROTECT.md).
+Add a preset with **Settings > Watched Apps > Add…**, or right-click a running
+process and choose **Watch This Process…** (or **Save Selection as Preset…**
+for the selected rows). Watch This Process is available only for your own app
+processes that run from an app bundle's `Contents/MacOS`; Save Selection as
+Preset makes the selected process that is the app bundle's own executable the
+main process, even when a helper is listed first. Each preset in Settings >
+Watched Apps has a **Notify** switch and **Dry Run** and **Delete…** buttons,
+and custom presets also have **Edit…**; deleting asks for confirmation.
+**Export…** and **Import…** handle the whole list. Each preset card in the
+**Presets** section has **Open**, **Quit App**, **Quit Helpers**, and **Quit
+All Killable**. On the built-in GlobalProtect preset, marked with a shield, the
+fourth button is **Quit All**, a different and stronger action that disconnects
+the VPN and turns on **Keep GlobalProtect Off**; read
+[GlobalProtect](GLOBALPROTECT.md). Quit
+Helpers is unavailable for a preset with no helpers and no user launch agents,
+and card actions are unavailable while another action runs. Confirmations name
+the preset. If stored presets are unreadable or partly rejected, the Presets
+section shows a recovery notice instead of an empty list and says that Keep
+GlobalProtect Off is not enforced until presets are reset.
 
 The preset editor has these fields:
 
@@ -162,11 +272,19 @@ Watched App** shortcut runs the same stop.
 
 Settings supports creation, editing, ordering, import, export, and a lifecycle
 dry run. Exports use a versioned archive; legacy array imports remain accepted.
-Import is size-bounded and previews configured fields and rejection reasons
-without changing processes. A later user action can use those app paths, user
-launch-agent labels/plist paths, and process names, so inspect untrusted imports.
-Custom presets cannot configure privileged system daemons; the built-in
-GlobalProtect privileged definition is immutable.
+Export writes the presets as stored, including fields that a newer TaskScope
+build added. Import is bounded by file size and previews configured fields and
+rejection reasons without changing processes; it refuses a preset that carries
+a newer build's fields instead of importing it without them. After an import, a
+line reports "Imported N presets." and, when some were rejected, how many
+validation rejected; an import that adds nothing is shown as an error, and
+opening Import again clears the previous outcome. An archive holds
+at most 200 presets, and Add and Import stop at 200 (a stored list above 200
+still loads). A later user action can use imported app paths, user launch-agent
+labels/plist paths, and process names, so inspect untrusted imports. Custom
+presets cannot configure privileged system daemons or use GlobalProtect's
+launch agents, daemon, or PanGPS process name; the built-in GlobalProtect
+privileged definition is immutable.
 
 Helper/protected names and launch-agent labels/paths cannot contain commas.
 Names can have at most 255 characters. A launch-agent label must start with an
@@ -177,9 +295,18 @@ bidirectional overrides, or line or paragraph separators. These rules apply to
 the editor, import, and stored presets; a stored preset that breaks them is
 handled like other invalid stored data (see
 [recovery](../SUPPORT.md#stored-data-is-unreadable)).
-Custom app paths use their on-disk spelling; main process names adopt the bundle
-executable's spelling, and helper lists exclude the main process. Optional job
-requirements survive normalization and saves.
+Presets must differ in display name and in app path; presets for different
+bundles may share a main process name, and notifications then name the preset,
+for example "JDownloader2: JavaApplicationStub".
+The app path is kept as you entered it. Links in it are followed, in their
+on-disk spelling, whenever the preset is matched or opened, so a re-pointed
+link or a later install is picked up. When a preset is added, edited, or
+imported, a `*.app` link must lead to an app bundle (a folder named `.app` with
+`Contents/Info.plist`), and Open checks the bundle again. Main process names
+adopt the bundle executable's spelling, and helper lists exclude the main
+process. Optional job requirements survive normalization and saves, including
+an edit that changes only an agent's label or only its plist path; the editor
+cannot make an agent optional.
 
 **Watch This Process** and **Save Selection as Preset** validate every selected
 process against the proposed main/helper name, owner, and executable-directory
@@ -191,33 +318,70 @@ Watch This Process and Create Auto-Stop Rule.
 Open and preset stop actions share lifecycle checks and per-job reporting. Quit
 App, Quit Helpers, and Quit All Killable verify final inventory against the
 definition captured for the action even if the saved preset changes or is
-deleted. Preset stops and GlobalProtect's Quit All and Keep Off give eligible
-processes up to three seconds to exit before force stopping; confirmations
+deleted. Preset stops and GlobalProtect's Quit All and Keep Off stop the main
+process first, giving it up to three seconds to exit before force stopping, and
+then stop all helpers together in one shared three-second window; confirmations
 disclose escalation. Partial reports do not imply every target stopped or that
-no signal was sent.
+no signal was sent. When no process was running but a launch agent was
+unloaded, the result says so ("launch agents unloaded"). Quit Helpers leaves
+loaded, and reports, an agent whose process ID cannot be read.
+
+**Open** restores the preset's required user launch agents, then opens the app
+with `/usr/bin/open`. A required agent whose plist is missing stops Open before
+anything is launched. An app that is already running is brought to the front by
+the same `open`, which reuses the running copy; GlobalProtect is never opened
+over its running interface, and Open then reports "GlobalProtect is already
+running.". A failed launch shows the reason `open` gave, or the timeout, for
+example "Could not open Notes: …". When Open fails after it turned Keep Off off
+or restored services, the message says that first, and it never reports a
+launch that was not requested.
 
 For GlobalProtect's distinct full-stop and restoration behavior, read
 [GlobalProtect](GLOBALPROTECT.md). Ordinary Quit App, Quit Helpers, and Shortcuts
 Stop do not disconnect it and leave its VPN services alone.
 
-Deleting the built-in GlobalProtect preset is refused while Keep GlobalProtect
-Off is on, while an explicit Keep Off action is queued or running, and while
-settings are unreadable. A relaunch does not recreate a deleted built-in
-preset; importing an earlier export that contains it restores the built-in
-definition, so export your presets before deleting it.
+Deleting the built-in GlobalProtect preset asks for confirmation and says that
+its Keep GlobalProtect Off and Disconnect controls go with it. Deletion is
+refused while Keep GlobalProtect Off is on, while an explicit Keep Off action
+is queued or running, and while settings are unreadable. A relaunch does not
+recreate a deleted built-in preset. While it is missing and preset storage is
+writable, **Settings > Watched Apps > Restore Built-in GlobalProtect Preset**
+adds it back; restoring is refused, naming the preset, while a custom preset
+uses the same display name or app path, so delete or change that preset first.
+Importing an earlier export that contains the built-in preset also restores
+the built-in definition.
 
 ## Runtime rules
 
 Create a rule under **Add Rule** in **Settings > Auto-Stop**: enter the process
-name, an executable path (required for Auto Stop), the runtime in minutes (1 to
-1,440), and the action. You can also right-click a process and choose **Create
-Auto-Stop Rule...**. Once a matching process has run for the set time,
-**Prompt** asks you, and **Stop Now** stops it while **Dismiss** leaves it
-running; **Auto Stop** stops it without asking; **Log Only** only records an
-event. The **Rules** list turns rules on and off and offers **Edit**,
-**Duplicate**, and **Delete**. **Recent Events** shows what happened, and
-**Clear** empties it. [Signals each action sends](#signals-each-action-sends)
+name, an executable path (required for Auto Stop), the runtime in minutes, and
+the action. Type the runtime (1 to 1,440 minutes, so at most 24 hours; a value
+outside that range is clamped) or adjust it with the arrows, here, in the Edit
+Auto-Stop Rule sheet, and in the quick rule sheet. You can also right-click a
+process and choose **Create Auto-Stop Rule…**. Once a matching process has run
+for the set time, **Prompt** asks you in an alert, even when no TaskScope
+window or popover is open; the alert shows how long the process has run.
+**Stop Now** stops it, and **Dismiss** leaves it running and stops reminders
+for that process until it restarts. **Auto Stop** stops it without asking;
+**Log Only** only records an event. Each row of the **Rules** list turns its
+rule on and off and has **Edit…**, **Duplicate**, and **Delete…** buttons, and
+a refused change is reported on that row. **Recent Events** lists every
+retained event, and **Clear…** empties it. Deleting a rule and clearing events
+ask for confirmation first. [Signals each action sends](#signals-each-action-sends)
 lists what Prompt and Auto Stop send.
+
+The process name is the name only, for example `node`, never a path. The
+executable path must be the executable file itself; for an app that is
+`<App>.app/Contents/MacOS/<executable>`, not the `.app` bundle. Add Rule and
+Edit refuse a bundle or another directory and suggest the bundle's executable.
+A path that does not exist yet is accepted, with an orange note under the rule.
+Rules saved before these checks still load and can be switched off or edited.
+Each process name can have one rule, compared without regard to case, whatever
+the rule's path or action: a second rule for the same name, for another binary
+or as an escalation such as Prompt at 30 minutes plus Auto Stop at 120, is not
+possible. **Duplicate** adds a switched-off copy named "*name* Copy" (then
+"*name* Copy 2", and so on) with the same path, runtime, and action; change its
+process name, and its path, before switching it on.
 
 Prompt, Auto Stop, and Log Only rules require current-user ownership and exclude
 TaskScope itself and PIDs that cannot be signalled. Auto Stop requires a trusted
@@ -236,6 +400,13 @@ The quick rule sheet shows the executable path or name-wide scope as you edit.
 Supplying a path enables a disabled name-only Auto Stop rule, including migrated
 legacy rules; the sheet and save message disclose this. Other disabled rules
 remain disabled. A quick rule cannot silently overwrite another same-name rule.
+When **Update** would move a path-bound rule to the right-clicked process's
+executable, the sheet and the result message name the binary the rule covers
+now and the one it will cover. Renaming the rule in Update mode drops the old
+name's executable path: Prompt and Log Only become name-wide, and Auto Stop is
+refused until a path applies. For a process owned by another user or by an
+unknown owner, Add and Update are unavailable, with an explanation, because
+rules act only on your own processes.
 
 Prompt alerts show a PID and are presented anew when the queued target changes.
 An unanswered name-only prompt follows a still-matching process when its
@@ -247,59 +418,128 @@ for the cancelled automatic stop. Edits that keep Auto Stop enabled and matching
 retain the occurrence's handled state and single-retry budget, including after
 delivery. A retry waits at least one engine cadence
 measured by a monotonic clock. Delivered requests remain in history even if
-the rule is later edited, disabled, or deleted. An accepted request is shown as
-Stop requested until exit is observed; a changed or unreadable executable path
-alone cannot produce an Ended or Stopped event.
+the rule is later edited, disabled, or deleted. If an Auto Stop rule is switched
+off, deleted, or edited so that it no longer applies while its process is still
+exiting, its retry is cancelled and the history records "The rule changed or was
+removed before the process exited; its exit will not be tracked." An accepted
+request is shown as Stop requested until exit is observed; a changed or
+unreadable executable path alone cannot produce an Ended or Stopped event.
 
-Log Only must reach durable event storage before the occurrence is treated as
-handled. Event history retains at most 200 records. For mixed or unreadable
-stored data and explicit-reset behavior, see [recovery](../SUPPORT.md#stored-data-is-unreadable).
+TaskScope never repeats a confirmed **Stop Now**. If the process still runs one
+engine cadence (10 seconds) after the request was accepted, the history gets
+one "Still running after the confirmed stop request. Use Force Stop if it must
+exit." failure, and the exit is still recorded when it happens ("Exited after
+the stop request."). Saving, editing, switching the rule off and on, or
+deleting it neither prompts again for that process nor loses that exit record.
+
+A Log Only rule logs each process lifetime once, also when the process's
+executable is moved or renamed while it runs; a new process on a reused PID is
+a new lifetime. Saving, editing, or switching the rule off and on logs a
+still-running process again, as does relaunching TaskScope. Log Only must reach
+durable event storage before the occurrence is treated as handled.
+
+When a stopped or prompted process exits and its PID is reused before the next
+pass, the history says Stopped or Ended; "identity changed" means that the same
+process's executable moved. Prompts and Log Only records are not delayed while
+an Auto Stop waits for another operation, such as Keep GlobalProtect Off waiting
+for administrator approval: each pass handles them first and then runs its
+automatic stops. Event history retains at most 200 records and is saved once per
+pass. For mixed or unreadable stored data and explicit-reset behavior, see
+[recovery](../SUPPORT.md#stored-data-is-unreadable).
 
 ## Saved selections
 
 Select rows, open the **Saved** menu (the bookmark button above the list), and
 choose **Save Current Selection…**. Each saved selection appears in that menu
-with **Preview & Recall…**, **Rename…**, and **Delete**. Preview & Recall
-reloads the process list and shows what it would select before you recall it.
+with **Preview & Recall…**, **Rename…**, and **Delete…**, which asks for
+confirmation. Preview & Recall reloads the process list and shows what it would
+select before you recall it; its list scrolls when it has more than 12
+entries.
+
+A selection name has at most 100 characters and no line breaks, control
+characters, or bidirectional formatting characters; existing names stay as they
+are. While saved selections are read-only after a
+[recovery](../SUPPORT.md#stored-data-is-unreadable), Preview & Recall still
+works, but Rename, Delete, and Save Current Selection are unavailable.
 
 Saved entries use durable kernel executable-path matching and a recall preview.
 Legacy entries can fall back to command/name matching and are identified in the
 preview; path-backed entries never downgrade to that fallback. Saving refuses
-entries without a kernel path. Multiple saved copies of one executable recall
-running copies up to the saved count; extra copies require review.
+entries without a kernel path. A saved process that is still running, with the
+same PID and start time, is selected even when more copies of its executable
+run; entries saved before start times were kept match by PID. For an
+executable's remaining saved entries, when more unselected copies run than
+there are entries, none of them is selected and the preview lists the entries
+as ambiguous.
 
 ## History, notifications, and hotkeys
 
 The window's header charts (**PROC CPU %** and **PROC RSS**) sum the whole
 observed process inventory; the popover does not show them. They have Live,
-Paused, and Unavailable states and keep at most 60 samples in memory. Sampling
-pauses when no metrics view is visible. Changing the interval schedules the next
-sample without an immediate sample burst.
+Paused, and Unavailable states and keep at most 60 samples in memory; they say
+when history is unavailable, and a failed read starts a new line segment.
+Sampling pauses when no metrics view is visible. While TaskScope polls, the
+charts reuse each refresh's process read instead of reading on their own
+timer, so samples follow the watched status interval; opening the window takes
+one sample at once. Changing the interval schedules the next sample without an
+immediate sample burst.
 
 Turn on **Notify on watched process changes** in **Settings > General**, and
-choose which presets notify with each preset's switch in **Settings > Watched
-Apps**. Notifications require opt-in and system authorization. Editing a
+choose which presets notify with each preset's **Notify** switch in **Settings >
+Watched Apps**. Notifications require opt-in and system authorization. Editing a
 preset's identity, app path, process-name assignments, or notification settings
 establishes a new baseline instead of announcing false starts or stops.
 
+Each refresh sends at most one notification per preset and direction, titled
+**Process Started** or **Processes Started** (or **Stopped**) and listing the
+names; a newer one replaces the older one for the same preset and direction. A
+process name that several presets list appears as "*preset*: *name*". Changes
+caused by TaskScope's own Open, Quit, and explicit Keep Off actions are not
+announced; those made by background Keep Off enforcement and by auto-stop rules
+are. Notifications that arrive while TaskScope is in front also stay in
+Notification Center. After you allow notifications in System Settings, delivery
+resumes at the next refresh, without reopening TaskScope.
+
 Record a different global shortcut in **Settings > Hotkey**. The default
-shortcut is ⌃⌥⌘T. Supported saved shortcuts such as Command-Shift-T
-are retained. Saved shortcuts rejected by current validation migrate to the
-default, with a reason in **Settings > Hotkey** until dismissed or successfully
-recorded. Shortcuts require Command or Control; unsupported keys and reserved
-macOS shortcuts (including Lock Screen, Full Screen, Emoji & Symbols,
-Spaces/Mission Control, and input sources) are refused. Recording errors remain
-separate from actual registration/conflict status. See [hotkey recovery](../SUPPORT.md#stored-data-is-unreadable)
-for unreadable preferences.
+shortcut is ⌃⌥⌘T. Recording takes keystrokes only from the Settings window:
+switching windows, closing Settings, or switching apps cancels it, and the
+current hotkey is paused while you record, so pressing it records it.
+Supported saved shortcuts such as Command-Shift-T are retained. Shortcuts
+require Command or Control. Control-letter combinations such as ⌃C, Command
+with an arrow, Delete, Forward Delete, Return, or a digit, and reserved macOS
+shortcuts (including Lock Screen, Full Screen, Emoji & Symbols, Spaces/Mission
+Control, and input sources) are refused. Saved shortcuts rejected by current
+validation migrate to the default, with a reason in **Settings > Hotkey** until
+dismissed or successfully recorded. A combination that macOS itself refuses
+while you record is reported as "That shortcut is unavailable. The previous
+shortcut remains active."; starting a new recording clears an earlier conflict
+status. Recording errors remain separate from actual registration/conflict
+status. Hotkey preferences with a field of the wrong type enter read-only
+recovery like an unreadable value, and the hotkey stays off until reset; see
+[hotkey recovery](../SUPPORT.md#stored-data-is-unreadable).
 
 ## Behavior reference
 
 Process start evidence uses UTC and names preserve UTF-8. Shared inventory cache
 age and ordering use monotonic elapsed time, including sleep; wall-clock changes
-cannot extend reuse, and negative ages expire the cache. Destructive checks use
-uncached inventory. Open's main-process polling uses a monotonic deadline and an
-attempt limit. Shell completion retries child reaping after early exit notifications
-and stop requests, including command timeouts.
+cannot extend reuse, and negative ages expire the cache. The age counts from
+when a read completed, so a slow read is still shared. A caller that is
+cancelled stops waiting at once; a shared read is cancelled only when nobody
+waits for it. Destructive checks use uncached inventory. Open's main-process
+polling uses a monotonic deadline and an attempt limit. Shell completion retries
+child reaping after early exit notifications and stop requests, including
+command timeouts.
+
+If you quit TaskScope (Command-Q, the Dock, or a logout) while a lifecycle
+action runs, TaskScope stops polling and Auto Stop rules and waits up to five
+seconds for the action to finish. With no action running it quits at once.
+Either way, every shell command still running, such as `launchctl`, `ps`,
+`nettop`, or the administrator `osascript` request, is then stopped as on a
+timeout, with a wait of at most about one second, so a stuck action delays quit
+or logout by about six seconds at most. An administrator prompt still on screen
+is withdrawn, and no new command starts. A Keep Off cut short this way stays
+recorded, and background enforcement retries it at the next launch, without
+administrator rights. A crash or force quit cannot do any of this.
 
 Commands cancelled while queued or waiting for admission are rejected. Once a
 preset Stop acquires the process-operation gate, it completes even if its caller
@@ -311,6 +551,14 @@ cancelled before execution are not retained as lifecycle failures.
 
 Retained rules, presets, selections, and events preserve unknown JSON fields
 across saves. Rules with unknown fields are disabled and read-only because a
-newer field may narrow their authority. Settings preserve newer values normalized
-for display until that setting is changed. This preservation does not implement
-newer behavior. Read [Privacy](../PRIVACY.md) before sharing exports or screenshots.
+newer field may narrow their authority. For the same reason, a preset that
+carries fields from a newer build, in the preset or in one of its launch
+agents, is read-only: Settings marks it **Requires a newer build**, it cannot be
+edited or deleted, its Open, Quit, and Keep Off actions are refused, Shortcuts
+do not offer it, and Import refuses it. The built-in GlobalProtect preset is
+exempt because its definition is fixed, and the `priority` key that builds
+before 1.0 stored does not count as a newer field. Stored rules that repeat
+another rule's ID are rejected when loaded, like rules that repeat a name.
+Settings preserve newer values normalized for display until that setting is
+changed. This preservation does not implement newer behavior. Read
+[Privacy](../PRIVACY.md) before sharing exports or screenshots.

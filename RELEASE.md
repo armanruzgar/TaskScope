@@ -17,8 +17,13 @@ staged app is not itself a published release.
   the original repository, so commits from before 2026-10-17 have different
   SHAs; [Evidence/README.md](Evidence/README.md#commit-shas-in-older-records)
   maps the SHAs that older records cite
+- Next version: no release after 1.0.0 has been published. Because the
+  `v1.0.0` tag exists, `script/release.sh` refuses `VERSION` 1.0.0; before the
+  next release, raise `VERSION` and move the `[Unreleased]` changelog entries
+  under a `## [<version>]` heading
 - Local bundle identifier: `com.local.TaskScope`
-- Possible local signatures: Apple Development or ad-hoc
+- Possible local signatures: Apple Development or ad-hoc, both with the hardened
+  runtime; only `--debug` builds add the `get-task-allow` debugging entitlement
 - Not provided or claimed: production bundle identity, universal/Intel binary,
   Developer ID signature, hardened-runtime review, notarization, stapling, or a
   public downloadable app bundle
@@ -71,8 +76,11 @@ Before starting:
 5. Inventory the actual macOS versions, architectures, signing identities, and
    managed-product environments available for QA. Missing coverage must be
    stated, not inferred.
-6. Review [THREAT_MODEL.md](THREAT_MODEL.md), [PRIVACY.md](PRIVACY.md), and all
-   security-sensitive changes since the prior release.
+6. Review [THREAT_MODEL.md](THREAT_MODEL.md), [PRIVACY.md](PRIVACY.md), all
+   security-sensitive changes since the prior release, and any open Dependabot
+   alerts. Dependabot alerts and security updates are on for the repository's
+   dependencies; a Dependabot pull request is merged only after its CI checks
+   pass and the full gate passes locally on its branch.
 
 ## Canonical automated gate
 
@@ -87,12 +95,28 @@ swift test --scratch-path .build/strict \
   -Xswiftc -warnings-as-errors \
   -Xswiftc -warn-concurrency \
   -Xswiftc -enable-actor-data-race-checks
+rm -rf .build/warnings
+swift build --build-tests --scratch-path .build/warnings \
+  -Xswiftc -warn-concurrency > .build/warnings.log 2>&1
+( ! grep -E '\.swift:[0-9]+:[0-9]+: warning:' .build/warnings.log )
 swift build -c release
 ./script/test_packaging.sh
 git diff --check
 ```
 
-`script/test_packaging.sh` launches the staged app. It uses a unique test bundle
+The `.build/warnings` step fails on any compiler warning in the package's
+sources and tests; [CONTRIBUTING.md](CONTRIBUTING.md#development-workflow)
+explains why the strict step alone is not enough. The
+[CI workflow](.github/workflows/ci.yml) runs the script syntax check, the debug
+build, `swift test`, the strict step, and the compiler-warning check on every
+push to `main` and on pull requests, using Xcode 26.6 on GitHub's `macos-26`
+runner. It does not replace this gate: code coverage, the release build, and
+the packaging test run only locally, and the recorded local results remain the
+release evidence.
+
+`script/test_packaging.sh` stages, signs ad hoc, and launches test copies of the
+app in its own temporary directory; the checkout's `dist/` and
+`Package.resolved` end the run unchanged. It uses a unique test bundle
 identifier, rejects test preference plists outside its temporary directory, and
 cleans up that domain and its plists. Startup verification uses volatile defaults;
 a temporary `CFFIXED_USER_HOME` alone does not isolate preferences.
@@ -152,7 +176,9 @@ Record evidence for every locally testable item:
   preserves history without immediate samples;
 - light/dark appearance, keyboard operation, VoiceOver labels, and destructive
   confirmations. In tree mode, focus search, click the highlighted row again,
-  and verify arrows, Return, and Escape; repeat with a child row. Verify Cancel
+  and verify the arrows (Left and Right collapse and expand), Space, Return,
+  Command-I, and Escape, which clears only the keyboard row and keeps the
+  selection; repeat with a child row. Verify Cancel
   and normal/force single and batch confirmations in window and menu bar using
   safe test targets. Automated confirmation checks assert exact SIGTERM/SIGKILL
   delivery and settled Cancel behavior, with mutation checks.
@@ -196,10 +222,15 @@ managed test machine before claiming live compatibility.
 Both public-binary modes of `script/release.sh` enforce the
 [machine-checkable evidence contract](GLOBALPROTECT_COMPATIBILITY.md#machine-checkable-release-evidence).
 For the exact version/build, retain at least one tracked `.evidence` manifest
-under `Evidence/GlobalProtect/lifecycle/<version>-<build>/`. Every manifest must
-identify the tested candidate and environment, declare no coverage gaps, record
-all nine lifecycle/protected-service/VPN/policy checks as `pass`, and reference
-six distinct, nonempty snapshot files plus manual observations. Paths must stay
+directly in `Evidence/GlobalProtect/lifecycle/<version>-<build>/`, one per
+tested environment (macOS build, architecture, GlobalProtect version, agent
+layout, and persistence event). Every manifest must identify the tested
+candidate and environment, declare no coverage gaps, record all nine
+lifecycle/protected-service/VPN/policy checks as `pass`, and reference six
+snapshot files plus manual observations: nonempty files with distinct paths and
+distinct contents, none of them a `.evidence` file. The test date must be a
+real date, not in the future, and not earlier than the tested commit's author
+date (one day is allowed for time zones). Paths must stay
 inside that candidate's evidence directory without symlinks. All candidate
 content outside the evidence directory tree and three release documents must
 match the tested source revision. Evidence-only follow-up commits are allowed.
@@ -223,7 +254,8 @@ validation/copying and rechecks the copied identifier, version, and build before
 replacement and after installation. Another running copy with the same bundle
 identifier must be quit before a script opens/debugs a different bundle path.
 Startup verification launches with fresh volatile store/onboarding preferences
-and no normal background enforcement:
+and no normal background enforcement; the verification copy rejects every URL,
+Shortcut, or popover command at once and quits by itself after 60 seconds:
 
 ```bash
 ./script/build_and_run.sh --stage
@@ -248,19 +280,27 @@ non-development candidate identifier and the retained lifecycle evidence above:
 TASKSCOPE_BUNDLE_ID=com.example.TaskScope ./script/release.sh --preflight
 ```
 
-Preflight validates identifier syntax and rejects the local development prefix;
-it does not verify ownership. It also validates version/build, arm64 host/policy,
-the GlobalProtect lifecycle evidence contract, and required tools. With the
-repository's current unverified lifecycle coverage, this command is expected to
-fail with collection instructions. After evidence passes, it reports missing
-credentials but does not sign, notarize, or create a releasable artifact.
+`script/release.sh` takes exactly one mode, `--preflight` or `--release`; there
+is no default, `-h` or `--help` lists the modes and environment variables, and
+any other or additional argument is a usage error. Preflight validates
+identifier syntax and rejects the local development prefix; it does not verify
+ownership. It also validates version/build, arm64 host/policy, the GlobalProtect
+lifecycle evidence contract, and required tools. It refuses a version whose
+`v<version>` tag already exists, requires a literal `## [<version>]` changelog
+heading with no entries left under `## [Unreleased]`, and refuses to overwrite
+release output from an earlier run. With the repository's current unverified
+lifecycle coverage, this command is expected to fail with collection
+instructions; the current `VERSION`, 1.0.0, also fails the tag check. After
+evidence passes, it reports missing credentials but does not sign, notarize, or
+create a releasable artifact.
 
 The evidence regression tests run as part of `script/test_packaging.sh` and can
-also run alone with `bash script/test_release_compatibility.sh`. They use only
-synthetic files in a disposable Git repository and stub release tools; their
-passing results are not installed-product compatibility evidence. Packaging tests
-clear inherited packaging and release inputs, so exported production settings
-do not change their development defaults.
+also run alone with `bash script/test_release_compatibility.sh`, which also
+takes `--evidence-only`, `--packaging-only`, or `--pipeline-only` to run one
+group. They use only synthetic files in a disposable Git repository and stub
+release tools; their passing results are not installed-product compatibility
+evidence. Packaging tests clear inherited packaging and release inputs, so
+exported production settings do not change their development defaults.
 
 The full pipeline requires all of these environment variables:
 
@@ -272,24 +312,40 @@ The full pipeline requires all of these environment variables:
 - `TASKSCOPE_NOTARY_KEYCHAIN_PROFILE`: an existing `notarytool` keychain
   profile;
 - optional `TASKSCOPE_RELEASE_ARCHS=arm64`, whose only accepted value for the
-  first release is `arm64`.
+  first release is `arm64`;
+- `TASKSCOPE_FIRST_RELEASE=1` only for a first public binary release when the
+  repository has no release tags yet; it acknowledges that no build-number
+  history exists.
 
-With those values configured securely outside Git, run:
+`TASKSCOPE_KEEP_RELEASE_WORK=1` keeps the work directory of a failed run for
+diagnosis. With those values configured securely outside Git, run:
 
 ```bash
 ./script/release.sh --release
 ```
 
-The script requires a clean worktree; validates identifier syntax, version,
-build (which must exceed the maximum build number across all `v*` tags,
-including prereleases and hotfixes; missing or invalid tagged values fail), the
-presence of a `## [<version>]` changelog heading, arm64 architecture, retained
-GlobalProtect lifecycle evidence, deployment target, and App Intents metadata; builds
-with hardened runtime and no entitlements; verifies the Developer ID team;
-creates matching app/dSYM UUIDs; submits to Apple; staples and
-Gatekeeper-verifies the app; round-trips the final ZIP; and emits the app ZIP,
-dSYM ZIP, notary result, provenance, and verified `SHA256SUMS` under
-`dist/releases/`.
+The script fetches the origin's tags and requires a clean worktree on the
+default branch whose `HEAD` equals its fetched upstream. It validates identifier
+syntax, version, build (which must exceed the maximum build number across all
+`v*` tags, including prereleases and hotfixes; missing or invalid tagged values
+fail), the changelog heading and empty `[Unreleased]` section, arm64
+architecture, retained GlobalProtect lifecycle evidence, the deployment target
+(read from `Package.swift`), and App Intents metadata. It builds from a
+generated app-only package, so the release build never resolves the test
+dependencies or rewrites `Package.resolved`, and rechecks the worktree after
+the build. It builds with hardened runtime and no entitlements, removes
+build-machine run paths and rejects non-system run paths and `@rpath`
+libraries, extracts the dSYM and then strips the distributed binary, verifies
+the Developer ID team, creates matching app/dSYM UUIDs, submits to Apple,
+staples and Gatekeeper-verifies the app, and round-trips the final ZIP. It
+stages in its own work directory, leaving `dist/build.noindex` alone, and emits
+the app ZIP, dSYM ZIP, notary result, provenance, and verified `SHA256SUMS`
+under `dist/releases/`, named `TaskScope-<version>-<build>-macOS-arm64…`. The
+provenance records the commit and also the branch, upstream, remote URL, and
+remote `HEAD`. A failed run removes its work unless
+`TASKSCOPE_KEEP_RELEASE_WORK=1` is set; notarization logs are kept in
+`dist/TaskScope-notary-diagnostics.*`, and work kept from an earlier failed run
+is removed when the next full release starts.
 
 Successful script output is necessary but does not prove bundle-identifier
 ownership, migrate preferences or permissions, or replace manual clean-machine,
@@ -330,14 +386,22 @@ finish all credential-independent checks and label the release source only.
 
 1. Review the complete diff and rerun the gate after the final change.
 2. Commit the release preparation to the default branch with a descriptive
-   message and push normally. Never force-push or rewrite public history.
+   message and push normally. Never force-push or rewrite public history; a
+   repository ruleset blocks force-pushes to `main` and its deletion, while
+   ordinary pushes still work.
 3. Verify the pushed commit is the intended release commit and confirm the
    recorded local gate output (see "Canonical automated gate") passed for that
-   exact commit. There are no hosted checks.
+   exact commit. The CI workflow's checks for that commit must also have
+   passed. They cover script syntax, the debug build, the tests, the strict
+   step, and compiler warnings, but not code coverage, the release build, or the
+   packaging test, so they complement the local gate rather than replace it.
 4. Create `v<version>` at that exact commit. Use the repository's configured
    signed-tag mechanism; if no signing mechanism exists, do not claim the tag is
-   signed.
-5. Push the tag normally.
+   signed. For a public binary, `script/release.sh --release` must complete
+   before this step: the script refuses a version whose tag exists, so
+   rebuilding a tagged release needs a new version.
+5. Push the tag normally. Once pushed, a `v*` tag cannot be moved or deleted:
+   a tag ruleset blocks both.
 6. Publish a GitHub release using the changelog, explicitly identifying it as
    source/development-only when the public binary gate was not completed.
 7. Verify the release page, tag target, source archives, notes, and every link
@@ -350,8 +414,11 @@ Do not publish a release link in prose as evidence before the release exists.
 
 `script/install.sh` copies to a temporary bundle, preserves the prior
 installation, verifies the replacement, and restores the backup if replacement
-fails. `script/test_packaging.sh` injects failures before and after replacement
-to exercise that transaction.
+fails. If an install or stage is interrupted outright (for example by `SIGKILL`
+or power loss), the next install or stage restores a backup that was left
+without a destination and removes leftover hidden bundles.
+`script/test_packaging.sh` injects failures before and after replacement to
+exercise that transaction.
 
 If an installed development build must be downgraded after a successful
 install:
@@ -376,7 +443,8 @@ install:
 
 ## Published-release rollback
 
-Never move an existing tag to another commit. For a defective release:
+Never move an existing tag to another commit; the `v*` tag ruleset blocks moving
+or deleting release tags. For a defective release:
 
 1. Mark the GitHub release and artifact status clearly; remove a dangerous
    binary from download if necessary without erasing the tag/history.

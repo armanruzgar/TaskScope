@@ -24,8 +24,12 @@ Include the affected version/build, macOS version and architecture, impact, and
 minimal reproduction steps. Remove usernames, organization details, command
 lines, preset paths, and other sensitive data unless essential to the report.
 
-There is no guaranteed response time. Keep reports private while maintainers
-investigate and agree on a fix and coordinated disclosure plan.
+There is no guaranteed response time. TaskScope has a single maintainer; keep
+reports private while the maintainer investigates and agrees with you on a fix
+and a coordinated disclosure plan.
+
+Dependabot alerts and security updates watch the package's dependencies. The
+only one, ViewInspector, is used by the tests and is not built into the app.
 
 ## Security-sensitive behavior
 

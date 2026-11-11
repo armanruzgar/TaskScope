@@ -14,18 +14,26 @@ permission.
 ## Scope and enforcement
 
 This policy applies in the repository and in project spaces or communications
-where someone is representing TaskScope. Maintainers may edit or remove
-contributions and may temporarily or permanently restrict participation when
-behavior violates these standards. Enforcement should be proportionate,
-consistent, private where possible, and focused on community safety.
+where someone is representing TaskScope. TaskScope has a single maintainer, who
+reviews conduct reports and may edit or remove contributions and temporarily or
+permanently restrict participation when behavior violates these standards.
+Enforcement should be proportionate, consistent, private where possible, and
+focused on community safety.
 
-Do not post sensitive conduct information in a public issue. Use the repository's
-**Security** tab, choose **Report a vulnerability**, and identify the report as
-a conduct concern in the [private form](https://github.com/armanruzgar/TaskScope/security/advisories/new).
-Describe what happened and include only the information needed to investigate.
-Keep identifying information and evidence private.
+## Reporting
 
-The maintainer handling a report must
-acknowledge any conflict of interest and transfer the report to an uninvolved
-maintainer where possible. The reporter and affected people should not be
-identified publicly without consent.
+Do not post sensitive conduct information in a public issue. To report a
+conduct concern privately, use the repository's **Security** tab, choose
+**Report a vulnerability**, and mark the report as a conduct report in its
+title in the [private form](https://github.com/armanruzgar/TaskScope/security/advisories/new).
+The form is meant for vulnerabilities, but only the maintainer can see what you
+submit there. Describe what happened and include only the information needed to
+investigate. Keep identifying information and evidence private.
+
+If your concern is about the maintainer, or you do not want the maintainer to
+receive it, report it to GitHub through
+[GitHub's abuse reporting](https://github.com/contact/report-abuse) instead.
+GitHub's own staff, not the maintainer, handle those reports.
+
+The reporter and affected people should not be identified publicly without
+consent.

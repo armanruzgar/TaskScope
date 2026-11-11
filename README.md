@@ -49,10 +49,12 @@ before installing.
   administrator access.
 
 Packaging uses `TASKSCOPE_CODE_SIGN_IDENTITY` if supplied, otherwise the first
-available Apple Development identity, with ad-hoc signing as a fallback.
-Packaged App Intents need an eligible development signature to execute locally;
-ad-hoc builds can validate metadata but cannot run those intents. Neither is a
-Developer ID signature or notarization.
+available Apple Development identity, with ad-hoc signing as a fallback. Every
+build is signed with the hardened runtime; only `--debug` adds the
+`get-task-allow` entitlement that lets LLDB attach. Packaged App Intents need
+an eligible development signature to execute locally; ad-hoc builds can
+validate metadata but cannot run those intents. Neither is a Developer ID
+signature or notarization.
 
 ## Build and run from source
 
@@ -85,11 +87,18 @@ that copy; the launch check does not stop it. This also applies to `--logs`,
 `--telemetry`, and installer launches. If a duplicate same-user, same-identifier
 app starts outside the scripts, it requests that the existing instance reopen
 its window, including after a quiet login-item launch, and exits before commands
-or background enforcement.
+or background enforcement; when two copies start together, the later one hands
+off to the earlier one.
 
 `--telemetry` only displays local macOS Unified Logs; it uploads nothing.
 `BUILD_CONFIGURATION=debug` or `release` overrides the build configuration where
-applicable. Finder and About use [VERSION](VERSION) and [BUILD_NUMBER](BUILD_NUMBER).
+applicable, and `TASKSCOPE_OUTPUT_DIR` stages into another absolute directory
+instead of `dist/build.noindex`. `./script/build_and_run.sh --help` lists every
+mode and environment variable; an unknown or second argument is a usage error.
+The app is built from a generated app-only package, so packaging never resolves
+the test dependencies or rewrites `Package.resolved`. A bundle staged by an
+older version of the script fails `--verify`; stage it again first. Finder and
+About use [VERSION](VERSION) and [BUILD_NUMBER](BUILD_NUMBER).
 
 ## Install locally and uninstall
 
@@ -97,16 +106,23 @@ applicable. Finder and About use [VERSION](VERSION) and [BUILD_NUMBER](BUILD_NUM
 ./script/install.sh
 ```
 
-The installer stages a fresh release build, then quits any TaskScope running
-from the destination before replacing it: verified copies get `SIGTERM` and,
-after about two seconds, `SIGKILL`. It then opens the new copy. Use `--no-open`
-to install without launching; if the installer quit a running TaskScope, start
-it again yourself. To choose another existing writable directory, use
+Before building or changing anything, the installer refuses a destination
+`TaskScope.app` that is a file, a symbolic link, or another app, and, unless
+you pass `--no-open`, a TaskScope with the same identifier that runs from
+another location. It then stages a fresh release build, which can take several
+minutes, and quits any TaskScope running from the destination before replacing
+it: verified copies get `SIGTERM` and, after about two seconds, `SIGKILL`. It
+then opens the new copy. Use `--no-open` to install without launching; if the
+installer quit a running TaskScope, start it again yourself. If the new copy is
+installed but cannot be opened, the installer warns and still succeeds; if an
+upgrade fails after quitting TaskScope, it says that TaskScope was not
+restarted. To choose another existing writable directory, use
 `DEST_DIR="$PWD/local-apps" ./script/install.sh --no-open` after creating that
 directory. Installation validates the staged and copied bundle, replaces the
-destination transactionally, and restores the prior app if replacement fails.
-Export important presets before upgrading; this rollback does not migrate
-preferences across incompatible releases.
+destination transactionally, and restores the prior app if replacement fails;
+after an interrupted run, such as a power loss, the next install or stage
+restores or removes what it left. Export important presets before upgrading;
+this rollback does not migrate preferences across incompatible releases.
 
 Before removing TaskScope:
 
@@ -133,23 +149,30 @@ deletion. See [stored-data recovery](SUPPORT.md#stored-data-is-unreadable).
 
 Use the regular window or menu-bar popover for process review and presets. The
 default global shortcut is **Control-Option-Command-T (⌃⌥⌘T)**; change it in
-**Settings > Hotkey**. **Launch at Login** is in the **Presets** section of the
-window and popover; login launches start quietly in the menu bar. The Requires
-Approval and Unavailable states offer **Turn Off Launch at Login** to remove the
-registration and report any error.
+**Settings > Hotkey**. **Help > Welcome to TaskScope** reopens the
+introduction. **Launch at Login** is in the **Presets** section of the window
+and popover; login launches start quietly in the menu bar, and after such a
+launch, closing the last TaskScope window removes the Dock icon again. The
+Requires Approval state offers **Turn Off Launch at Login**, and the
+Unavailable state, where macOS has no login item for this copy, offers
+**Remove Stale Login Item**; both remove the registration and report any error.
 
 ### Process list
 
-On a new install the list stays empty until you choose **Load Processes**, and
-a loaded list does not refresh by itself unless **Settings > General >
-Auto-refresh process list** is on; see [first launch](docs/USING_TASKSCOPE.md#first-launch-and-general-settings).
-Search, filter, and sort by CPU, memory, name, or PID. A truncated list shows
-**Showing N of M**; Command-A replaces the selection with the displayed matching
-rows. Review targets before Stop (`SIGTERM`) or explicit Force Stop (`SIGKILL`).
-TaskScope never signals itself, and rechecks process identity immediately
-before signaling. Unavailable readings remain unavailable. See
-[process actions](docs/USING_TASKSCOPE.md#process-actions-and-observations) and
-the [list's keyboard keys](docs/USING_TASKSCOPE.md#keyboard).
+On a new install the list stays empty until you choose **Load Processes**. With
+**Settings > General > Auto-refresh process list** on, it loads and refreshes
+by itself; otherwise it is a snapshot that shows when it was updated. See
+[first launch](docs/USING_TASKSCOPE.md#first-launch-and-general-settings).
+Search, filter, and sort by CPU, memory, name, or PID, also by clicking a
+column title. The list shows up to 80 rows by default (10 to 200, or **Show all
+processes**); a truncated list shows **Showing N of M**. Command-A adds the
+displayed matching rows to the selection. Review every captured target before
+Stop (`SIGTERM`, with which an app can quit without asking to save changes) or
+explicit Force Stop (`SIGKILL`); Stop waits up to three seconds for the process
+to exit and never escalates. TaskScope never signals itself, and rechecks
+process identity immediately before signaling. Unavailable readings remain
+unavailable. See [process actions](docs/USING_TASKSCOPE.md#process-actions-and-observations)
+and the [list's keyboard keys](docs/USING_TASKSCOPE.md#keyboard).
 
 ### Presets and lifecycle actions
 
@@ -163,23 +186,28 @@ Import previews every lifecycle field before saving and performs no action.
 Custom presets can configure user launch agents, but cannot define privileged
 system-daemon jobs. Main/helper detection, the Watched filter, and preset stops
 require current-user ownership and the configured bundle boundaries. Quit App,
-Quit Helpers, Quit All Killable, and GlobalProtect's Quit All and Keep Off wait
-up to three seconds before force stopping eligible processes, as disclosed in
+Quit Helpers, Quit All Killable, and GlobalProtect's Quit All and Keep Off stop
+the main process first and then all helpers together; each step waits up to
+three seconds before force stopping eligible processes, as disclosed in
 confirmation. Result messages and support diagnostics call Quit All Killable
 "Close". Read the [preset guide](docs/USING_TASKSCOPE.md#watched-app-presets)
 before importing configuration.
 
-The stale watched-status banner reports the last successful watched observation,
-independently of the process-list update time, and includes the date for
-observations before today. Stale single-process stops preserve displayed
-Net/Disk readings.
+TaskScope reads watched status in the background only while notifications or
+Keep GlobalProtect Off are on; otherwise it reads only while a TaskScope window
+or the menu-bar popover is open. The stale watched-status banner appears when a
+watched-status read fails and reports the last successful watched observation,
+independently of the process-list update time, with the date for observations
+before today. Stale single-process stops preserve displayed Net/Disk readings.
 
 ### Auto-stop rules and saved selections
 
-Create rules in **Settings > Auto-Stop** or with **Create Auto-Stop Rule...** in
+Create rules in **Settings > Auto-Stop** or with **Create Auto-Stop Rule…** in
 a process row's context menu, and save selections from the **Saved** menu above
-the list. Start with Prompt or Log Only while checking a rule. All three rule actions
-require current-user ownership and exclude TaskScope and unsignalable PIDs.
+the list. Start with Prompt or Log Only while checking a rule. Each process
+name can have one rule, and Prompt asks in an alert even when no TaskScope
+window is open. All three rule actions require current-user ownership and
+exclude TaskScope and unsignalable PIDs.
 Auto Stop additionally requires a trusted executable path. Saved selections
 use executable paths and show a recall preview; a path-backed entry never falls
 back to name-only matching. See [rules](docs/USING_TASKSCOPE.md#runtime-rules)
@@ -194,14 +222,17 @@ preserve an accepted request's retry budget.
 
 A properly signed, installed app exposes **Refresh TaskScope**, **Open Watched
 App**, and **Stop Watched App**. Stop runs the same stop as a custom preset's
-Quit All Killable and requires system confirmation naming the app, including
-direct Siri, Spotlight, and App Shortcut invocation. For GlobalProtect,
-Shortcuts Stop has user-process scope and does not disconnect or stop VPN services.
-Cold intent launches stay in the menu bar without an unintended window or Dock icon.
+Quit All Killable and requires system confirmation, including direct Siri,
+Spotlight, and App Shortcut invocation. The confirmation names the app and the
+user launch agents it unloads, and says that a process still running three
+seconds after the stop request is force stopped. For GlobalProtect, Shortcuts
+Stop has user-process scope and does not disconnect or stop VPN services. Cold
+intent launches stay in the menu bar without an unintended window or Dock icon.
 
-The packaged URL scheme accepts only `taskscope://refresh`, which refreshes
-watched-app status. Every other route is rejected. See the [automation contract](docs/AUTOMATION.md)
-for launch, cancellation, and administrator-approval boundaries.
+The packaged URL scheme accepts only the exact URL `taskscope://refresh`, which
+refreshes watched-app status. Every other route or spelling is rejected. See
+the [automation contract](docs/AUTOMATION.md) for launch, cancellation, and
+administrator-approval boundaries.
 
 ## GlobalProtect support
 
@@ -251,9 +282,12 @@ for stored data, retention, permissions, and deletion.
 ## Development and the quality gate
 
 Follow [CONTRIBUTING.md](CONTRIBUTING.md#development-workflow) for the complete
-local build, test, strict-concurrency, and packaging gate. The packaging test
-launches the staged app. Maintainers use [RELEASE.md](RELEASE.md) for release QA,
-evidence, signing, and rollback requirements.
+local build, test, strict-concurrency, compiler-warning, and packaging gate. The
+packaging test launches test copies of the app. GitHub Actions runs the build,
+test, strict-concurrency, and compiler-warning steps on every push to `main`
+and on pull requests; the packaging test and release build run only locally.
+Maintainers use [RELEASE.md](RELEASE.md) for release QA, evidence, signing, and
+rollback requirements.
 
 ## Project status and limitations
 

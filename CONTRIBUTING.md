@@ -42,12 +42,46 @@ a successful cross-build.
      -Xswiftc -warnings-as-errors \
      -Xswiftc -warn-concurrency \
      -Xswiftc -enable-actor-data-race-checks
+   rm -rf .build/warnings
+   swift build --build-tests --scratch-path .build/warnings \
+     -Xswiftc -warn-concurrency > .build/warnings.log 2>&1
+   ( ! grep -E '\.swift:[0-9]+:[0-9]+: warning:' .build/warnings.log )
    swift build -c release
    ./script/test_packaging.sh
    git diff --check
    ```
 
 5. Open a pull request using the repository template.
+
+The `.build/warnings` step fails the gate on any compiler warning in the
+package's sources and tests. The Swift 6.4 compiler leaves some concurrency
+diagnostics, such as a call to a main actor-isolated function from a
+nonisolated context, as warnings even under `-warnings-as-errors`, so the strict
+step can print them and still pass. The step builds from an empty scratch
+directory because an incremental build does not print warnings again for files
+it does not recompile. The pattern needs a Swift file, line, and column, as every
+compiler diagnostic has, so it skips notices that SwiftPM prints about its
+caches and the runtime issues that SwiftUI reports, with a line but no column,
+while tests run. If the build itself
+fails, read `.build/warnings.log`; after a failed grep, the lines it printed
+are the warnings to fix. `Package.swift` enables complete concurrency checking
+for both targets, so ordinary `swift build` and `swift test` runs show the same
+diagnostics.
+
+The [CI workflow](.github/workflows/ci.yml) enforces most of this gate. On every
+push to `main`, on every pull request, and on manual dispatch, GitHub Actions
+runs it on a `macos-26` runner with Xcode 26.6: the script syntax check, the
+debug build with warnings as errors, `swift test`, the strict step, and a check
+that fails on any Swift compiler warning in the logs of those steps. It does
+not run code coverage, the release build, or `script/test_packaging.sh`, which
+launches the app. Run the whole gate locally as well, including the packaging
+test, and say in the pull request which steps you ran.
+
+Dependabot opens weekly version-update pull requests for the package's
+dependencies (`.github/dependabot.yml`), and with Dependabot alerts and
+security updates on, it also opens a pull request when an advisory affects one.
+Merge a Dependabot pull request only after its CI checks pass and the full gate
+passes locally on its branch.
 
 Tests that need settings create them with
 `InMemoryUserDefaults(suiteName: "TaskScope.<TestClass>.\(UUID().uuidString)")`
@@ -56,10 +90,17 @@ from `Tests/TaskScopeTests/InMemoryUserDefaults.swift`, never with
 parallel test processes cannot overwrite each other's fixtures and a run leaves
 no preference files behind.
 
-The packaging test requires macOS and Xcode 26 and launches the staged app.
-It uses a unique test bundle identifier and checks for leaked test preferences;
-startup verification uses volatile defaults without normal background enforcement.
-Run it only in an environment where launching the test app is appropriate.
+The packaging test requires macOS and Xcode 26 and launches test copies of the
+app. It stages and signs them ad hoc in its own temporary directory, never in
+the checkout's `dist/`, uses a unique test bundle identifier, and checks for
+leaked test preferences; startup verification uses volatile defaults without
+normal background enforcement. Run it only in an environment where launching
+the test app is appropriate. `script/test_release_compatibility.sh` runs the
+release and evidence tests on their own, or one group with `--packaging-only`,
+`--pipeline-only`, or `--evidence-only`. `script/build_and_run.sh`,
+`script/install.sh`, and `script/release.sh` list their modes and environment
+variables with `-h` or `--help`; an unknown or second argument is a usage
+error.
 If a contributor cannot run a platform-specific gate, say exactly which command was not run and why; do not
 report it as passing. A maintainer must run every release gate before tagging.
 
