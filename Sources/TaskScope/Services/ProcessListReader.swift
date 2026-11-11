@@ -40,8 +40,12 @@ enum ProcessListReader {
     //   pid ppid uid pcpu rss lstart(5) etime comm
     // ShellCommandRunner pins numeric/time formatting to C and the time zone to
     // UTC, while allowing UTF-8 process names.
-    static let processListCommand = "/bin/ps -awwwxo pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="
-    static let networkStatsCommand = "/usr/bin/nettop -P -L 1 -n -x -J bytes_in,bytes_out"
+    static let processListCommand = ExternalCommand(
+        "/bin/ps", ["-awwwxo", "pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="]
+    )
+    static let networkStatsCommand = ExternalCommand(
+        "/usr/bin/nettop", ["-P", "-L", "1", "-n", "-x", "-J", "bytes_in,bytes_out"]
+    )
 
     /// Every command and kernel read goes through a parameter whose default is
     /// the real one, so tests can script `ps` and `nettop` output, the process
@@ -53,7 +57,7 @@ enum ProcessListReader {
     /// identity, where a second `ps` used to.
     static func currentProcessList(
         fetchExtendedStats: Bool,
-        run: @Sendable (String) async -> ShellCommandResult = { await ShellCommandRunner.run($0) },
+        run: @Sendable (ExternalCommand) async -> ShellCommandResult = { await ShellCommandRunner.run($0) },
         executablePath: @Sendable (Int32) -> String? = { executablePath(for: $0) },
         startUptime: @Sendable (Int32) -> UInt64? = { startUptimeNanoseconds(for: $0) },
         processTable: @Sendable () -> KernelProcessTable.TableRead = { KernelProcessTable.allEntries() },

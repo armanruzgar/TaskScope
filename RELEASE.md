@@ -37,7 +37,7 @@ Process fixes scope watched main/helpers, the Watched filter, and preset signals
 to the current user; main detection uses Contents/MacOS and helpers use Contents.
 Start evidence uses UTC and names preserve UTF-8. Shared inventory freshness
 uses monotonic time including sleep; Open polling has a monotonic deadline and
-attempt bound. Shell completion retries early child-reaping probes, including
+attempt bound. Command completion retries early child-reaping probes, including
 after timeout. Executable-path identity checks remain required.
 
 Regression coverage uses injected clocks/inventories, owned child processes with

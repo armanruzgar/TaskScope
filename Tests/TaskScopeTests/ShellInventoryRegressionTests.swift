@@ -10,7 +10,7 @@ final class ShellInventoryRegressionTests: XCTestCase {
             await withTaskGroup(of: (Int, ShellCommandResult).self) { group in
                 for index in 0..<24 {
                     group.addTask {
-                        let result = await ShellCommandRunner.run(
+                        let result = await ShellCommandRunner.runShellScript(
                             "printf '%s' $$; exec /bin/sleep 5", timeout: 0.1,
                             waitForChild: { probe.wait(for: index, $0, $1, $2) }
                         )

@@ -24,7 +24,7 @@ final class Batch04BootstrapShellFixTests: XCTestCase {
             }
             \(body)
             """
-            let result = await ShellCommandRunner.run("/bin/sh -c \(ShellCommandRunner.shellQuoted(script))", timeout: 5)
+            let result = await ShellCommandRunner.run(executable: "/bin/sh", arguments: ["-c", script], timeout: 5)
             XCTAssertEqual(result.exitCode, Int32(expected))
             let calls = result.stdout.split(separator: "\n").map(String.init)
             XCTAssertEqual(calls.map { String($0.split(separator: " ")[0]) }, verbs)

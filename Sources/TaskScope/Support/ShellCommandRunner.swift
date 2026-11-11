@@ -1,6 +1,11 @@
 import Darwin
 import Foundation
 
+/// Runs TaskScope's external tools (`ps`, `nettop`, `launchctl`, `open`,
+/// `sw_vers` and the administrator `osascript` request). Despite the name, no
+/// shell is involved: each tool is spawned directly with its argument vector,
+/// in a process group of its own, with a scrubbed environment, a timeout, and
+/// cancellation that stops the whole group.
 enum ShellCommandRunner {
     /// Exit code reported when the calling task was cancelled.
     static let cancelledExitCode: Int32 = -2
@@ -34,8 +39,8 @@ enum ShellCommandRunner {
     /// them as the argument vector exactly as given, so no argument is split,
     /// expanded or read as shell syntax. `executable` must be an absolute path,
     /// and no argument may contain a NUL character; such a command fails
-    /// without starting. Timeout, cancellation, process-group containment and
-    /// the scrubbed environment are the same as for the string form.
+    /// without starting. The result names the command as
+    /// `ExternalCommand.description` renders it.
     static func run(
         executable: String,
         arguments: [String] = [],
@@ -46,13 +51,33 @@ enum ShellCommandRunner {
         hooks: Hooks = Hooks()
     ) async -> ShellCommandResult {
         let command = ExternalCommand(executable, arguments)
-        return await execute(
-            argumentVector: command.argumentVector,
+        let argumentVector = command.argumentVector
+        if let problem = ExternalCommand.startProblem(argumentVector: argumentVector) {
+            return ShellCommandResult(
+                command: command.description,
+                stdout: "",
+                stderr: "Could not start the command: \(problem).",
+                exitCode: -1
+            )
+        }
+        let execution = CommandExecution(
+            argumentVector: argumentVector,
             displayCommand: command.description,
             timeout: timeout,
             waitForChild: waitForChild,
             hooks: hooks
         )
+        if !hooks.registry.register(execution) {
+            // TaskScope is quitting: never start a command nothing would stop.
+            execution.cancel()
+        }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                execution.start(continuation: continuation)
+            }
+        } onCancel: {
+            execution.cancel()
+        }
     }
 
     /// Runs `command` as `run(executable:arguments:)` does.
@@ -73,63 +98,10 @@ enum ShellCommandRunner {
         )
     }
 
-    /// Runs one command string through `/bin/zsh -f -c`. Prefer
-    /// `run(executable:arguments:)`: here every interpolated value must be
-    /// quoted with `shellQuoted` to stay one argument.
-    static func run(
-        _ command: String,
-        timeout: TimeInterval = 15,
-        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t = {
-            Darwin.waitpid($0, $1, $2)
-        },
-        hooks: Hooks = Hooks()
-    ) async -> ShellCommandResult {
-        await execute(
-            argumentVector: shellArguments + [command],
-            displayCommand: command,
-            timeout: timeout,
-            waitForChild: waitForChild,
-            hooks: hooks
-        )
-    }
-
-    /// Both forms end here: `argumentVector[0]` is spawned with the whole
-    /// vector, and `displayCommand` is what the result reports as its command.
-    private static func execute(
-        argumentVector: [String],
-        displayCommand: String,
-        timeout: TimeInterval,
-        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t,
-        hooks: Hooks
-    ) async -> ShellCommandResult {
-        if let problem = ExternalCommand.startProblem(argumentVector: argumentVector) {
-            return ShellCommandResult(
-                command: displayCommand,
-                stdout: "",
-                stderr: "Could not start the command: \(problem).",
-                exitCode: -1
-            )
-        }
-        let execution = CommandExecution(
-            argumentVector: argumentVector,
-            displayCommand: displayCommand,
-            timeout: timeout,
-            waitForChild: waitForChild,
-            hooks: hooks
-        )
-        if !hooks.registry.register(execution) {
-            // TaskScope is quitting: never start a command nothing would stop.
-            execution.cancel()
-        }
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                execution.start(continuation: continuation)
-            }
-        } onCancel: {
-            execution.cancel()
-        }
-    }
-
+    /// One single-quoted shell word. TaskScope runs no shell itself; this
+    /// quotes the values inside the administrator request's root script, which
+    /// `do shell script` runs with `/bin/sh`, and renders
+    /// `ExternalCommand.description`.
     static func shellQuoted(_ value: String) -> String {
         "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
@@ -174,11 +146,6 @@ enum ShellCommandRunner {
         sanitized["TZ"] = "UTC0"
         return sanitized
     }
-
-    /// The string form's shell, started with `-f` (NO_RCS) so a user's
-    /// `.zshenv` cannot alias or redefine the tools TaskScope parses, print
-    /// into their output, or change the locale.
-    static let shellArguments = ["/bin/zsh", "-f", "-c"]
 
     /// The commands in flight, so that quitting can stop them.
     final class ExecutionRegistry: @unchecked Sendable {

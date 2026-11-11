@@ -1,5 +1,24 @@
+import Darwin
 import Foundation
 @testable import TaskScope
+
+extension ShellCommandRunner {
+    /// Runs shell syntax for a test, through an explicit `/bin/sh -c`.
+    /// TaskScope itself never starts a shell.
+    static func runShellScript(
+        _ script: String,
+        timeout: TimeInterval = 15,
+        waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t = {
+            Darwin.waitpid($0, $1, $2)
+        },
+        hooks: Hooks = Hooks()
+    ) async -> ShellCommandResult {
+        await run(
+            executable: "/bin/sh", arguments: ["-c", script],
+            timeout: timeout, waitForChild: waitForChild, hooks: hooks
+        )
+    }
+}
 
 /// Fakes answer with the command they were handed; the result names it the
 /// way the runner does.

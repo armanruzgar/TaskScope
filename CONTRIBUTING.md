@@ -179,7 +179,11 @@ anything affecting:
 Run an external tool with `ShellCommandRunner.run(executable:arguments:)`,
 giving its absolute path and its arguments as an array: the tool receives them
 as given, with no shell in between, so no value needs quoting. Never build a
-command string from a preset field or any other value.
+command string from a preset field or any other value, and never run a shell:
+`testNoProductionCommandRunsThroughAShell` fails if production code names one.
+Tests that need shell syntax for their own child processes use
+`ShellCommandRunner.runShellScript`, an explicit `/bin/sh -c` that exists only
+in the test target.
 
 Changes to a trust boundary must update [THREAT_MODEL.md](THREAT_MODEL.md).
 Changes to stored or surfaced data must update [PRIVACY.md](PRIVACY.md). Release

@@ -74,7 +74,7 @@ final class ProcessDetailIdentityProofTests: XCTestCase {
     /// Builds a row whose identity matches whatever currently owns `pid`, by reading
     /// the same `ps lstart` field the inventory uses.
     private func matchingRow(for pid: Int32) async -> AppProcess {
-        let read = await ShellCommandRunner.run("/bin/ps -o lstart= -p \(pid)")
+        let read = await ShellCommandRunner.run(executable: "/bin/ps", arguments: ["-o", "lstart=", "-p", "\(pid)"])
         // `ps` pads a single-digit day ("Aug  6"). Both `ProcessListReader` and
         // `detail(for:)` normalise by splitting on whitespace and rejoining with one
         // space, so the identity must be built the same way to be comparable.

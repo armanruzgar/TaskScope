@@ -6,10 +6,13 @@ final class ProcessListReaderTests: XCTestCase {
 
     func testProductionSchemaKeepsDisplayCommandSeparateFromTrustedExecutablePath() throws {
         XCTAssertEqual(
-            ProcessListReader.processListCommand,
-            "/bin/ps -awwwxo pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="
+            ProcessListReader.processListCommand.argumentVector,
+            ["/bin/ps", "-awwwxo", "pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="]
         )
-        XCTAssertFalse(ProcessListReader.processListCommand.contains(" -ac"))
+        XCTAssertFalse(
+            ProcessListReader.processListCommand.arguments.contains { $0.hasPrefix("-") && $0.contains("c") },
+            "ps -c would print only the executable name"
+        )
 
         var processes = [try XCTUnwrap(ProcessListReader.parseProcessLine(liveRow[...]))]
 

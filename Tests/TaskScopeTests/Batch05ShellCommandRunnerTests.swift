@@ -12,7 +12,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         let probe = Batch05ChildProbe()
         let started = ContinuousClock.now
 
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             "trap '' TERM; /bin/sleep 30; /bin/sleep 0",
             timeout: 0.2,
             waitForChild: { probe.wait($0, $1, $2) }
@@ -34,8 +34,8 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
     /// spawn must reset them or every stop's SIGTERM would be ignored.
     func testCommandsStartWithDefaultDispositionsWhileTheAppIgnoresTERM() async {
         let previous = signal(SIGTERM, SIG_IGN)
-        let direct = await ShellCommandRunner.run("kill -TERM $$; echo survived")
-        let nested = await ShellCommandRunner.run("/bin/sh -c 'kill -TERM $$; echo survived'")
+        let direct = await ShellCommandRunner.runShellScript("kill -TERM $$; echo survived")
+        let nested = await ShellCommandRunner.runShellScript("/bin/sh -c 'kill -TERM $$; echo survived'")
         signal(SIGTERM, previous)
 
         XCTAssertEqual(direct.terminatedBySignal, SIGTERM, "\(direct)")
@@ -58,7 +58,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         \(ShellCommandRunner.shellQuoted(marker.path)) &
         wait $!
         """
-        let task = Task { await ShellCommandRunner.run(command, timeout: 30, hooks: hooks) }
+        let task = Task { await ShellCommandRunner.runShellScript(command, timeout: 30, hooks: hooks) }
 
         let pids = try await Self.reportedProcessIdentifiers(at: marker)
         task.cancel()
@@ -87,7 +87,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         }
 
         let result = await Self.result(within: .seconds(15)) {
-            await ShellCommandRunner.run("exit 3", timeout: 60, waitForChild: lostStatus, hooks: hooks)
+            await ShellCommandRunner.runShellScript("exit 3", timeout: 60, waitForChild: lostStatus, hooks: hooks)
         }
 
         guard let result else {
@@ -109,7 +109,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
 
         let previous = signal(SIGCHLD, SIG_IGN)
         let result = await Self.result(within: .seconds(15)) {
-            await ShellCommandRunner.run("exit 3", timeout: 60, hooks: hooks)
+            await ShellCommandRunner.runShellScript("exit 3", timeout: 60, hooks: hooks)
         }
         signal(SIGCHLD, previous)
 
@@ -158,7 +158,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
                 hooks.makePipe = { pipes.make($0) }
             }
 
-            let result = await ShellCommandRunner.run("/usr/bin/true", hooks: hooks)
+            let result = await ShellCommandRunner.run(executable: "/usr/bin/true", hooks: hooks)
 
             XCTAssertEqual(result.exitCode, -1, "\(result)")
             XCTAssertEqual(result.stderr, "Could not start the command: Too many open files.")
@@ -179,7 +179,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         }
         let task = Task {
             try? await Task.sleep(nanoseconds: 60_000_000_000)
-            return await ShellCommandRunner.run("/usr/bin/true", timeout: 10, hooks: hooks)
+            return await ShellCommandRunner.run(executable: "/usr/bin/true", timeout: 10, hooks: hooks)
         }
 
         task.cancel()
@@ -201,14 +201,14 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(inheritable, 200)
         XCTAssertEqual(fcntl(inheritable, F_GETFD) & FD_CLOEXEC, 0)
 
-        let listing = await ShellCommandRunner.run("/bin/ls /dev/fd")
+        let listing = await ShellCommandRunner.run(executable: "/bin/ls", arguments: ["/dev/fd"])
         let open = Set(listing.stdout.split(whereSeparator: \.isWhitespace).compactMap { Int32($0) })
 
         XCTAssertEqual(listing.exitCode, 0, "\(listing)")
         XCTAssertTrue(open.isSuperset(of: [0, 1, 2]), listing.stdout)
         XCTAssertFalse(open.contains(inheritable), "The child inherited descriptor \(inheritable): \(listing.stdout)")
 
-        let input = await ShellCommandRunner.run("/bin/cat; echo status=$?", timeout: 5)
+        let input = await ShellCommandRunner.runShellScript("/bin/cat; echo status=$?", timeout: 5)
         XCTAssertEqual(input.stdout, "status=0", "\(input)")
     }
 
@@ -230,7 +230,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         let command = "/usr/bin/touch \(ShellCommandRunner.shellQuoted(started.path)); /bin/sleep 30; "
             + "/usr/bin/touch \(ShellCommandRunner.shellQuoted(finished.path))"
         let task = Task {
-            await ShellCommandRunner.run(command, timeout: 60, waitForChild: { probe.wait($0, $1, $2) }, hooks: hooks)
+            await ShellCommandRunner.runShellScript(command, timeout: 60, waitForChild: { probe.wait($0, $1, $2) }, hooks: hooks)
         }
         let running = await Self.eventually { FileManager.default.fileExists(atPath: started.path) }
         XCTAssertTrue(running, "The command never started")
@@ -244,7 +244,7 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
             XCTFail("The runner must probe exactly one child PID")
         }
 
-        let refused = await ShellCommandRunner.run(
+        let refused = await ShellCommandRunner.runShellScript(
             "/usr/bin/touch \(ShellCommandRunner.shellQuoted(finished.path))",
             hooks: hooks
         )

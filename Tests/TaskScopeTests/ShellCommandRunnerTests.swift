@@ -14,7 +14,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     }
 
     func testChildPrintsPSDecimalsUsingConfiguredLocale() async {
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             #"set -o pipefail; /usr/bin/printf '%s|%s|%s|%s|%s|' "${LC_ALL-unset}" "${LANG-unset}" "$LC_CTYPE" "$LC_TIME" "$LC_NUMERIC"; /bin/ps -o pcpu= -p $$ | /usr/bin/tr -d ' '"#
         )
 
@@ -30,14 +30,14 @@ final class ShellCommandRunnerTests: XCTestCase {
         }
         XCTAssertEqual(ShellCommandRunner.childEnvironment(from: [:])["TZ"], "UTC0")
 
-        let result = await ShellCommandRunner.run(#"/usr/bin/printf '%s' "$TZ""#)
+        let result = await ShellCommandRunner.runShellScript(#"/usr/bin/printf '%s' "$TZ""#)
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertEqual(result.stdout, "UTC0")
     }
 
     /// One invalid byte in a process name must not erase the whole output.
     func testInvalidUTF8OutputIsDecodedLossilyInsteadOfDropped() async {
-        let result = await ShellCommandRunner.run("/usr/bin/printf 'before\\377\\376after'")
+        let result = await ShellCommandRunner.run(executable: "/usr/bin/printf", arguments: ["before\\377\\376after"])
 
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertTrue(result.stdout.hasPrefix("before"), result.stdout)
@@ -45,20 +45,35 @@ final class ShellCommandRunnerTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("\u{FFFD}"))
     }
 
-    /// `-f` (NO_RCS) keeps a user's `.zshenv` from aliasing the tools TaskScope
-    /// parses or printing into their output.
-    func testChildShellSkipsStartupFiles() async {
-        XCTAssertEqual(ShellCommandRunner.shellArguments, ["/bin/zsh", "-f", "-c"])
+    /// Commands used to run through `/bin/zsh -f`, where `-f` kept a user's
+    /// `.zshenv` from aliasing the tools TaskScope parses or printing into
+    /// their output. Now no shell runs at all: no production source may name
+    /// a shell, or `env`, as the program to run. (The administrator request's
+    /// root script is shell code, but `do shell script` runs it.)
+    func testNoProductionCommandRunsThroughAShell() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/TaskScope")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" }
+        XCTAssertGreaterThan(files.count, 50, "The scan must see the production sources at \(sources.path)")
 
-        let result = await ShellCommandRunner.run("[[ -o rcs ]] && echo rcs || echo norcs")
-
-        XCTAssertEqual(result.exitCode, 0)
-        XCTAssertEqual(result.stdout, "norcs")
+        let programs = ["/bin/sh", "/bin/zsh", "/bin/bash", "/bin/csh", "/bin/tcsh", "/bin/ksh", "/bin/dash", "/usr/bin/env"]
+        for file in files {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for program in programs {
+                XCTAssertFalse(
+                    source.contains("\"\(program)\""),
+                    "\(file.lastPathComponent) names \(program) as a program to run"
+                )
+            }
+        }
     }
 
     func testTerminationBySignalIsReportedAsSuch() async {
-        let signalled = await ShellCommandRunner.run("kill -TERM $$")
-        let exited = await ShellCommandRunner.run("exit 7")
+        let signalled = await ShellCommandRunner.runShellScript("kill -TERM $$")
+        let exited = await ShellCommandRunner.runShellScript("exit 7")
 
         XCTAssertEqual(signalled.terminatedBySignal, SIGTERM)
         XCTAssertFalse(signalled.succeeded)
@@ -77,7 +92,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             defer { try? FileManager.default.removeItem(at: marker) }
             let command = "/bin/sleep 0.05; /usr/bin/touch \(ShellCommandRunner.shellQuoted(marker.path))"
             let task = Task {
-                await ShellCommandRunner.run(command, timeout: 5)
+                await ShellCommandRunner.runShellScript(command, timeout: 5)
             }
             if iteration % 2 == 0 {
                 await Task.yield()
@@ -108,7 +123,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             hooks.signalGroup = { signals.record($0, $1) }
         }
         let task = Task {
-            await ShellCommandRunner.run("exit 3", timeout: 10, hooks: hooks)
+            await ShellCommandRunner.runShellScript("exit 3", timeout: 10, hooks: hooks)
         }
         canceller.attach(task)
 
@@ -128,7 +143,7 @@ final class ShellCommandRunnerTests: XCTestCase {
         let results = await withTaskGroup(of: ShellCommandResult.self) { group in
             for index in 0..<24 {
                 group.addTask {
-                    await ShellCommandRunner.run("/usr/bin/printf '%s' \(index); exit \(index % 3)", timeout: 5)
+                    await ShellCommandRunner.runShellScript("/usr/bin/printf '%s' \(index); exit \(index % 3)", timeout: 5)
                 }
             }
             var collected: [ShellCommandResult] = []
@@ -156,7 +171,7 @@ final class ShellCommandRunnerTests: XCTestCase {
                         group.addTask {
                             let probe = DeferredChildWaitProbe(deferredProbes: 3)
                             let started = ContinuousClock.now
-                            let result = await ShellCommandRunner.run(
+                            let result = await ShellCommandRunner.runShellScript(
                                 "printf '%s' $$; exit 3", timeout: 4,
                                 waitForChild: { probe.wait($0, $1, $2) }
                             )
@@ -190,7 +205,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     }
 
     func testRunCapturesOutputAndExitStatus() async {
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             "/usr/bin/printf 'standard output'; /usr/bin/printf 'standard error' >&2; exit 7"
         )
 
@@ -202,7 +217,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     func testRunTimesOutAndReturnsPromptly() async {
         let started = Date()
 
-        let result = await ShellCommandRunner.run("/bin/sleep 5", timeout: 0.1)
+        let result = await ShellCommandRunner.run(executable: "/bin/sleep", arguments: ["5"], timeout: 0.1)
 
         XCTAssertEqual(result.exitCode, -3)
         XCTAssertTrue(result.stderr.contains("timed out"))
@@ -212,7 +227,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     func testRunRespondsToTaskCancellation() async {
         let started = Date()
         let task = Task {
-            await ShellCommandRunner.run("/bin/sleep 5", timeout: 10)
+            await ShellCommandRunner.run(executable: "/bin/sleep", arguments: ["5"], timeout: 10)
         }
         try? await Task.sleep(nanoseconds: 50_000_000)
 
@@ -238,7 +253,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             let probe = RecordingChildWaitProbe()
 
             let started = Date()
-            let result = await ShellCommandRunner.run(
+            let result = await ShellCommandRunner.runShellScript(
                 descendantHoldingPipesCommand(marker: marker),
                 timeout: 0.25,
                 waitForChild: { probe.wait($0, $1, $2) }
@@ -275,7 +290,7 @@ final class ShellCommandRunnerTests: XCTestCase {
 
         let command = descendantHoldingPipesCommand(marker: marker)
         let task = Task {
-            await ShellCommandRunner.run(command, timeout: 10)
+            await ShellCommandRunner.runShellScript(command, timeout: 10)
         }
 
         let pids = try await waitForProcessIdentifiers(from: marker)
@@ -301,7 +316,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             // this task runs first. A cancel racing the spawn is covered by
             // testCancellationRacingStartNeverLeavesTheChildRunningUnreported.
             try? await Task.sleep(nanoseconds: 60_000_000_000)
-            return await ShellCommandRunner.run(command, timeout: 10)
+            return await ShellCommandRunner.runShellScript(command, timeout: 10)
         }
 
         task.cancel()
@@ -316,7 +331,7 @@ final class ShellCommandRunnerTests: XCTestCase {
             .appendingPathComponent("taskscope-output-ready-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: marker) }
         let task = Task {
-            await ShellCommandRunner.run(
+            await ShellCommandRunner.runShellScript(
                 """
                 /usr/bin/printf 'stdout-line\n'
                 /usr/bin/printf 'stderr-line\n' >&2
@@ -341,7 +356,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     func testCancellationNearChildExitCompletesExactlyOnce() async {
         for _ in 0..<40 {
             let task = Task {
-                await ShellCommandRunner.run(
+                await ShellCommandRunner.runShellScript(
                     "/bin/sleep 0.01; /usr/bin/printf done",
                     timeout: 2
                 )
@@ -359,7 +374,7 @@ final class ShellCommandRunnerTests: XCTestCase {
 
     func testLargeStandardOutputAndErrorDoNotDeadlock() async {
         let byteCount = 1_048_576
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             """
             /usr/bin/yes O | /usr/bin/head -c \(byteCount)
             /usr/bin/yes E | /usr/bin/head -c \(byteCount) >&2
@@ -374,7 +389,7 @@ final class ShellCommandRunnerTests: XCTestCase {
 
     func testTimedOutProcessIsTerminatedAndReapedBeforeReturn() async {
         let probe = RecordingChildWaitProbe()
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             "/usr/bin/printf $$; exec /bin/sleep 5",
             timeout: 0.1,
             waitForChild: { probe.wait($0, $1, $2) }
@@ -450,7 +465,7 @@ final class ShellCommandRunnerTests: XCTestCase {
     func testCommandThatClosesOutputEarlyDoesNotSpinTheIOQueue() async {
         let before = Self.processCPUSeconds()
 
-        let result = await ShellCommandRunner.run(
+        let result = await ShellCommandRunner.runShellScript(
             "/usr/bin/printf 'done'; exec 1>&- 2>&-; /bin/sleep 1",
             timeout: 10
         )

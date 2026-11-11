@@ -23,7 +23,7 @@ final class ProcessCommandLineTests: XCTestCase {
 
     private func reader(
         _ kernel: ScriptedKernel,
-        run: @escaping @Sendable (String) async -> ShellCommandResult = { _ in
+        run: @escaping @Sendable (ExternalCommand) async -> ShellCommandResult = { _ in
             ShellCommandResult(command: "", stdout: "", stderr: "unexpected ps", exitCode: 99)
         }
     ) -> SystemProcessCommandLineReader {
@@ -193,7 +193,7 @@ final class ProcessCommandLineTests: XCTestCase {
         let result = await reader(kernel, run: { await recorder.answer($0, stdout: printed) }).commandLine(for: identity())
         XCTAssertEqual(result, .loaded("/usr/sbin/daemon  --flag   value"))
         let commands = await recorder.commands
-        XCTAssertEqual(commands, ["/bin/ps -ww -o pid=,lstart=,args= -p 42"])
+        XCTAssertEqual(commands, [ExternalCommand("/bin/ps", ["-ww", "-o", "pid=,lstart=,args=", "-p", "42"])])
         XCTAssertEqual(kernel.entryReads, 2)
 
         // ps pads a single-digit day; the comparison collapses it like the inventory.
@@ -399,9 +399,9 @@ private final class ScriptedKernel: @unchecked Sendable {
 }
 
 private actor CommandRecorder {
-    private(set) var commands: [String] = []
+    private(set) var commands: [ExternalCommand] = []
 
-    func answer(_ command: String, stdout: String) -> ShellCommandResult {
+    func answer(_ command: ExternalCommand, stdout: String) -> ShellCommandResult {
         commands.append(command)
         return ShellCommandResult(command: command, stdout: stdout, stderr: "", exitCode: 0)
     }

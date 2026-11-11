@@ -50,9 +50,14 @@ struct SystemProcessDetailReader: ProcessDetailReading {
 
     func readDetail(
         for process: AppProcess,
-        run: @Sendable (String) async -> ShellCommandResult
+        run: @Sendable (ExternalCommand) async -> ShellCommandResult
     ) async -> ProcessDetail? {
         await readResult(for: process, run: run).detail
+    }
+
+    /// The detail line `ps` prints for one PID, with its start time.
+    static func detailCommand(for pid: Int32) -> ExternalCommand {
+        ExternalCommand("/bin/ps", ["-o", "pid=,ppid=,user=,lstart=,comm=", "-p", "\(pid)"])
     }
 
     func readResult(for process: AppProcess) async -> ProcessDetailResult {
@@ -64,11 +69,9 @@ struct SystemProcessDetailReader: ProcessDetailReading {
     /// where retrying can help.
     func readResult(
         for process: AppProcess,
-        run: @Sendable (String) async -> ShellCommandResult
+        run: @Sendable (ExternalCommand) async -> ShellCommandResult
     ) async -> ProcessDetailResult {
-        let result = await run(
-            "/bin/ps -o pid=,ppid=,user=,lstart=,comm= -p \(process.pid)"
-        )
+        let result = await run(Self.detailCommand(for: process.pid))
         guard result.succeeded else {
             // `ps -p` exits 1 with no output when no such process exists.
             let isGone = result.stdout.isEmpty && result.exitCode == 1 && result.terminatedBySignal == nil

@@ -59,6 +59,14 @@ current user's processes that pass the preset's bundle checks. TaskScope does
 not bypass authorization. See [GlobalProtect](docs/GLOBALPROTECT.md)
 for session-agent preservation, disconnect, timeout, and restoration limits.
 
+TaskScope runs its fixed tools (`ps`, `nettop`, `launchctl`, `open`, `sw_vers`,
+and `osascript` for administrator requests) directly, by absolute path and with
+an argument vector, never through a shell, so a preset field or any other value
+is always passed as one whole argument and never read as shell syntax. The only
+shell code is the fixed root script of an administrator request, which macOS
+runs with `/bin/sh` after approval; it names only the built-in GlobalProtect
+daemon's fixed label and plist path, in single quotes.
+
 Imported watched-app presets are untrusted configuration. Importing a preset
 must not execute it, but a later user-approved lifecycle action can use its app
 path, user launch-agent plist path and label, and process names. Turning on a

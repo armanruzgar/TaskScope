@@ -469,13 +469,13 @@ private final class Batch05Box<Value: Sendable>: @unchecked Sendable {
 /// Answers each command with the next scripted result.
 private actor Batch05ScriptedRunner {
     private var results: [ShellCommandResult]
-    private(set) var commands: [String] = []
+    private(set) var commands: [ExternalCommand] = []
 
     init(_ results: [ShellCommandResult]) {
         self.results = results
     }
 
-    func run(_ command: String) -> ShellCommandResult {
+    func run(_ command: ExternalCommand) -> ShellCommandResult {
         commands.append(command)
         guard !results.isEmpty else { return shellResult("", code: 99, error: "Unexpected command: \(command)") }
         return results.removeFirst()

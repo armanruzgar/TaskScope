@@ -45,8 +45,8 @@ protocol ProcessCommandLineReading: Sendable {
 struct SystemProcessCommandLineReader: ProcessCommandLineReading {
     /// For processes the kernel will not show this user (other users'), the
     /// setuid `ps` still prints the arguments, with the start time beside them.
-    static func psCommand(for pid: Int32) -> String {
-        "/bin/ps -ww -o pid=,lstart=,args= -p \(pid)"
+    static func psCommand(for pid: Int32) -> ExternalCommand {
+        ExternalCommand("/bin/ps", ["-ww", "-o", "pid=,lstart=,args=", "-p", "\(pid)"])
     }
 
     /// Every kernel read and command goes through a property whose default is
@@ -54,7 +54,7 @@ struct SystemProcessCommandLineReader: ProcessCommandLineReading {
     var processEntry: @Sendable (Int32) -> KernelProcessTable.Lookup = { KernelProcessTable.entry(for: $0) }
     var kernelArguments: @Sendable (Int32) -> KernelProcessArguments.Read = { KernelProcessArguments.read(pid: $0) }
     var executablePath: @Sendable (Int32) -> String? = { ProcessListReader.executablePath(for: $0) }
-    var run: @Sendable (String) async -> ShellCommandResult = { await ShellCommandRunner.run($0) }
+    var run: @Sendable (ExternalCommand) async -> ShellCommandResult = { await ShellCommandRunner.run($0) }
 
     /// The process must have the identity's start time, and its executable
     /// path where both are known, before the arguments are read and again

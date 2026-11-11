@@ -28,9 +28,9 @@ final class AuditLeadSystemTests: XCTestCase {
     func testSpawnFailureIsReportedAndClosesItsPipes() async {
         let pipes = ScriptedPipeFactory(failingCall: 0)
         let hooks = batch05Hooks { hooks in hooks.makePipe = { pipes.make($0) } }
-        let command = "/usr/bin/true " + String(repeating: "x", count: 2 * 1_048_576)
+        let oversized = String(repeating: "x", count: 2 * 1_048_576)
 
-        let result = await ShellCommandRunner.run(command, hooks: hooks)
+        let result = await ShellCommandRunner.run(executable: "/usr/bin/true", arguments: [oversized], hooks: hooks)
 
         XCTAssertEqual(result.exitCode, -1)
         XCTAssertEqual(result.stdout, "")

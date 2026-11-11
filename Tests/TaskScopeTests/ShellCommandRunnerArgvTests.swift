@@ -3,15 +3,17 @@ import XCTest
 @testable import TaskScope
 
 /// `ShellCommandRunner.run(executable:arguments:)` runs a program without a
-/// shell. The tests that matter most run the same program in both forms and
-/// pin that timeouts, process-group containment and the scrubbed environment
-/// are unchanged. Every child is one the test starts itself, and every signal
-/// goes to a process group such a child leads.
+/// shell. The tests that matter most run the same program both ways, directly
+/// and through `/bin/zsh -f -c` as every command used to run, and pin that
+/// timeouts, process-group containment and the scrubbed environment are
+/// unchanged. Every child is one the test starts itself, and every signal goes
+/// to a process group such a child leads.
 final class ShellCommandRunnerArgvTests: XCTestCase {
     private typealias Support = Batch05ShellCommandRunnerTests
 
-    /// The ways a program can be run. The string form quotes every word, so
-    /// both forms ask for the same argument vector.
+    /// The ways a program can be run: directly, or as one command string
+    /// through `/bin/zsh -f -c`, the way every command ran before. The string
+    /// quotes every word, so both forms ask for the same argument vector.
     private enum Form: CaseIterable, CustomStringConvertible {
         case argumentVector, shellString
 
@@ -33,8 +35,9 @@ final class ShellCommandRunnerArgvTests: XCTestCase {
                     timeout: timeout, waitForChild: waitForChild, hooks: hooks
                 )
             case .shellString:
+                let commandLine = ([executable] + arguments).map(ShellCommandRunner.shellQuoted).joined(separator: " ")
                 return await ShellCommandRunner.run(
-                    ([executable] + arguments).map(ShellCommandRunner.shellQuoted).joined(separator: " "),
+                    executable: "/bin/zsh", arguments: ["-f", "-c", commandLine],
                     timeout: timeout, waitForChild: waitForChild, hooks: hooks
                 )
             }
@@ -60,7 +63,7 @@ final class ShellCommandRunnerArgvTests: XCTestCase {
         XCTAssertEqual(result.stderr, "")
     }
 
-    func testExitStatusAndSignalsAreReportedAsForTheStringForm() async {
+    func testExitStatusAndSignalsAreReported() async {
         let failed = await ShellCommandRunner.run(executable: "/usr/bin/false")
         let exited = await ShellCommandRunner.run(executable: "/bin/sh", arguments: ["-c", "exit 7"])
         let signalled = await ShellCommandRunner.run(executable: "/bin/sh", arguments: ["-c", "kill -TERM $$"])
@@ -128,7 +131,8 @@ final class ShellCommandRunnerArgvTests: XCTestCase {
             executable: "/usr/bin/touch\u{0}/ignored", arguments: [marker.path]
         )
         let truncatedShellString = await ShellCommandRunner.run(
-            "/usr/bin/touch \(ShellCommandRunner.shellQuoted(marker.path))\u{0}; /usr/bin/false"
+            executable: "/bin/zsh",
+            arguments: ["-f", "-c", "/usr/bin/touch \(ShellCommandRunner.shellQuoted(marker.path))\u{0}; /usr/bin/false"]
         )
 
         for result in [truncatedArgument, truncatedProgram, truncatedShellString] {

@@ -484,7 +484,7 @@ final class Batch10WiringTests: XCTestCase {
     /// reaped itself.
     func testDetailReadTellsAGoneProcessFromAChangedOneAndAFailedRead() async throws {
         let pid = ProcessInfo.processInfo.processIdentifier
-        let own = await ShellCommandRunner.run("/bin/ps -o pid=,ppid=,user=,lstart=,comm= -p \(pid)")
+        let own = await ShellCommandRunner.run(SystemProcessDetailReader.detailCommand(for: pid))
         let line = try XCTUnwrap(own.stdout.split(separator: "\n").first.map(String.init))
         let startTime = try XCTUnwrap(SystemProcessDetailReader.parseDetailLine(line, expectedStartTime: nil)).startTime
         let reader = SystemProcessDetailReader()

@@ -702,14 +702,14 @@ cannot extend reuse, and negative ages expire the cache. The age counts from
 when a read completed, so a slow read is still shared. A caller that is
 cancelled stops waiting at once; a shared read is cancelled only when nobody
 waits for it. Destructive checks use uncached inventory. Open's main-process
-polling uses a monotonic deadline and an attempt limit. Shell completion retries
-child reaping after early exit notifications and stop requests, including
-command timeouts.
+polling uses a monotonic deadline and an attempt limit. Command completion
+retries child reaping after early exit notifications and stop requests,
+including command timeouts.
 
 If you quit TaskScope (Command-Q, the Dock, or a logout) while a lifecycle
 action runs, TaskScope stops polling and Auto Stop rules and waits up to five
 seconds for the action to finish. With no action running it quits at once.
-Either way, every shell command still running, such as `launchctl`, `ps`,
+Either way, every command still running, such as `launchctl`, `ps`,
 `nettop`, or the administrator `osascript` request, is then stopped as on a
 timeout, with a wait of at most about one second, so a stuck action delays quit
 or logout by about six seconds at most. An administrator prompt still on screen

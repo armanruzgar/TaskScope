@@ -94,27 +94,27 @@ Required invariants:
   sleep, counting from when a read completed; expire negative ages and use
   uncached inventory for destructive checks. A cancelled caller stops waiting
   at once, and a shared read is cancelled only when no caller waits for it;
-- retry shell child reaping after early exit notifications or stop requests
-  until reaped, including after command timeout;
+- retry child-command reaping after early exit notifications or stop
+  requests until reaped, including after command timeout;
 - judge preset Quit App, Quit Helpers, and Quit App and Helpers against the
   captured preset and fresh final inventory even if the stored preset changes
   or is deleted;
 - partial stop failures must not claim every target stopped or no target
   received a stop request;
 - never signal TaskScope itself, launchd (pid 1), the kernel task, or any
-  process group other than the one the shell runner creates for its own child
-  command; the parser drops such rows and every process-action signal path
-  refuses them;
+  process group other than the one the command runner creates for its own
+  child command; the parser drops such rows and every process-action signal
+  path refuses them;
 - contain child commands (such as `ps`, `nettop`, `launchctl`, `open`, and the
   administrator `osascript` request) in their own process group: the runner
   spawns each command as the leader of a new group, with `/dev/null` as
   standard input and no other inherited descriptor except standard output and
-  error. A command given as an argument vector (every `launchctl`, `open`, and
-  administrator `osascript` command, and the compatibility self-check's reads)
-  is spawned directly, without a shell: its program path must be absolute and
-  is never looked up in `PATH`, and an argument containing a NUL character is
-  refused rather than cut short. The process list, Process Detail, and command
-  line reads (`ps` and `nettop`) are still one string run by `/bin/zsh -f -c`.
+  error. Every command is a fixed program and an argument vector, spawned
+  directly and never through a shell, so no value (a preset's app path, plist
+  path, or label, a PID, or a script) is ever split, expanded, or read as
+  shell syntax. The program path must be absolute and is never looked up in
+  `PATH`, and an argument containing a NUL character is refused rather than
+  cut short.
   Only when a command is cancelled or times out does it send that group
   `SIGTERM`, then `SIGKILL` repeatedly until no member is left, for at most
   750 ms; the result is reported only after that, and a group that could not
@@ -241,8 +241,8 @@ Required invariants:
 - require the built-in GlobalProtect identity and all of its privileged fields
   to match the fixed canonical definition exactly;
 - present custom configured fields for review before destructive use;
-- construct fixed tool invocations without evaluating a preset value as shell
-  source;
+- run fixed tools as argument vectors, so a preset value is always one whole
+  argument and never shell source;
 - treat the built-in GlobalProtect preset as version-specific configuration,
   not authority to alter arbitrary protected processes;
 - keep protected process names out of the normal killable-name set.
@@ -661,7 +661,8 @@ For every release and trust-boundary change:
 3. Exercise signals only against disposable controlled processes.
 4. Test missing, malformed, denied, partial-failure, cancellation, and PID-reuse
    paths.
-5. Inspect imported-data handling and every shell/AppleScript argument boundary.
+5. Inspect imported-data handling, every command's argument vector, and the
+   administrator request's AppleScript and root-script quoting.
 6. Review logs, notifications, exports, and public error text for private data.
 7. Verify actual artifact architecture and signing/notarization state.
 8. Update this document, [PRIVACY.md](PRIVACY.md), and the changelog.
