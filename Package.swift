@@ -25,8 +25,22 @@ let package = Package(
         // Sets the test process up before XCTest builds its list of tests;
         // see Tests/TaskScopeTestEnvironment/TaskScopeTestEnvironment.c.
         .target(name: "TaskScopeTestEnvironment", path: "Tests/TaskScopeTestEnvironment"),
+        // Tests that do not inspect SwiftUI views. They build and run even when
+        // ViewInspector does not compile, and a crash in a view test cannot
+        // stop them: each test target runs in its own process.
         .testTarget(
             name: "TaskScopeTests",
+            dependencies: [
+                "TaskScope",
+                "TaskScopeTestEnvironment"
+            ],
+            swiftSettings: strictConcurrency
+        ),
+        // Tests that inspect SwiftUI views with ViewInspector. Their Support
+        // folder links to TaskScopeTests/Support, so both targets compile the
+        // same shared fakes.
+        .testTarget(
+            name: "TaskScopeViewTests",
             dependencies: [
                 "TaskScope",
                 "TaskScopeTestEnvironment",

@@ -40,6 +40,8 @@ jobs:
       - name: Build with warnings as errors
         run: swift build -c debug -Xswiftc -warnings-as-errors 2>&1 | tee build.log
 
+      # Runs both test targets, TaskScopeTests and TaskScopeViewTests (the
+      # ViewInspector tests), each in its own test process.
       - name: Test
         run: swift test 2>&1 | tee test.log
 

@@ -1,5 +1,4 @@
 import Foundation
-import ViewInspector
 import XCTest
 @testable import TaskScope
 

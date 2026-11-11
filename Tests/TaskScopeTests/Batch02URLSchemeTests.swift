@@ -1,7 +1,6 @@
 import AppKit
 import OSLog
 import SwiftUI
-import ViewInspector
 import XCTest
 @testable import TaskScope
 

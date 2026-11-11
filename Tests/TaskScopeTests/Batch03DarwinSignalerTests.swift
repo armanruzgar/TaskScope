@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import XCTest
-import ViewInspector
 @testable import TaskScope
 
 /// DarwinProcessSignaler's reading of `kill(2)` through an injected call. The

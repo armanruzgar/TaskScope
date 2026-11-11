@@ -1,6 +1,5 @@
 import Security
 import SwiftUI
-import ViewInspector
 import XCTest
 @testable import TaskScope
 

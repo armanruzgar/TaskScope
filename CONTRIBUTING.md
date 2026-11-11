@@ -65,8 +65,30 @@ caches and the runtime issues that SwiftUI reports, with a line but no column,
 while tests run. If the build itself
 fails, read `.build/warnings.log`; after a failed grep, the lines it printed
 are the warnings to fix. `Package.swift` enables complete concurrency checking
-for both Swift targets, so ordinary `swift build` and `swift test` runs show the
+for every Swift target, so ordinary `swift build` and `swift test` runs show the
 same diagnostics.
+
+The tests are split across two targets. `TaskScopeViewTests`
+(`Tests/TaskScopeViewTests`) holds the tests that inspect SwiftUI views and is
+the only one that depends on ViewInspector; `TaskScopeTests` holds everything
+else. A test that does not call ViewInspector belongs in `TaskScopeTests`.
+`swift test`, the strict step, coverage and CI run both targets, each in its
+own test process, so a crash in a view test does not stop the other tests. Both
+targets compile the same `Support` folder: `Tests/TaskScopeViewTests/Support`
+is a link to `Tests/TaskScopeTests/Support`, so put shared fakes and fixtures
+there, never in a test file of the other target. When ViewInspector or a view
+test does not compile (after a macOS or Xcode update, for example), `swift
+test` cannot build, and `swift test --skip-build` still needs the view bundle.
+Build and run the other target directly instead:
+
+```bash
+swift build --target TaskScopeTests
+xcrun xctest "$(swift build --show-bin-path)/TaskScopeTests.xctest"
+```
+
+Add `-XCTest TaskScopeTests.<TestClass>` before the bundle path to run one
+class. Report the ViewInspector failure in the pull request; it does not
+excuse failures in `TaskScopeTests`.
 
 The [CI workflow](.github/workflows/ci.yml) enforces most of this gate. On every
 push to `main`, on every pull request, and on manual dispatch, GitHub Actions

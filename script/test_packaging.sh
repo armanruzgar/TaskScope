@@ -387,13 +387,13 @@ if [[ -e "$TEST_DIR/one" || -e "$TEST_DIR/two" || -e "$TEST_DIR/images" ]]; then
 fi
 
 # Package.swift alone sets the deployment target, enables complete concurrency
-# checking for both targets, and defines the app target that packaging builds.
+# checking for every Swift target, and defines the app target that packaging builds.
 MANIFEST_FIXTURE="$TEST_DIR/Manifest"
 MANIFEST_OUTPUT="$TEST_DIR/manifest.out"
 mkdir -p "$MANIFEST_FIXTURE/Sources/TaskScope"
 # Output is captured before grep -q: with pipefail, a writer that grep -q
 # leaves early fails the pipeline with SIGPIPE even though the text matched.
-for strict_target in TaskScope TaskScopeTests; do
+for strict_target in TaskScope TaskScopeTests TaskScopeViewTests; do
   STRICT_TARGET_DESCRIPTION="$(taskscope_target_description "$ROOT_DIR" "$strict_target")"
   if ! grep -q '"StrictConcurrency"' <<< "$STRICT_TARGET_DESCRIPTION"; then
     echo "Package.swift does not enable complete concurrency checking for $strict_target." >&2
