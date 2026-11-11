@@ -366,6 +366,26 @@ if [[ "$icon_status" -ne 1 ]] || ! grep -q '^Icon rendering failed:' "$ICON_OUTP
   exit 1
 fi
 
+# The README screenshot renderer: only its arguments are checked here, since
+# rendering runs the test suite. Bad arguments fail before anything builds.
+SCREENSHOT_SCRIPT="$ROOT_DIR/script/render_screenshots.sh"
+SCREENSHOT_OUTPUT="$TEST_DIR/screenshots.out"
+"$SCREENSHOT_SCRIPT" --help | grep -q '^usage:'
+for screenshot_arguments in --bogus --output "--output $TEST_DIR/one --output $TEST_DIR/two" "$TEST_DIR/images"; do
+  screenshot_status=0
+  # shellcheck disable=SC2086 # Each case is a list of arguments.
+  "$SCREENSHOT_SCRIPT" $screenshot_arguments > "$SCREENSHOT_OUTPUT" 2>&1 || screenshot_status="$?"
+  if [[ "$screenshot_status" -ne 2 ]] || ! grep -q '^usage:' "$SCREENSHOT_OUTPUT"; then
+    echo "The screenshot renderer accepted arguments: $screenshot_arguments" >&2
+    cat "$SCREENSHOT_OUTPUT" >&2
+    exit 1
+  fi
+done
+if [[ -e "$TEST_DIR/one" || -e "$TEST_DIR/two" || -e "$TEST_DIR/images" ]]; then
+  echo "The screenshot renderer created an output folder despite a usage error." >&2
+  exit 1
+fi
+
 # Package.swift alone sets the deployment target, enables complete concurrency
 # checking for both targets, and defines the app target that packaging builds.
 MANIFEST_FIXTURE="$TEST_DIR/Manifest"

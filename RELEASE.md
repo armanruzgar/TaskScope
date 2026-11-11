@@ -81,6 +81,10 @@ Before starting:
    alerts. Dependabot alerts and security updates are on for the repository's
    dependencies; a Dependabot pull request is merged only after its CI checks
    pass and the full gate passes locally on its branch.
+7. If the main window or the menu-bar popover changed since the last release,
+   re-render the README screenshots with `./script/render_screenshots.sh` and
+   review them. They show synthetic data only; see
+   [CONTRIBUTING.md](CONTRIBUTING.md#readme-screenshots).
 
 ## Canonical automated gate
 

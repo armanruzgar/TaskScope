@@ -121,6 +121,28 @@ while the embedded copy differs from the file, or while the list differs from
 differs from the list. The macOS deployment target comes from `Package.swift`
 alone, through `taskscope_resolve_minimum_system_version`.
 
+### README screenshots
+
+The images in `docs/images` are rendered, never captured from a real session.
+`./script/render_screenshots.sh` runs one test,
+`ReadmeScreenshotTests/testRenderReadmeScreenshots`, with
+`TASKSCOPE_RENDER_SCREENSHOTS=1`; otherwise that test is skipped, so a normal
+`swift test` run reports it as skipped. The test draws the real main window and
+menu-bar popover into off-screen windows from the fixed fake processes, history,
+and time in `Tests/TaskScopeTests/ReadmeScreenshotTests.swift`, and adds the
+window frame and shadow itself. Nothing is launched, no window appears on
+screen, and the screen is never captured, so no real process list, user name,
+or path can reach an image. It writes `main-window-light.png`,
+`main-window-dark.png`, `menu-bar-presets-light.png`, and
+`menu-bar-presets-dark.png`; `--output DIR` writes them elsewhere for a first
+look. The images are 2x, so render on a Mac whose main display is a Retina
+display.
+
+Re-render after a change that shows in the main window or the menu-bar
+popover, review all four images, and commit them with the change. Change what
+they show in the test's fixtures, never by hand. Do not replace them with a
+`screencapture` or any other capture of a real Mac.
+
 ## Security-sensitive changes
 
 Keep pull requests focused. Explain user-visible changes and explicitly call out
