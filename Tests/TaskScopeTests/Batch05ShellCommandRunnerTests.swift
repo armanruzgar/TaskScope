@@ -121,6 +121,32 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
         XCTAssertEqual(signals.all, [])
     }
 
+    /// A failed spawn's four pipe descriptors are all closed by the time its
+    /// result is reported. They used to be closed by the cancel handlers of
+    /// read sources set up before the spawn, which ran on the command's queue
+    /// after the result was delivered, so a caller could still find them open.
+    /// The check follows each result at once, many times over, so the old
+    /// window shows even on an idle machine.
+    func testFailedSpawnClosesEveryPipeBeforeReportingIt() async {
+        for attempt in 1...300 {
+            let pipes = ScriptedPipeFactory(failingCall: 0)
+            let hooks = batch05Hooks { hooks in hooks.makePipe = { pipes.make($0) } }
+
+            let result = await ShellCommandRunner.run(
+                executable: "/var/empty/taskscope-missing-program", hooks: hooks
+            )
+            let created = pipes.created
+            let stillOpen = created.filter { fcntl($0, F_GETFD) != -1 }
+
+            XCTAssertEqual(result.exitCode, -1, "\(result)")
+            XCTAssertEqual(result.stderr, "Could not start the command: No such file or directory.")
+            XCTAssertEqual(created.count, 4)
+            guard stillOpen.isEmpty else {
+                return XCTFail("Attempt \(attempt): descriptors \(stillOpen) were still open after the result")
+            }
+        }
+    }
+
     /// Without a free descriptor, `Pipe()` handed out descriptor 0 (standard
     /// input), which was made nonblocking and spawned with, and the failure
     /// read "Bad file descriptor". The real error must be reported, nothing

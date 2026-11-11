@@ -323,10 +323,13 @@ enum ShellCommandRunner {
                 )
                 return
             }
-            configureReadSources()
             let spawnResult = spawnContainedProcess()
             switch spawnResult {
             case let .success(pid):
+                // Read sources only once there is a child to read from. A failed
+                // spawn then has none, so all of its pipes are closed before its
+                // result is reported, not by cancel handlers that run after it.
+                configureReadSources()
                 processIdentifier = pid
                 processStarted = true
                 let source = makeExitSource(for: pid)
