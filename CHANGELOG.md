@@ -5,6 +5,10 @@ All notable changes to TaskScope are documented in this file. The project uses
 
 ## [Unreleased]
 
+### Fixed
+
+- A launch while TaskScope is quitting no longer hands off to the quitting copy and exits, which left no TaskScope running and showed nothing. The running copy holds a per-user lock file, `~/Library/Application Support/<bundle id>/Instance.lock`, and lets it go while quitting, once its settings are saved and no action is running; the system drops it after a crash. A new launch hands off only to the copy that holds the lock, waits up to about ten seconds for a copy that is still finishing an action, and otherwise starts normally, even while the quitting or crashed copy is still listed. When two copies start together, the one that takes the lock keeps running. Startup verification never takes the lock. Only when the lock cannot be used does the earlier-start rule decide, as in 1.1.0.
+
 ## [1.1.0] - 2026-11-10
 
 Source/development release with the fixes from the November 2026 audit. Build

@@ -408,8 +408,15 @@ Required invariants:
 
 - detect an existing same-user, same-bundle instance before shared-store writes,
   command handling, hotkey registration, or background enforcement; request a
-  reopen of its window and terminate the duplicate. A launch hands off only to
-  an instance that started earlier;
+  reopen of its window and terminate the duplicate. The running instance holds
+  an exclusive, close-on-exec `flock` on
+  `~/Library/Application Support/<bundle id>/Instance.lock` and lets it go while
+  quitting, once its settings are saved and no action is running; the kernel
+  drops it on a crash. A launch hands off only to the holder its lock record
+  names (same PID, start time, user, and bundle identifier), never to a holder
+  marked quitting, which it waits for up to ten seconds; only when the lock
+  cannot decide does it hand off to an instance that started earlier. Startup
+  verification never takes the lock;
 - isolate startup-verification stores and onboarding in fresh volatile defaults
   without reading/changing normal preferences or enforcing Keep Off; a
   startup-verification instance rejects every command at once and quits by
@@ -551,6 +558,7 @@ an intact signature has the hardened runtime; `codesign -dv` shows it as well.
 | Preset or rule carries fields from a newer build | Keep it read-only and disable such a rule; refuse such a preset's actions and its import instead of dropping the fields. |
 | Valid-looking custom preset points at an unintended user launch agent | Show the field and later-operation summary before import; require the user to reject an unintended path. |
 | Preferences contain malformed JSON or a wrong property-list type | Preserve backup, enter read-only recovery state, require explicit reset. |
+| A same-user process holds the instance lock file or rewrites its record | Hand off only to a listed same-user, same-bundle TaskScope with the recorded start time; after about half a second without one (ten seconds for a holder marked quitting), use the earlier-start rule. |
 | Privileged bootstrap fails or is denied | Report failure and leave the managed files intact. |
 | Ad-hoc bundle is presented as a production binary | Release gate rejects the claim and artifact. |
 

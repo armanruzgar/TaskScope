@@ -111,6 +111,17 @@ enum TaskScopeExternalStateRefresh {
 }
 
 /// Launch admission is resolved before constructing stores or installing commands.
+///
+/// The running copy is the one that holds the per-user single-instance lock
+/// (A01-8). A launch that cannot take the lock hands off to the copy its record
+/// names. A copy that is quitting keeps the lock only while it still has an
+/// action to finish or stop: a launch waits for it, never hands off to it, and
+/// becomes the instance once it lets go, even while the quitting process is
+/// still listed. The earlier-start rule (A01-7) decides only when the lock
+/// cannot: no lock file, no identifiable holder, or a quitting holder that does
+/// not let go in time. A quit that begins after a launch has chosen to hand off,
+/// before its reopen reaches the holder, still ends both; no lock can see that
+/// a reopen was never handled.
 @MainActor
 final class TaskScopeLaunchSession {
     static let shared = TaskScopeLaunchSession(
@@ -138,10 +149,19 @@ final class TaskScopeLaunchSession {
         var runningInstances: @MainActor () -> [Instance]
         var reopen: @MainActor (pid_t) -> Void
         var terminate: @MainActor () -> Void
-        /// This process's start time. A launch yields only to an instance that
+        /// This process's start time. The lock record carries it, so a later
+        /// process that reuses a holder's PID is not taken for the holder. When
+        /// the lock cannot decide, a launch yields only to an instance that
         /// started earlier, so two copies started together cannot both hand off
         /// to each other and quit.
         var startTime: TimeInterval = .greatestFiniteMagnitude
+        /// The single-instance lock; nil when there is none to take, and then
+        /// the earlier-start rule alone decides.
+        var instanceLock: TaskScopeInstanceLock?
+        /// Blocks the launching main thread between lock attempts. Admission
+        /// runs before stores read preferences, so a launch that waits for a
+        /// quitting copy starts from the settings that copy saved.
+        var pause: @MainActor (TimeInterval) -> Void = { _ in }
 
         static var system: Runtime {
             Runtime(
@@ -169,7 +189,14 @@ final class TaskScopeLaunchSession {
                 // Unreadable (never expected for this process): yield to any
                 // other instance, as every launch did before start times.
                 startTime: processInfo(ProcessInfo.processInfo.processIdentifier).map(startTime(of:))
-                    ?? .greatestFiniteMagnitude
+                    ?? .greatestFiniteMagnitude,
+                instanceLock: TaskScopeInstanceLock.fileURL(
+                    bundleIdentifier: Bundle.main.bundleIdentifier,
+                    applicationSupport: FileManager.default.urls(
+                        for: .applicationSupportDirectory, in: .userDomainMask
+                    ).first
+                ).map { TaskScopeInstanceLock.file(at: $0) },
+                pause: { Thread.sleep(forTimeInterval: $0) }
             )
         }
 
@@ -185,12 +212,27 @@ final class TaskScopeLaunchSession {
         }
     }
 
+    struct AdmissionWait: Equatable, Sendable {
+        var attempts: Int
+        var interval: TimeInterval
+    }
+
+    /// How long a launch looks for the holder's record. The holder writes it
+    /// right after locking, so a missing record is a matter of microseconds.
+    static let holderRecordWait = AdmissionWait(attempts: 25, interval: 0.02)
+    /// How long a launch waits for a quitting copy to let the lock go. That
+    /// copy keeps it about six seconds at most: up to five for its action and
+    /// about one to stop the commands still running.
+    static let quittingHolderWait = AdmissionWait(attempts: 200, interval: 0.05)
+
     let context: TaskScopeLaunchContext
     let userDefaults: UserDefaults
     private let runtime: Runtime
     private let otherInstance: Instance?
     private let isolatedSuiteName: String?
     private var didHandOff = false
+    /// Whether this process holds the single-instance lock.
+    private(set) var holdsInstanceLock: Bool
 
     init(
         context: TaskScopeLaunchContext,
@@ -199,13 +241,11 @@ final class TaskScopeLaunchSession {
     ) {
         self.context = context
         self.runtime = runtime
-        otherInstance = context == .startupVerification ? nil : runtime.runningInstances().first {
-            $0.processID != runtime.processID
-                && $0.userID == runtime.userID
-                && $0.bundleIdentifier == runtime.bundleIdentifier
-                && ($0.startTime < runtime.startTime
-                    || ($0.startTime == runtime.startTime && $0.processID < runtime.processID))
-        }
+        // Startup verification never takes the lock, waits or hands off, so a
+        // staged copy can be checked while TaskScope runs.
+        let admission = context == .startupVerification ? Admission() : Self.admit(runtime)
+        otherInstance = admission.otherInstance
+        holdsInstanceLock = admission.holdsInstanceLock
         if context == .startupVerification || otherInstance != nil {
             // A disposable suite also prevents store initializers in a rejected
             // duplicate from rewriting the running instance's preferences.
@@ -219,6 +259,82 @@ final class TaskScopeLaunchSession {
     }
 
     var allowsRuntime: Bool { otherInstance == nil && context.performsRuntimeBootstrap }
+
+    private struct Admission {
+        var otherInstance: Instance?
+        var holdsInstanceLock = false
+    }
+
+    private static func admit(_ runtime: Runtime) -> Admission {
+        func fallback() -> Admission { Admission(otherInstance: earlierInstance(runtime)) }
+        guard let lock = runtime.instanceLock else { return fallback() }
+        let own = TaskScopeInstanceRecord(processID: runtime.processID, startTime: runtime.startTime, state: .running)
+        var recordWaits = 0
+        var quittingWaits = 0
+        while true {
+            let wait: AdmissionWait
+            switch lock.acquire(own) {
+            case .acquired:
+                return Admission(otherInstance: nil, holdsInstanceLock: true)
+            case .unavailable:
+                return fallback()
+            case .held(let record?) where record.state == .quitting:
+                guard quittingWaits < quittingHolderWait.attempts else { return fallback() }
+                quittingWaits += 1
+                wait = quittingHolderWait
+            case .held(let record):
+                if let record, let holder = listedHolder(record, runtime) {
+                    return Admission(otherInstance: holder)
+                }
+                guard recordWaits < holderRecordWait.attempts else { return fallback() }
+                recordWaits += 1
+                wait = holderRecordWait
+            }
+            runtime.pause(wait.interval)
+        }
+    }
+
+    /// The listed instance a lock record names, if it is still that process:
+    /// the same PID and start time, user and bundle identifier, and not this one.
+    private static func listedHolder(_ record: TaskScopeInstanceRecord, _ runtime: Runtime) -> Instance? {
+        guard record.processID != runtime.processID else { return nil }
+        return runtime.runningInstances().first {
+            $0.processID == record.processID
+                && $0.startTime == record.startTime
+                && $0.userID == runtime.userID
+                && $0.bundleIdentifier == runtime.bundleIdentifier
+        }
+    }
+
+    /// A01-7: yield only to an instance that started earlier (on equal start
+    /// times, the lower PID), so two copies cannot hand off to each other.
+    private static func earlierInstance(_ runtime: Runtime) -> Instance? {
+        runtime.runningInstances().first {
+            $0.processID != runtime.processID
+                && $0.userID == runtime.userID
+                && $0.bundleIdentifier == runtime.bundleIdentifier
+                && ($0.startTime < runtime.startTime
+                    || ($0.startTime == runtime.startTime && $0.processID < runtime.processID))
+        }
+    }
+
+    /// A quit that waits for an action keeps the lock until the action is over
+    /// and records that this copy is quitting, so a launch meanwhile waits for
+    /// it instead of handing off to it.
+    func markQuitting() {
+        guard holdsInstanceLock else { return }
+        runtime.instanceLock?.update(TaskScopeInstanceRecord(
+            processID: runtime.processID, startTime: runtime.startTime, state: .quitting
+        ))
+    }
+
+    /// Lets the lock go once this copy has saved its settings and no action is
+    /// running any more; a launch from then on becomes the instance.
+    func releaseInstanceLock() {
+        guard holdsInstanceLock else { return }
+        holdsInstanceLock = false
+        runtime.instanceLock?.release()
+    }
 
     @discardableResult
     func continueLaunching() -> Bool {
@@ -249,6 +365,7 @@ final class TaskScopeLaunchSession {
     }
 
     func cleanUp() {
+        releaseInstanceLock()
         if let isolatedSuiteName {
             userDefaults.removeVolatileDomain(forName: isolatedSuiteName)
         }

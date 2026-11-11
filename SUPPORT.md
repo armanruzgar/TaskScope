@@ -529,9 +529,10 @@ that migration was tested.
 7. Optionally delete files you exported (by default `TaskScope-presets.json`,
    `TaskScope-diagnostics.json`, and `TaskScope-GlobalProtect-compatibility.txt`,
    plus `TaskScope-preferences.plist` if you exported preferences before a reset),
-   the per-user cache directory
-   `"$(getconf DARWIN_USER_CACHE_DIR)com.local.TaskScope"`, and a source
-   checkout's `.build` and `dist` directories.
+   the single-instance lock folder
+   `~/Library/Application Support/com.local.TaskScope`, the per-user cache
+   directory `"$(getconf DARWIN_USER_CACHE_DIR)com.local.TaskScope"`, and a
+   source checkout's `.build` and `dist` directories.
 
 Step 6 is permanent and removes settings, presets, rules, saved
 selections, event history, and all `.corruptBackup` and

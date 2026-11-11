@@ -81,6 +81,13 @@ for settings, presets, rules/events, saved selections, and onboarding. These
 values are discarded at exit; those launches do not read or update normal stored
 values or enforce the stored Keep Off preference.
 
+The running TaskScope also keeps a single-instance lock file,
+`~/Library/Application Support/<bundle id>/Instance.lock`, so that it runs once
+per user. While TaskScope runs, the file holds its process ID, its start time,
+and whether it is quitting. TaskScope empties the file when it quits; after a
+crash the last record stays until the next launch replaces it. Startup
+verification never creates or reads the file.
+
 Packaging tests use a unique test bundle identifier per run. They reject
 startup-verification preference plists in the user's normal or host-specific
 preferences directories and remove that test domain and its plists at cleanup.

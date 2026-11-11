@@ -255,9 +255,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     /// group, so nothing outlives TaskScope without its timeout. With no action
     /// in flight TaskScope quits at once (will-terminate stops any read still
     /// running), and a stuck action delays quit or logout by a few seconds.
+    ///
+    /// The single-instance lock is let go as soon as nothing this copy still
+    /// does can collide with a new instance (A01-8): at will-terminate after an
+    /// immediate quit, or once the waited-for action is over. While it waits
+    /// for the action, the lock record says that this copy is quitting, so a
+    /// launch meanwhile waits for it instead of handing off to a copy that is
+    /// about to exit.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if terminationTask != nil { return .terminateLater }
         guard runtime.isMutationActive() else { return .terminateNow }
+        launchSession.markQuitting()
         runtime.stopAppRuntime()
         terminationTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -267,6 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                 ticks += 1
             }
             self.runtime.stopRunningCommands()
+            self.launchSession.releaseInstanceLock()
             self.runtime.replyToTermination(true)
         }
         return .terminateLater
@@ -274,6 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     func applicationWillTerminate(_ notification: Notification) {
         runtime.stopAppRuntime()
+        // Settings are saved and no action runs any more (will-terminate
+        // follows an immediate quit or the bounded wait), so a launch from now
+        // on becomes the instance while this copy finishes quitting.
+        launchSession.releaseInstanceLock()
         willTerminate?()
         // Bounded to about a second: TERM, then KILL, to each command's group.
         runtime.stopRunningCommands()

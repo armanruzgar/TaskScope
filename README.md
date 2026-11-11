@@ -87,8 +87,11 @@ that copy; the launch check does not stop it. This also applies to `--logs`,
 `--telemetry`, and installer launches. If a duplicate same-user, same-identifier
 app starts outside the scripts, it requests that the existing instance reopen
 its window, including after a quiet login-item launch, and exits before commands
-or background enforcement; when two copies start together, the later one hands
-off to the earlier one.
+or background enforcement. The existing instance is the copy that holds a
+per-user lock file in `~/Library/Application Support/<bundle id>/`, so when two
+copies start together exactly one keeps running. A launch while TaskScope is
+quitting never hands off to the quitting copy: it starts normally, after waiting
+up to about ten seconds if that copy is still finishing an action.
 
 `--telemetry` only displays local macOS Unified Logs; it uploads nothing.
 `BUILD_CONFIGURATION=debug` or `release` overrides the build configuration where
