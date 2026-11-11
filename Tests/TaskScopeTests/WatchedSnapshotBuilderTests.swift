@@ -13,6 +13,7 @@ final class WatchedSnapshotBuilderTests: XCTestCase {
         let inventory = [
             process(pid: 10, name: "Example", path: "/Applications/Forged.app/Contents/MacOS/Example"),
             process(pid: 11, name: "Example Helper", path: "/Applications/Example.app/Contents/Helpers/Example Helper"),
+            process(pid: 13, name: "Example Helper", path: "/Applications/Forged.app/Contents/Helpers/Example Helper"),
             process(pid: 12, name: "Example", path: "/Applications/Example.app/Contents/MacOS/Example")
         ]
 
@@ -20,6 +21,13 @@ final class WatchedSnapshotBuilderTests: XCTestCase {
             .snapshot(for: preset, in: inventory)
 
         XCTAssertEqual(snapshot.runningNames, ["Example", "Example Helper"])
+        XCTAssertEqual(snapshot.mainProcessPIDs, [12])
+
+        let forgedOnly = WatchedSnapshotBuilder(excludedPID: 99, currentUID: 501)
+            .snapshot(for: preset, in: inventory.filter { [10, 13].contains($0.pid) })
+        XCTAssertTrue(forgedOnly.runningNames.isEmpty)
+        XCTAssertTrue(forgedOnly.mainProcessPIDs.isEmpty)
+        XCTAssertFalse(forgedOnly.hasAny)
     }
 
     func testMainAndHelpersRequireCurrentUserOwnership() {
@@ -178,16 +186,21 @@ final class WatchedSnapshotBuilderTests: XCTestCase {
             protectedProcessNames: ["TaskScope"],
             appPath: "/Applications/TaskScope.app"
         )
-        let current = process(
-            pid: 42,
-            name: "TaskScope",
-            path: "/Applications/TaskScope.app/Contents/MacOS/TaskScope"
-        )
+        for uid: uid_t in [501, 0] {
+            let current = process(
+                pid: 42,
+                name: "TaskScope",
+                path: "/Applications/TaskScope.app/Contents/MacOS/TaskScope",
+                uid: uid
+            )
+            let snapshot = WatchedSnapshotBuilder(excludedPID: 42, currentUID: 501)
+                .snapshot(for: preset, in: [current])
 
-        let snapshot = WatchedSnapshotBuilder(excludedPID: 42, currentUID: 501)
-            .snapshot(for: preset, in: [current])
-
-        XCTAssertTrue(snapshot.runningNames.isEmpty)
+            XCTAssertTrue(snapshot.runningNames.isEmpty)
+            XCTAssertTrue(snapshot.mainProcessPIDs.isEmpty)
+            XCTAssertTrue(snapshot.unprivilegedProtectedNames.isEmpty)
+            XCTAssertFalse(snapshot.hasAny)
+        }
     }
 
     private func process(pid: Int32, name: String, path: String, uid: uid_t? = 501) -> AppProcess {

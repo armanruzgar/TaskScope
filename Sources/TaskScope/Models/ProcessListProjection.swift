@@ -12,6 +12,11 @@ struct ProcessListProjection {
     }
 
     private var sortedInventoryCache: (sortKey: ProcessSortKey, processes: [AppProcess])?
+    private var nameRanksCache: [String: Int]?
+    /// A body pass needs one key per open presentation (flat and tree), so a
+    /// few entries suffice. Without a cap, every search keystroke, slider step
+    /// and filter kept its list until the next inventory replaced the caches.
+    private static let maximumQueryCacheEntries = 8
     private var displayListCache: [DisplayListKey: DisplayList] = [:]
     private var treeRootsCache: [DisplayListKey: [ProcessTreeNode]] = [:]
 
@@ -55,6 +60,9 @@ struct ProcessListProjection {
         }
         let matches = sortedInventory(by: sortKey).filter(query.matches)
         let result = DisplayList(processes: Array(matches.prefix(max(0, limit))), matchCount: matches.count)
+        if displayListCache.count >= Self.maximumQueryCacheEntries {
+            displayListCache.removeAll(keepingCapacity: true)
+        }
         displayListCache[key] = result
         return result
     }
@@ -69,11 +77,19 @@ struct ProcessListProjection {
             return cached
         }
         let matches = displayProcesses(for: query, sortKey: sortKey, limit: limit)
+        let ranks = Dictionary(
+            sortedInventory(by: sortKey).enumerated().map { ($0.element.pid, $0.offset) },
+            uniquingKeysWith: { first, _ in first }
+        )
         let roots = ProcessTreeBuilder.build(
             from: inventory,
             ppidMap: ppidMap,
-            matchingPIDs: Set(matches.map(\.pid))
+            matchingPIDs: Set(matches.map(\.pid)),
+            sortRanks: ranks
         )
+        if treeRootsCache.count >= Self.maximumQueryCacheEntries {
+            treeRootsCache.removeAll(keepingCapacity: true)
+        }
         treeRootsCache[key] = roots
         return roots
     }
@@ -82,26 +98,55 @@ struct ProcessListProjection {
         if let cached = sortedInventoryCache, cached.sortKey == sortKey {
             return cached.processes
         }
-        let processes = inventory.sorted { lhs, rhs in
-            switch sortKey {
-            case .cpu:
-                if lhs.cpu == rhs.cpu {
-                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        let processes: [AppProcess]
+        if sortKey == .pid {
+            processes = inventory.sorted { $0.pid < $1.pid }
+        } else {
+            // Most rows tie on CPU (0.0%), so ties are broken on each name's
+            // natural-order rank, computed once per inventory, instead of running
+            // localizedStandardCompare on every tied comparison. Rows with equal
+            // names fall back to PID, as the Name sort always has, so the order
+            // (and the tree built from it) never depends on `ps` output order.
+            let ranks = nameRanks()
+            processes = inventory
+                .map { (process: $0, nameRank: ranks[$0.name] ?? 0) }
+                .sorted { lhs, rhs in
+                    switch sortKey {
+                    case .cpu where lhs.process.cpu != rhs.process.cpu:
+                        return lhs.process.cpu > rhs.process.cpu
+                    case .memory where lhs.process.memoryMB != rhs.process.memoryMB:
+                        return lhs.process.memoryMB > rhs.process.memoryMB
+                    default:
+                        return lhs.nameRank == rhs.nameRank
+                            ? lhs.process.pid < rhs.process.pid
+                            : lhs.nameRank < rhs.nameRank
+                    }
                 }
-                return lhs.cpu > rhs.cpu
-            case .memory:
-                if lhs.memoryMB == rhs.memoryMB {
-                    return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-                }
-                return lhs.memoryMB > rhs.memoryMB
-            case .name:
-                let comparison = lhs.name.localizedStandardCompare(rhs.name)
-                return comparison == .orderedSame ? lhs.pid < rhs.pid : comparison == .orderedAscending
-            case .pid:
-                return lhs.pid < rhs.pid
-            }
+                .map(\.process)
         }
         sortedInventoryCache = (sortKey, processes)
         return processes
+    }
+
+    /// Natural (Finder-style) order of the inventory's distinct names as dense
+    /// ranks; names that compare as equal share a rank.
+    private mutating func nameRanks() -> [String: Int] {
+        if let cached = nameRanksCache { return cached }
+        let names = Set(inventory.map(\.name)).sorted {
+            let comparison = $0.localizedStandardCompare($1)
+            return comparison == .orderedSame ? $0 < $1 : comparison == .orderedAscending
+        }
+        var ranks: [String: Int] = [:]
+        var rank = 0
+        var previous: String?
+        for name in names {
+            if let previous, previous.localizedStandardCompare(name) != .orderedSame {
+                rank += 1
+            }
+            ranks[name] = rank
+            previous = name
+        }
+        nameRanksCache = ranks
+        return ranks
     }
 }

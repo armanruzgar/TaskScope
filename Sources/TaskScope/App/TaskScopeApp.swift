@@ -404,13 +404,14 @@ struct TaskScopeApp: App {
         let sharedInventory = CoalescingProcessInventory(upstream: systemInventory)
         let stores = TaskScopeLaunchStores(session: launchSession, inventory: sharedInventory)
         let settings = stores.settings
+        let processHistory = ProcessHistory(inventory: sharedInventory)
         let processManager = ProcessManager(
             processInventory: sharedInventory,
-            verificationInventory: systemInventory
+            verificationInventory: systemInventory,
+            processHistory: processHistory
         )
         let watchedApps = stores.watchedApps
         let autoStopRules = stores.autoStopRules
-        let processHistory = ProcessHistory(inventory: sharedInventory)
         let coordinator = AppCommandCoordinator(
             processManager: processManager,
             presets: { watchedApps.presets },

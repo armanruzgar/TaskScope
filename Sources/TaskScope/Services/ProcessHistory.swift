@@ -2,6 +2,8 @@ import Foundation
 
 @MainActor
 final class ProcessHistory: ObservableObject {
+    typealias Sleeper = @Sendable (TimeInterval) async -> Bool
+
     struct Sample: Equatable {
         var timestamp: Date
         var observedProcessCPU: Double
@@ -28,20 +30,34 @@ final class ProcessHistory: ObservableObject {
 
     private let inventory: any ProcessInventoryProviding
     private let now: () -> Date
+    private let sleep: Sleeper
     private let maxSamples: Int
     private var samplingTask: Task<Void, Never>?
     private var samplingGeneration = 0
     private var consumerCount = 0
     private var consumerCadence: TimeInterval = 10
+    /// Set while ProcessManager polls: its scheduled reads then supply the
+    /// samples, so the history's own timer stands down instead of reading the
+    /// inventory again at an unrelated phase.
+    private var pollingActive = false
 
     init(
         inventory: any ProcessInventoryProviding = SystemProcessInventory(),
         maxSamples: Int = 60,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        sleep: @escaping Sleeper = { interval in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                return true
+            } catch {
+                return false
+            }
+        }
     ) {
         self.inventory = inventory
         self.maxSamples = max(2, maxSamples)
         self.now = now
+        self.sleep = sleep
     }
 
     deinit {
@@ -60,17 +76,17 @@ final class ProcessHistory: ObservableObject {
         }
         let interval = max(2, cadence)
         let generation = samplingGeneration
+        let sleep = self.sleep
         samplingTask = Task { [weak self] in
             if sampleImmediately {
                 await self?.sampleNow(for: generation)
             }
-            while !Task.isCancelled {
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-                } catch {
-                    break
-                }
-                guard !Task.isCancelled else { break }
+            // The loop ends once polling is active, after any read already in
+            // flight, so the first sample of a just-opened window is kept.
+            while !Task.isCancelled, self?.pollingActive == false {
+                guard await sleep(interval),
+                      !Task.isCancelled,
+                      self?.pollingActive == false else { break }
                 await self?.sampleNow(for: generation)
             }
         }
@@ -83,6 +99,8 @@ final class ProcessHistory: ObservableObject {
         // Resuming from zero consumers: samples kept from before the pause are
         // stale and would be drawn joined to the new ones as if contiguous.
         samples.removeAll()
+        // Read once now even while polling, so a window opened between polls
+        // does not wait up to a whole interval for its first sample.
         start(cadence: consumerCadence)
     }
 
@@ -95,9 +113,27 @@ final class ProcessHistory: ObservableObject {
 
     func updateConsumerCadence(_ cadence: TimeInterval) {
         consumerCadence = max(2, cadence)
-        if consumerCount > 0 {
+        if consumerCount > 0, !pollingActive {
             start(cadence: consumerCadence, sampleImmediately: false)
         }
+    }
+
+    /// Visible consumers share the manager's scheduled reads. The independent
+    /// sampler is only needed when the manager is not polling.
+    func setPollingActive(_ active: Bool) {
+        guard pollingActive != active else { return }
+        pollingActive = active
+        // Becoming active needs no action here: a running loop ends by itself.
+        guard !active, consumerCount > 0 else { return }
+        start(cadence: consumerCadence)
+    }
+
+    /// Records a read made by the manager's poll tick while a consumer is
+    /// visible; this is how the history samples while the manager polls.
+    func receivePolledInventory(_ result: Result<[AppProcess], ProcessInventoryError>) {
+        guard pollingActive, consumerCount > 0, !Task.isCancelled else { return }
+        if case .failure(.cancelled) = result { return }
+        apply(result)
     }
 
     func stop() {
@@ -115,6 +151,10 @@ final class ProcessHistory: ObservableObject {
         let result = await inventory.load(fetchExtendedStats: false)
         guard generation == samplingGeneration, !Task.isCancelled else { return }
 
+        apply(result)
+    }
+
+    private func apply(_ result: Result<[AppProcess], ProcessInventoryError>) {
         switch result {
         case .failure(let error):
             state = .unavailable(error.localizedDescription)

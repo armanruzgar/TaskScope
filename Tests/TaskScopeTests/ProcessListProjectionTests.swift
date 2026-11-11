@@ -24,7 +24,7 @@ final class ProcessListProjectionTests: XCTestCase {
         XCTAssertEqual(projection.treeRoots(for: query, sortKey: .memory, limit: 1), roots)
         query.searchText = ""
         XCTAssertEqual(projection.displayProcesses(for: query, sortKey: .memory, limit: 2), [other, child])
-        XCTAssertEqual(projection.treeRoots(for: query, sortKey: .memory, limit: 2).map(\.id), [10, 20])
+        XCTAssertEqual(projection.treeRoots(for: query, sortKey: .memory, limit: 2).map(\.id), [20, 10])
 
         for limit in [0, -1] {
             XCTAssertTrue(projection.displayProcesses(for: query, sortKey: .memory, limit: limit).isEmpty)

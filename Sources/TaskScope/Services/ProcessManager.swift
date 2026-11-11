@@ -80,6 +80,7 @@ final class ProcessManager: ObservableObject {
     private let detailReader: any ProcessDetailReading
     private let settleAfterProcessChange: () async -> Void
     private let pollingController: ProcessPollingController
+    private weak var processHistory: ProcessHistory?
     private let snapshotBuilder: WatchedSnapshotBuilder
     private let operationGate = ProcessOperationGate()
     private var operationGateCancellable: AnyCancellable?
@@ -113,6 +114,7 @@ final class ProcessManager: ObservableObject {
         },
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
         pollingController: ProcessPollingController? = nil,
+        processHistory: ProcessHistory? = nil,
         detailReader: any ProcessDetailReading = SystemProcessDetailReader(),
         now: @escaping () -> Date = Date.init
     ) {
@@ -130,6 +132,7 @@ final class ProcessManager: ObservableObject {
         self.detailReader = detailReader
         self.settleAfterProcessChange = settleAfterProcessChange
         self.pollingController = pollingController ?? ProcessPollingController()
+        self.processHistory = processHistory
         self.now = now
         snapshotBuilder = WatchedSnapshotBuilder(excludedPID: currentPID)
         operationGateCancellable = operationGate.objectWillChange.sink { [weak self] _ in
@@ -144,12 +147,15 @@ final class ProcessManager: ObservableObject {
     }
 
     func restartPolling() {
+        processHistory?.setPollingActive(true)
         pollInterval = max(2, pollInterval)
         let interval = pollInterval
         let includeList = pollProcessList
         pollingController.restart(interval: interval) { [weak self] in
             guard let self else { return }
-            await self.refreshWatchedStatus(showMessage: false)
+            // Each tick's read also feeds the history while a window shows it,
+            // so the history runs no read loop of its own while polling.
+            await self.refreshWatchedStatus(showMessage: false, sampleHistory: true)
             await self.enforceKeptOffPresets()
             if includeList, self.hasLoadedProcessList {
                 await self.loadProcessList(showMessage: false)
@@ -159,6 +165,7 @@ final class ProcessManager: ObservableObject {
 
     func stopPolling() {
         pollingController.stop()
+        processHistory?.setPollingActive(false)
     }
 
     func toggleSelection(_ pid: Int32) {
@@ -272,13 +279,13 @@ final class ProcessManager: ObservableObject {
     /// Returns whether a fresh inventory was applied by this call (or by the
     /// equivalent read it joined).
     @discardableResult
-    func refreshWatchedStatus(showMessage: Bool = true) async -> Bool {
+    func refreshWatchedStatus(showMessage: Bool = true, sampleHistory: Bool = false) async -> Bool {
         // Counts only watched-status reads that applied snapshots. The general
         // read counter also moves for reads made inside a queued mutation, which
         // would report a refresh that this call never delivered.
         let appliedBefore = appliedWatchedStatusReads
         await runAction(kind: .read(.watchedStatus)) {
-            switch await currentSnapshots() {
+            switch await currentSnapshots(sampleHistory: sampleHistory) {
             case .success(let watched):
                 apply(watched)
                 appliedWatchedStatusReads &+= 1
@@ -1118,8 +1125,12 @@ final class ProcessManager: ObservableObject {
         snapshots.first(where: { $0.preset.id == preset.id }) ?? WatchedAppSnapshot(preset: preset, runningNames: [])
     }
 
-    private func currentSnapshots() async -> Result<[WatchedAppSnapshot], ProcessInventoryError> {
-        switch await processInventory.load(fetchExtendedStats: false) {
+    private func currentSnapshots(
+        sampleHistory: Bool = false
+    ) async -> Result<[WatchedAppSnapshot], ProcessInventoryError> {
+        let result = await processInventory.load(fetchExtendedStats: false)
+        if sampleHistory { processHistory?.receivePolledInventory(result) }
+        switch result {
         case .success(let inventory):
             recordInventorySuccess()
             return .success(snapshots(from: inventory))

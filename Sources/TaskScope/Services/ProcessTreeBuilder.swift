@@ -24,11 +24,14 @@ enum ProcessTreeBuilder {
     }
 
     /// Builds a stable tree and, when `matchingPIDs` is supplied, retains every
-    /// available ancestor needed to give matching rows hierarchy context.
+    /// available ancestor needed to give matching rows hierarchy context. Roots
+    /// and each parent's children are ordered by `sortRanks` (the list's sort
+    /// order, lowest first), with PID as the tie-break and for unranked rows.
     static func build(
         from processes: [AppProcess],
         ppidMap: [Int32: Int32],
-        matchingPIDs: Set<Int32>? = nil
+        matchingPIDs: Set<Int32>? = nil,
+        sortRanks: [Int32: Int] = [:]
     ) -> [ProcessTreeNode] {
         // A repeated pid cannot come from the parser, which rejects it, but a
         // duplicate must never crash the view; the first row wins.
@@ -59,13 +62,18 @@ enum ProcessTreeBuilder {
         for (child, parent) in effectiveParent {
             childPIDsByParent[parent, default: []].append(child)
         }
+        func precedes(_ lhs: Int32, _ rhs: Int32) -> Bool {
+            let left = sortRanks[lhs, default: Int.max]
+            let right = sortRanks[rhs, default: Int.max]
+            return left == right ? lhs < rhs : left < right
+        }
         for parent in childPIDsByParent.keys {
-            childPIDsByParent[parent]?.sort()
+            childPIDsByParent[parent]?.sort(by: precedes)
         }
 
         let rootPIDs = includedIDs
             .filter { effectiveParent[$0] == nil }
-            .sorted()
+            .sorted(by: precedes)
 
         func buildNode(_ pid: Int32, ancestors: Set<Int32>) -> ProcessTreeNode? {
             guard let process = nodesByID[pid], !ancestors.contains(pid) else { return nil }
