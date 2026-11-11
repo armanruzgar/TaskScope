@@ -171,7 +171,10 @@ Required invariants:
   may reach, so never for launchd (whose family is nearly every process) or a
   session component such as loginwindow (stopping it ends the session), and a
   descendant that fails those checks is left out with its whole subtree; the
-  review states how many were left out;
+  review states how many were left out. Children are collected by the
+  parent's PID only while the parent's identity (PID and start time) is still
+  in the current validated inventory, so a reused PID's children are never
+  collected;
 - run a preset Restart (custom presets only) as Quit App and Helpers, then
   Open, in one admitted action with one confirmation and one report; Open
   runs only after the quit completed;

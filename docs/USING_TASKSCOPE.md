@@ -110,7 +110,9 @@ may reach (below), so never for launchd, TaskScope, GlobalProtect, another
 user's process, or a macOS component such as loginwindow, whose children are
 your whole session. A descendant that fails those checks is left out together
 with everything below it, and the review says how many were left out. It is
-also unavailable for a process with no child processes.
+also unavailable for a process with no child processes, and nothing is stopped
+when the process is no longer the one the row showed (its PID now has another
+start time) or has exited.
 
 **Pause…** sends `SIGSTOP` after a confirmation, and **Resume** sends
 `SIGCONT` without one. A paused process stays alive but does not run, and a

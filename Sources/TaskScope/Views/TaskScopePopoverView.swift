@@ -408,7 +408,18 @@ struct TaskScopePopoverView: View {
             processManager.setMessage("Stop With Children is not available for \(process.name). \(refusal)")
             return
         }
-        let members = ProcessFamily.descendants(of: process, in: processManager.inventorySnapshot) {
+        // Children are found by the parent's PID, so the row must still be that
+        // process (PID and start time) in the last validated inventory: a reused
+        // PID's children are another process's.
+        let inventory = processManager.inventorySnapshot
+        guard inventory.contains(where: { !$0.hasExited && $0.identity == process.identity }) else {
+            let identityChanged = inventory.contains { $0.pid == process.pid && !$0.hasExited }
+            processManager.setMessage(identityChanged
+                ? "\(process.name)'s identity changed; nothing was stopped."
+                : "\(process.name) is no longer running.")
+            return
+        }
+        let members = ProcessFamily.descendants(of: process, in: inventory) {
             ProcessSignalEligibility.ineligibility(for: $0, currentPID: currentProcessPID, currentUID: getuid()) == nil
         }
         guard !members.included.isEmpty else {

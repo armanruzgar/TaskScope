@@ -379,6 +379,29 @@ final class ProcessControlActionsTests: XCTestCase {
         )
     }
 
+    /// Review follow-up: children are found by the parent's PID, so a row whose
+    /// PID now belongs to another process must not stop that process's children.
+    func testStopWithChildrenNeedsTheParentsCurrentIdentity() async {
+        let fixture = await Batch10.fixture(processes: [
+            row(pid: 860), row(pid: 861, parent: 860, path: "/opt/homebrew/bin/node")
+        ])
+        defer { fixture.stores.cleanup() }
+        let state = ProcessConfirmationState()
+        let view = Batch10.popover(fixture, state: state)
+
+        // The row the menu was opened on, from before PID 860 was reused.
+        view.requestStopWithChildren(row(pid: 860, start: "Fri Jul 25 08:00:00 2026"))
+        XCTAssertNil(state.pendingBatchTermination, "The new PID 860's child must not be stopped")
+        XCTAssertEqual(fixture.manager.message, "Example's identity changed; nothing was stopped.")
+
+        view.requestStopWithChildren(row(pid: 870))
+        XCTAssertNil(state.pendingBatchTermination)
+        XCTAssertEqual(fixture.manager.message, "Example is no longer running.")
+
+        view.requestStopWithChildren(row(pid: 860))
+        XCTAssertEqual(state.pendingBatchTermination?.targets.map(\.pid), [860, 861])
+    }
+
     func testAProcessWithoutChildrenOffersNoFamilyStop() async {
         let lone = row(pid: 810)
         let fixture = await Batch10.fixture(processes: [lone])
