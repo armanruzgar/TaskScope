@@ -12,6 +12,8 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
     /// The displayed matches. Any other row is an ancestor shown only for
     /// hierarchy context. Nil when every row counts as a match.
     var matchedPIDs: Set<Int32>? = nil
+    /// Matches found only in their command line.
+    var commandLineMatchPIDs: Set<Int32> = []
     var requestListFocus: () -> Void = {}
     @ViewBuilder var contextMenuContent: (AppProcess) -> ContextMenuContent
     /// The row's context-menu actions for VoiceOver's Actions rotor.
@@ -31,6 +33,7 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
                     leadingInset: 20 + CGFloat(depth) * 16,
                     treeLevel: depth + 1,
                     isContextOnly: matchedPIDs.map { !$0.contains(node.process.pid) } ?? false,
+                    matchedByCommandLine: commandLineMatchPIDs.contains(node.process.pid),
                     stopAction: { pendingTermination = node.process },
                     toggleSelection: { processManager.toggleSelection(node.process.pid) }
                 )
@@ -100,6 +103,7 @@ struct ProcessTreeRow<ContextMenuContent: View>: View {
                         expandedPids: $expandedPids,
                         showsExpandedMetrics: showsExpandedMetrics,
                         matchedPIDs: matchedPIDs,
+                        commandLineMatchPIDs: commandLineMatchPIDs,
                         requestListFocus: requestListFocus,
                         contextMenuContent: contextMenuContent,
                         accessibilityActionsContent: accessibilityActionsContent

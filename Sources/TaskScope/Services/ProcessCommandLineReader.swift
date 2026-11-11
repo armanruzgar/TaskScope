@@ -172,24 +172,58 @@ enum KernelProcessArguments {
     /// Reads into a caller's buffer of at least `maximumArgumentBytes`, so a
     /// pass over many processes can reuse one.
     static func read(pid: Int32, into buffer: UnsafeMutableRawBufferPointer) -> Read {
-        guard pid > 0 else { return .refused(errno: ESRCH) }
+        switch fill(buffer, pid: pid) {
+        case .success(let bytes): .arguments(parse(bytes))
+        case .failure(let failure): .refused(errno: failure.code)
+        }
+    }
+
+    /// The command line as search compares it: the arguments joined by single
+    /// spaces, with A-Z folded to lowercase, and never decoded into text. Nil
+    /// when the kernel refuses or there are no arguments.
+    static func foldedCommandLine(pid: Int32, into buffer: UnsafeMutableRawBufferPointer) -> [UInt8]? {
+        guard case .success(let bytes) = fill(buffer, pid: pid) else { return nil }
+        let ranges = argumentRanges(bytes)
+        guard !ranges.isEmpty else { return nil }
+        var line: [UInt8] = []
+        line.reserveCapacity(ranges.reduce(ranges.count) { $0 + $1.count })
+        for (offset, range) in ranges.enumerated() {
+            if offset > 0 { line.append(0x20) }
+            for byte in bytes[range] {
+                line.append(byte >= 0x41 && byte <= 0x5A ? byte | 0x20 : byte)
+            }
+        }
+        return line
+    }
+
+    private struct Refusal: Error {
+        var code: Int32
+    }
+
+    private static func fill(_ buffer: UnsafeMutableRawBufferPointer, pid: Int32) -> Result<UnsafeRawBufferPointer, Refusal> {
+        guard pid > 0 else { return .failure(Refusal(code: ESRCH)) }
         var mib: [Int32] = [CTL_KERN, KERN_PROCARGS2, pid]
         var length = buffer.count
         guard sysctl(&mib, 3, buffer.baseAddress, &length, nil, 0) == 0 else {
-            return .refused(errno: errno)
+            return .failure(Refusal(code: errno))
         }
-        return .arguments(parse(UnsafeRawBufferPointer(rebasing: buffer[..<min(length, buffer.count)])))
+        return .success(UnsafeRawBufferPointer(rebasing: buffer[..<min(length, buffer.count)]))
     }
 
     static func parse(_ bytes: [UInt8]) -> [String] {
         bytes.withUnsafeBytes { parse($0) }
     }
 
-    /// The layout is `argc` (a C int), the executable path the kernel saved
-    /// at exec, NUL padding, then `argc` NUL-terminated arguments, then the
-    /// environment, which is never read. A process can rewrite its arguments
-    /// in place; what it holds now is what `ps` shows too.
     static func parse(_ bytes: UnsafeRawBufferPointer) -> [String] {
+        argumentRanges(bytes).map { String(decoding: UnsafeRawBufferPointer(rebasing: bytes[$0]), as: UTF8.self) }
+    }
+
+    /// Where each argument lies. The layout is `argc` (a C int), the
+    /// executable path the kernel saved at exec, NUL padding, then `argc`
+    /// NUL-terminated arguments, then the environment, which is never read. A
+    /// process can rewrite its arguments in place; what it holds now is what
+    /// `ps` shows too.
+    static func argumentRanges(_ bytes: UnsafeRawBufferPointer) -> [Range<Int>] {
         let countSize = MemoryLayout<Int32>.size
         guard bytes.count >= countSize else { return [] }
         let count = Int(bytes.loadUnaligned(as: Int32.self))
@@ -197,14 +231,14 @@ enum KernelProcessArguments {
         var index = countSize
         while index < bytes.count, bytes[index] != 0 { index += 1 }
         while index < bytes.count, bytes[index] == 0 { index += 1 }
-        var arguments: [String] = []
-        while arguments.count < count, index < bytes.count {
+        var ranges: [Range<Int>] = []
+        while ranges.count < count, index < bytes.count {
             let start = index
             while index < bytes.count, bytes[index] != 0 { index += 1 }
-            arguments.append(String(decoding: UnsafeRawBufferPointer(rebasing: bytes[start..<index]), as: UTF8.self))
+            ranges.append(start..<index)
             index += 1
         }
-        return arguments
+        return ranges
     }
 }
 

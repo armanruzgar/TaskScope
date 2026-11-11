@@ -494,7 +494,10 @@ Required invariants:
   the clipboard after Copy Command Line: it is read on request, only while the
   PID still has the row's start time and executable path (checked before and
   after the read), and never stored, logged, or included in diagnostics,
-  reports, exports, or notifications;
+  reports, exports, or notifications. While the search field has text, the
+  current user's command lines are also read in memory, without a child
+  process, to match the search; they are never shown and are dropped with the
+  list they were read for;
 - record every signal TaskScope sends, and every launchd change, app open, and
   administrator request it runs, in the Unified Log's `Actions` category with
   the outcome, so its actions can be reconstructed after it quits; signal,

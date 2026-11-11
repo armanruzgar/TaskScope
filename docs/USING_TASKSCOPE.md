@@ -51,7 +51,14 @@ Dock icon.
 
 Type in the search field to match a process name, command, or PID. Text with a
 slash, or starting with `~`, also matches the executable path shown under the
-name, as shown or in full (`/usr/bin`, `~/dev/`). Sort with
+name, as shown or in full (`/usr/bin`, `~/dev/`). Search also matches the
+command lines of your own processes, ignoring case and across arguments, so
+`a.log` finds `tail -f a.log` and `--port 8080` finds the server started with
+it. A row found only through its command line shows a magnifying-glass mark,
+because the list never shows command lines. TaskScope reads them in memory
+while the search field has text, once per refresh, and keeps them only with
+that list. Other users' command lines are not searched: macOS shows them only to
+`ps`, which would add a process to every refresh. Sort with
 the **Sort** menu, which offers CPU, Memory, Name, PID, Parent PID, User,
 Network, and Disk, each **Ascending** or **Descending**, or click a column
 title: the first click sorts by that column and the next one reverses it. CPU,

@@ -799,6 +799,7 @@ struct TaskScopePopoverView: View {
                                         expandedPids: $listState.expandedTreePids,
                                         showsExpandedMetrics: isExpandedWindow,
                                         matchedPIDs: Set(filteredProcesses.map(\.pid)),
+                                        commandLineMatchPIDs: commandLineMatchPIDs,
                                         requestListFocus: { processListFocused = true },
                                         contextMenuContent: { process in
                                             processContextMenu(for: process)
@@ -1111,6 +1112,11 @@ struct TaskScopePopoverView: View {
     /// SwiftUI makes during one body pass compute the list once.
     private var filteredProcesses: [AppProcess] {
         processManager.displayProcesses(for: listQuery)
+    }
+
+    /// Displayed rows that match the search only in their command line.
+    private var commandLineMatchPIDs: Set<Int32> {
+        processManager.displayList(for: listQuery).commandLineMatches
     }
 
     private var processCountTitle: String {
@@ -1427,6 +1433,7 @@ struct TaskScopePopoverView: View {
             isHighlightedCPU: process.cpu >= settings.cpuHighlightThreshold,
             isHighlightedMEM: process.memoryMB >= settings.memHighlightThresholdMB,
             showsExpandedMetrics: isExpandedWindow,
+            matchedByCommandLine: commandLineMatchPIDs.contains(process.pid),
             stopAction: { confirmationState.requestTermination(process) },
             toggleSelection: { processManager.toggleSelection(process.pid) }
         )

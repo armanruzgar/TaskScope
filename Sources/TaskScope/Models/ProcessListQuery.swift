@@ -63,8 +63,18 @@ struct ProcessListQuery: Hashable {
     var cpuHighlightThreshold: Double
     var memoryHighlightThresholdMB: Double
 
+    var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     func matches(_ process: AppProcess) -> Bool {
-        let search = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        matchesSearch(process) && matchesFilter(process)
+    }
+
+    /// The search on the row's own fields. The list also matches the current
+    /// user's command lines; see `CommandLineSearchIndex`.
+    func matchesSearch(_ process: AppProcess) -> Bool {
+        let search = trimmedSearchText
         // The row shows the executable path (with `~` for the home folder)
         // under the name, which can differ from the `ps` command name. Text
         // with a slash, or starting with `~`, is a path, so it also matches
@@ -78,8 +88,10 @@ struct ProcessListQuery: Hashable {
             || (isPathSearch && (process.displayCommand.localizedCaseInsensitiveContains(search)
                 || (process.executablePath?.localizedCaseInsensitiveContains(search) ?? false)))
             || String(process.pid).contains(search)
-        guard matchesSearch else { return false }
+        return matchesSearch
+    }
 
+    func matchesFilter(_ process: AppProcess) -> Bool {
         switch filterMode {
         case .all:
             return true

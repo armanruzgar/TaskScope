@@ -168,9 +168,10 @@ On a new install the list stays empty until you choose **Load Processes**. With
 **Settings > General > Auto-refresh process list** on, it loads and refreshes
 by itself; otherwise it is a snapshot that shows when it was updated. See
 [first launch](docs/USING_TASKSCOPE.md#first-launch-and-general-settings).
-Search, filter, and sort by CPU, memory, name, PID, parent PID, user, network,
-or disk, in either direction, from the Sort menu or by clicking a column title
-(click it again to reverse). The list shows up to 80 rows by default (10 to 200, or **Show all
+Search names, commands, PIDs, paths, and your own processes' command lines;
+filter; and sort by CPU, memory, name, PID, parent PID, user, network, or disk,
+in either direction, from the Sort menu or by clicking a column title (click it
+again to reverse). The list shows up to 80 rows by default (10 to 200, or **Show all
 processes**); a truncated list shows **Showing N of M**. Command-A adds the
 displayed matching rows to the selection. Review every captured target before
 Stop (`SIGTERM`, with which an app can quit without asking to save changes) or

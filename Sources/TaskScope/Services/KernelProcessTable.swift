@@ -58,6 +58,45 @@ enum KernelProcessTable {
         case failed(errno: Int32)
     }
 
+    enum TableRead: Equatable, Sendable {
+        case entries([Int32: KernelProcessEntry])
+        /// The table could not be read; `errno` says why.
+        case failed(errno: Int32)
+    }
+
+    /// The whole table in one read, keyed by PID. Processes can start between
+    /// the size query and the read, so the buffer has room to spare and a
+    /// read that still does not fit is retried. A PID listed twice means the
+    /// read is inconsistent, and it fails.
+    static func allEntries() -> TableRead {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+        let stride = MemoryLayout<kinfo_proc>.stride
+        for _ in 0..<4 {
+            var size = 0
+            guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return .failed(errno: errno) }
+            let capacity = size / stride + max(64, size / stride / 4)
+            var buffer = [kinfo_proc](repeating: kinfo_proc(), count: capacity)
+            var length = capacity * stride
+            let status = buffer.withUnsafeMutableBytes { bytes in
+                sysctl(&mib, 4, bytes.baseAddress, &length, nil, 0)
+            }
+            if status == 0 {
+                return table(from: buffer.prefix(length / stride).map(KernelProcessEntry.init))
+            }
+            guard errno == ENOMEM else { return .failed(errno: errno) }
+        }
+        return .failed(errno: ENOMEM)
+    }
+
+    static func table(from entries: [KernelProcessEntry]) -> TableRead {
+        var table: [Int32: KernelProcessEntry] = [:]
+        table.reserveCapacity(entries.count)
+        for entry in entries where entry.pid > 0 {
+            guard table.updateValue(entry, forKey: entry.pid) == nil else { return .failed(errno: EINVAL) }
+        }
+        return .entries(table)
+    }
+
     /// The table entry for one PID.
     static func entry(for pid: Int32) -> Lookup {
         guard pid > 0 else { return .notFound }

@@ -23,6 +23,11 @@ TaskScope can read local information exposed by macOS process tools, including:
   executable path. They are shown only in that sheet or placed on the
   clipboard, and are never stored, logged, or included in diagnostics,
   reports, exports, or notifications;
+- while the process search field has text, the command lines of your own
+  listed processes, read in memory once per refresh only to match the search.
+  They are never shown (a matching row only carries a mark), stored, logged,
+  or included in diagnostics, reports, exports, or notifications, and they are
+  dropped with the list they were read for;
 - observed CPU and resident memory usage;
 - extended per-process network byte counters (from `nettop`) and cumulative
   disk I/O byte counters (from the kernel's per-process resource usage) when

@@ -49,6 +49,8 @@ struct ProcessSortOrder: Hashable, Sendable {
 /// projection replaces every cache together, so no list can outlive its inventory.
 struct ProcessListProjection {
     let inventory: [AppProcess]
+    private let readCommandLines: ([AppProcess]) -> CommandLineSearchIndex
+    private var commandLineIndexCache: CommandLineSearchIndex?
 
     private struct DisplayListKey: Hashable {
         var query: ProcessListQuery
@@ -66,8 +68,14 @@ struct ProcessListProjection {
     private var displayListCache: [DisplayListKey: DisplayList] = [:]
     private var treeRootsCache: [DisplayListKey: [ProcessTreeNode]] = [:]
 
-    init(inventory: [AppProcess] = []) {
+    /// `readCommandLines` runs at most once per projection, and only for a
+    /// search; the real one reads the kernel.
+    init(
+        inventory: [AppProcess] = [],
+        readCommandLines: @escaping ([AppProcess]) -> CommandLineSearchIndex = { CommandLineSearchIndex.read(for: $0) }
+    ) {
         self.inventory = inventory
+        self.readCommandLines = readCommandLines
     }
 
     var ppidMap: [Int32: Int32] {
@@ -93,6 +101,8 @@ struct ProcessListProjection {
     struct DisplayList {
         var processes: [AppProcess]
         var matchCount: Int
+        /// The displayed rows that match the search only in their command line.
+        var commandLineMatches: Set<Int32> = []
     }
 
     /// The display limit applies after sorting, so it keeps the rows that rank
@@ -106,8 +116,23 @@ struct ProcessListProjection {
         if let cached = displayListCache[key] {
             return cached
         }
-        let matches = sortedInventory(by: order).filter(query.matches)
-        let result = DisplayList(processes: Array(matches.prefix(max(0, limit))), matchCount: matches.count)
+        let search = query.trimmedSearchText
+        let commandLines = search.isEmpty ? nil : commandLineIndex()
+        let commandLineQuery = CommandLineSearchIndex.Query(search)
+        var commandLineOnly: Set<Int32> = []
+        let matches = sortedInventory(by: order).filter { process in
+            guard query.matchesFilter(process) else { return false }
+            if query.matchesSearch(process) { return true }
+            guard let commandLines, commandLines.contains(commandLineQuery, in: process.pid) else { return false }
+            commandLineOnly.insert(process.pid)
+            return true
+        }
+        let shown = Array(matches.prefix(max(0, limit)))
+        let result = DisplayList(
+            processes: shown,
+            matchCount: matches.count,
+            commandLineMatches: commandLineOnly.intersection(shown.map(\.pid))
+        )
         if displayListCache.count >= Self.maximumQueryCacheEntries {
             displayListCache.removeAll(keepingCapacity: true)
         }
@@ -140,6 +165,13 @@ struct ProcessListProjection {
         }
         treeRootsCache[key] = roots
         return roots
+    }
+
+    private mutating func commandLineIndex() -> CommandLineSearchIndex {
+        if let cached = commandLineIndexCache { return cached }
+        let index = readCommandLines(inventory)
+        commandLineIndexCache = index
+        return index
     }
 
     // The same reads in a key's default direction.

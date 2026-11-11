@@ -14,6 +14,9 @@ struct ProcessRow: View {
     /// A tree ancestor shown only for hierarchy context: it does not match the
     /// search or filter.
     var isContextOnly: Bool = false
+    /// The search matched only the process's command line, which the row
+    /// does not show.
+    var matchedByCommandLine: Bool = false
     var stopAction: () -> Void
     var toggleSelection: () -> Void
 
@@ -51,10 +54,18 @@ struct ProcessRow: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text(process.displayCommand)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 3) {
+                    if matchedByCommandLine {
+                        Image(systemName: "text.magnifyingglass")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("The search matches this process's command line")
+                    }
+                    Text(process.displayCommand)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(processDescription)
@@ -192,6 +203,7 @@ struct ProcessRow: View {
         }
         if isHighlightedCPU { values.append("high CPU") }
         if isHighlightedMEM { values.append("high memory") }
+        if matchedByCommandLine { values.append("matches the search in its command line") }
         if let treeLevel { values.append("level \(treeLevel)") }
         if isContextOnly { values.append("shown for hierarchy, does not match the search or filter") }
         return values.joined(separator: ", ")
