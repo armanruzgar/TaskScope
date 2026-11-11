@@ -32,7 +32,7 @@ before installing.
 - Create watched-app presets with Open, Quit App, Quit Helpers, and Quit App
   and Helpers actions; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
-- Create Prompt, Auto Stop, or Log Only runtime rules and review their event history.
+- Create Prompt, Auto Stop, or Log Only rules on run time and sustained CPU or memory use, and review their event history.
 - View CPU and memory history and opt into watched-process notifications.
 - Use Shortcuts, a configurable global hotkey, and optional Launch at Login.
 - Inspect permissions and installation health, and preview redacted support reports.
@@ -217,7 +217,7 @@ window is open. All three rule actions require current-user ownership and
 exclude TaskScope and unsignalable PIDs.
 Auto Stop additionally requires a trusted executable path. Saved selections
 use executable paths and show a recall preview; a path-backed entry never falls
-back to name-only matching. See [rules](docs/USING_TASKSCOPE.md#runtime-rules)
+back to name-only matching. See [rules](docs/USING_TASKSCOPE.md#auto-stop-rules)
 and [saved selections](docs/USING_TASKSCOPE.md#saved-selections) for matching,
 retry, migration, and retention details. An unanswered name-only prompt follows
 a still-matching process when its executable moves; an explicit Dismiss remains

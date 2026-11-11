@@ -384,22 +384,45 @@ uses the same display name or app path, so delete or change that preset first.
 Importing an earlier export that contains the built-in preset also restores
 the built-in definition.
 
-## Runtime rules
+## Auto-Stop rules
 
 Create a rule under **Add Rule** in **Settings > Auto-Stop**: enter the process
-name, an executable path (required for Auto Stop), the runtime in minutes, and
-the action. Type the runtime (1 to 1,440 minutes, so at most 24 hours; a value
-outside that range is clamped) or adjust it with the arrows, here, in the Edit
-Auto-Stop Rule sheet, and in the quick rule sheet. You can also right-click a
-process and choose **Create Auto-Stop Rule…**. Once a matching process has run
-for the set time, **Prompt** asks you in an alert, even when no TaskScope
-window or popover is open; the alert shows how long the process has run.
+name, an executable path (required for Auto Stop), the rule's conditions, and
+the action. A rule acts once all of its conditions hold, and it needs at least
+one of them:
+
+- **Runtime minutes**: the process has run at least this long. Type the runtime
+  (1 to 1,440 minutes, so at most 24 hours; a value outside that range is
+  clamped) or adjust it with the arrows, here, in the Edit Auto-Stop Rule
+  sheet, and in the quick rule sheet. Its checkbox turns the condition off; the
+  minutes are kept for when you turn it back on.
+- **CPU at least** and **Memory at least**, under **More conditions** in the
+  Add Rule form and in the Edit Auto-Stop Rule sheet: the process's CPU use (as
+  `ps` reports it, where 100% is one full core; 1 to 10,000) or its resident
+  memory (1 to 1,048,576 MB) is at or above the value on **Checks in a row**
+  engine checks in a row (1 to 360, default 3). The engine checks every 10
+  seconds, so 3 checks take about 30 seconds; `ps` reports CPU as a decaying
+  average, so one high sample is not enough. A check below the value starts the
+  count over, a check sooner than 5 seconds after the last counted one adds
+  nothing, and after a gap of more than 30 seconds (sleep, or a process list
+  that could not be read) the count starts over. Checks count before a
+  run-time floor is reached. Changing the CPU or memory value or the number of
+  checks starts the count over; other edits, such as a new action, keep it.
+
+You can also right-click a process and choose **Create Auto-Stop Rule…**. That
+sheet sets the run time; updating a rule there keeps any CPU and memory
+conditions the rule has, and the sheet names them. Once a matching process
+meets the rule's conditions, **Prompt** asks you in an alert, even when no
+TaskScope window or popover is open; the alert says which conditions the
+process met, with its run time, CPU, or memory now.
 **Stop Now** stops it, and **Dismiss** leaves it running and stops reminders
 for that process until it restarts. **Auto Stop** stops it without asking;
 **Log Only** only records an event. Each row of the **Rules** list turns its
-rule on and off and has **Edit…**, **Duplicate**, and **Delete…** buttons, and
-a refused change is reported on that row. **Recent Events** lists every
-retained event, and **Clear…** empties it. Deleting a rule and clearing events
+rule on and off, shows its conditions and action, and has **Edit…**,
+**Duplicate**, and **Delete…** buttons, and a refused change is reported on
+that row. **Recent Events** lists every retained event, and **Clear…** empties
+it. An event of a rule with a CPU or memory condition has a **Matched:** line
+with the conditions the rule acted on. Deleting a rule and clearing events
 ask for confirmation first. [Signals each action sends](#signals-each-action-sends)
 lists what Prompt and Auto Stop send.
 
@@ -451,7 +474,8 @@ Rule edits revoke captured pre-signal authority without adding a failure event
 for the cancelled automatic stop. Edits that keep Auto Stop enabled and matching
 retain the occurrence's handled state and single-retry budget, including after
 delivery. A retry waits at least one engine cadence
-measured by a monotonic clock. Delivered requests remain in history even if
+measured by a monotonic clock. It belongs to the accepted request, so it does
+not wait for CPU or memory conditions to hold again. Delivered requests remain in history even if
 the rule is later edited, disabled, or deleted. If an Auto Stop rule is switched
 off, deleted, or edited so that it no longer applies while its process is still
 exiting, its retry is cancelled and the history records "The rule changed or was

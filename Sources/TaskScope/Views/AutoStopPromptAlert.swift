@@ -4,12 +4,37 @@ struct AutoStopPromptAlert: View {
     let prompt: AutoStopPrompt?
     let rules: AutoStopRulesStore
 
+    /// Says which of the rule's conditions the process met, with the values
+    /// it has now.
     static func message(for prompt: AutoStopPrompt) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.day, .hour, .minute, .second]
-        formatter.unitsStyle = .abbreviated
-        let runtime = prompt.process.runtimeSeconds.flatMap { formatter.string(from: $0) } ?? "an unknown duration"
-        return "\(prompt.process.name) (PID \(prompt.process.pid)) has run for \(runtime), beyond the \(prompt.rule.runtimeMinutes)-minute rule. Stop it now? Dismiss stops reminders for this process until it restarts."
+        let rule = prompt.rule
+        let process = prompt.process
+        var clauses: [String] = []
+        if rule.checksRuntime {
+            let formatter = DateComponentsFormatter()
+            formatter.allowedUnits = [.day, .hour, .minute, .second]
+            formatter.unitsStyle = .abbreviated
+            let runtime = process.runtimeSeconds.flatMap { formatter.string(from: $0) } ?? "an unknown duration"
+            clauses.append("has run for \(runtime), beyond the \(rule.runtimeMinutes)-minute rule")
+        }
+        if rule.hasSampledConditions {
+            let thresholds = [
+                rule.cpuPercentAtLeast.map { "\($0)% CPU" },
+                rule.memoryMBAtLeast.map { "\(AutoStopRule.megabytes($0)) of memory" },
+            ].compactMap { $0 }
+            let current = [
+                rule.cpuPercentAtLeast.map { _ in "\(Int(process.cpu.rounded()))% CPU" },
+                rule.memoryMBAtLeast.map { _ in AutoStopRule.megabytes(Int(process.memoryMB.rounded())) },
+            ].compactMap { $0 }
+            let span = rule.sustainedChecks == 1 ? "" : " for \(rule.sustainedChecks) checks in a row"
+            clauses.append(
+                "has used at least \(thresholds.joined(separator: " and "))\(span) (now \(current.joined(separator: " and ")))"
+            )
+        }
+        let condition = clauses.count > 1
+            ? clauses.dropLast().joined(separator: ", ") + ", and " + (clauses.last ?? "")
+            : clauses.first ?? "matched this rule"
+        return "\(process.name) (PID \(process.pid)) \(condition). Stop it now? Dismiss stops reminders for this process until it restarts."
     }
 
     var body: some View {

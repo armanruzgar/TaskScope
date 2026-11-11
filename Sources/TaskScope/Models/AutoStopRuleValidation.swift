@@ -3,6 +3,11 @@ import Foundation
 
 enum AutoStopRuleValidation {
     static let maximumRuntimeMinutes = 1_440
+    /// `ps` reports 100% per fully used core, so a busy process can exceed 100.
+    static let cpuPercentRange = 1...10_000
+    static let memoryMBRange = 1...1_048_576
+    /// At the 10-second engine cadence, up to an hour.
+    static let sustainedChecksRange = 1...360
 
     struct Failure: Error, Equatable {
         var message: String
@@ -49,6 +54,31 @@ enum AutoStopRuleValidation {
             return .failure(Failure(
                 message: "Runtime must be between 1 and \(maximumRuntimeMinutes) minutes."
             ))
+        }
+        // A rule from a newer build may test only a condition this build does
+        // not know; it is kept disabled and read-only, not refused.
+        guard normalized.checksRuntime || normalized.hasSampledConditions || normalized.hasUnknownFields else {
+            return .failure(Failure(message: "Choose at least one condition: run time, CPU, or memory."))
+        }
+        if let cpu = normalized.cpuPercentAtLeast, !cpuPercentRange.contains(cpu) {
+            return .failure(Failure(
+                message: "CPU must be between \(cpuPercentRange.lowerBound)% and \(cpuPercentRange.upperBound.formatted(.number))%."
+            ))
+        }
+        if let memory = normalized.memoryMBAtLeast, !memoryMBRange.contains(memory) {
+            return .failure(Failure(
+                message: "Memory must be between \(memoryMBRange.lowerBound) and \(AutoStopRule.megabytes(memoryMBRange.upperBound))."
+            ))
+        }
+        if normalized.hasSampledConditions {
+            guard sustainedChecksRange.contains(normalized.sustainedChecks) else {
+                return .failure(Failure(
+                    message: "Checks in a row must be between \(sustainedChecksRange.lowerBound) and \(sustainedChecksRange.upperBound)."
+                ))
+            }
+        } else {
+            // Unused without a CPU or memory condition, and not stored then.
+            normalized.sustainedChecks = AutoStopRule.defaultSustainedChecks
         }
         if normalized.action == .kill,
            normalized.isEnabled,

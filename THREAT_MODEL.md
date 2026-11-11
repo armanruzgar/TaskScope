@@ -154,6 +154,11 @@ Required invariants:
   and match that path again in the final inventory immediately before signal;
 - limit Prompt, Auto Stop, and Log Only candidates to current-user processes,
   excluding TaskScope and unsignalable PIDs;
+- treat CPU and memory conditions as further conditions only: they never relax
+  the ownership, self, unsignalable-PID, or trusted-path requirements, and
+  they must hold on several engine checks in a row, counted on a monotonic
+  clock, so neither one high sample nor an extra immediate pass can trigger a
+  stop;
 - wait at least one engine cadence on a monotonic clock before the single
   automatic retry, retaining its budget across edits that remain enabled,
   Auto Stop, and matching. An edit still revokes captured pre-signal authority;

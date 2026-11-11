@@ -15,7 +15,7 @@ struct SettingsView: View {
     @StateObject private var presetForm = WatchedPresetFormState()
     @State private var newRuleName = ""
     @State private var newRuleExecutablePath = ""
-    @State private var newRuleMinutes = 5
+    @State private var newRuleConditions = AutoStopConditionsDraft()
     @State private var newRuleAction: AutoStopRule.Action = .prompt
     @State private var editingRule: AutoStopRule?
     @State private var editingRuleError: String?
@@ -581,7 +581,7 @@ struct SettingsView: View {
                                     Text("Requires a newer build — disabled and read-only")
                                         .font(.caption).foregroundStyle(.secondary)
                                 }
-                                Text("After \(rule.runtimeMinutes) min — \(rule.action.label)")
+                                Text("\(rule.conditionSummary) — \(rule.action.label)")
                                     .font(.caption).foregroundStyle(.secondary)
                                 if let path = rule.executablePath {
                                     Text(path)
@@ -651,6 +651,11 @@ struct SettingsView: View {
                                 Text(event.detail)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
+                                if let conditions = event.conditions {
+                                    Text("Matched: \(conditions)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                             .padding(.vertical, 2)
                         }
@@ -681,20 +686,31 @@ struct SettingsView: View {
                 if let warning = AutoStopRuleValidation.pathWarning(newRuleExecutablePath) {
                     Text(warning).font(.caption).foregroundStyle(.orange)
                 }
-                RuntimeMinutesControl(minutes: $newRuleMinutes)
+                RuntimeMinutesControl(
+                    minutes: $newRuleConditions.runtimeMinutes,
+                    isChecked: $newRuleConditions.checksRuntime
+                )
+                DisclosureGroup(Self.moreConditionsTitle(newRuleConditions)) {
+                    AutoStopSampledConditionFields(conditions: $newRuleConditions)
+                }
+                if !newRuleConditions.hasCondition {
+                    Text(AutoStopConditionsDraft.missingConditionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Picker("Action", selection: $newRuleAction) {
                     ForEach(AutoStopRule.Action.allCases) { Text($0.label).tag($0) }
                 }
                 Button("Add Rule") {
-                    if autoStopRules.add(AutoStopRule(
+                    if autoStopRules.add(newRuleConditions.applied(to: AutoStopRule(
                         processName: newRuleName,
                         executablePath: newRuleExecutablePath,
-                        runtimeMinutes: newRuleMinutes,
+                        runtimeMinutes: newRuleConditions.runtimeMinutes,
                         action: newRuleAction
-                    )) {
+                    ))) {
                         newRuleName = ""
                         newRuleExecutablePath = ""
-                        newRuleMinutes = 5
+                        newRuleConditions = AutoStopConditionsDraft()
                         interactions.addRuleError = nil
                     } else {
                         interactions.addRuleError = autoStopRules.validationError
@@ -703,7 +719,10 @@ struct SettingsView: View {
                     autoStopRules.clearValidationError()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(newRuleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    newRuleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !newRuleConditions.hasCondition
+                )
 
                 // Only this form's own error: the store's shared message may
                 // belong to another window's rule sheet.
@@ -743,6 +762,16 @@ struct SettingsView: View {
     }
 
     static let noRulesMessage = "No rules yet. Add one below, or right-click a process and choose Create Auto-Stop Rule…"
+
+    /// The Add Rule form's CPU and memory section, with what it is set to while
+    /// it is collapsed.
+    static func moreConditionsTitle(_ conditions: AutoStopConditionsDraft) -> String {
+        // Run time has its own row above the section.
+        var sampled = conditions
+        sampled.checksRuntime = false
+        let rule = sampled.applied(to: AutoStopRule(processName: "", runtimeMinutes: 1, action: .prompt))
+        return rule.hasSampledConditions ? "More conditions: \(rule.conditionSummary)" : "More conditions"
+    }
 
     /// Shows a refusal at once; otherwise asks for confirmation before deleting.
     private func requestPresetDeletion(_ presets: [WatchedAppPreset]) {

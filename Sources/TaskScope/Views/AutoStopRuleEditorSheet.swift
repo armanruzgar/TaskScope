@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AutoStopRuleEditorSheet: View {
     @State private var draft: AutoStopRule
+    @State private var conditions: AutoStopConditionsDraft
     /// The store's rejection for the last save attempt, rendered inside the
     /// sheet where the user can see it.
     let validationError: String?
@@ -15,6 +16,7 @@ struct AutoStopRuleEditorSheet: View {
         onCancel: @escaping () -> Void
     ) {
         _draft = State(initialValue: rule)
+        _conditions = State(initialValue: AutoStopConditionsDraft(rule: rule))
         self.validationError = validationError
         self.onSave = onSave
         self.onCancel = onCancel
@@ -40,7 +42,10 @@ struct AutoStopRuleEditorSheet: View {
                     prompt: Text("Required for Auto Stop")
                 )
 
-                RuntimeMinutesControl(minutes: $draft.runtimeMinutes)
+                Section("Conditions (all must hold)") {
+                    RuntimeMinutesControl(minutes: $conditions.runtimeMinutes, isChecked: $conditions.checksRuntime)
+                    AutoStopSampledConditionFields(conditions: $conditions)
+                }
 
                 Picker("Action", selection: $draft.action) {
                     ForEach(AutoStopRule.Action.allCases) { action in
@@ -56,6 +61,12 @@ struct AutoStopRuleEditorSheet: View {
                 Text(warning).font(.caption).foregroundStyle(.orange)
             }
 
+            if !conditions.hasCondition {
+                Text(AutoStopConditionsDraft.missingConditionMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             if let validationError {
                 Text(validationError)
                     .font(.caption)
@@ -67,13 +78,16 @@ struct AutoStopRuleEditorSheet: View {
                 Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Button("Save") { onSave(draft) }
+                Button("Save") { onSave(conditions.applied(to: draft)) }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(draft.processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(
+                        draft.processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            || !conditions.hasCondition
+                    )
             }
         }
         .padding(20)
-        .frame(width: 460, height: 440)
+        .frame(width: 520, height: 600)
     }
 }

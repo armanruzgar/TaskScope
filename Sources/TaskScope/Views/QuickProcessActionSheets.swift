@@ -173,14 +173,15 @@ enum QuickAutoStopRuleSaver {
         if let existing = existingRule {
             let enablesRule = enablesDisabledRule(existingRule: existing, action: action, executablePath: executablePath)
             let isEnabled = existing.isEnabled || enablesRule
-            guard rules.update(AutoStopRule(
-                id: existing.id,
-                processName: trimmedName,
-                executablePath: executablePath,
-                runtimeMinutes: runtimeMinutes,
-                action: action,
-                isEnabled: isEnabled
-            )) else {
+            // The sheet edits the name, scope, run time and action; any CPU
+            // and memory conditions the rule has are kept as they are.
+            var updated = existing
+            updated.processName = trimmedName
+            updated.executablePath = executablePath
+            updated.runtimeMinutes = runtimeMinutes
+            updated.action = action
+            updated.isEnabled = isEnabled
+            guard rules.update(updated) else {
                 return Outcome(error: rules.validationError ?? "The auto-stop rule could not be updated.")
             }
             let status = enablesRule
@@ -251,7 +252,16 @@ struct QuickAutoStopRuleSheet: View {
             Form {
                 TextField("Process name", text: $form.processName)
 
-                RuntimeMinutesControl(minutes: $form.runtimeMinutes)
+                // A rule that does not test run time keeps it off here.
+                if existingRule?.checksRuntime ?? true {
+                    RuntimeMinutesControl(minutes: $form.runtimeMinutes)
+                }
+                if let note = Self.otherConditionsNote(for: existingRule) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Picker("Action", selection: $form.action) {
                     ForEach(AutoStopRule.Action.allCases) { action in
@@ -339,6 +349,13 @@ struct QuickAutoStopRuleSheet: View {
     /// An unknown owner counts as another user's: the engine never matches it.
     private var isOwnedByCurrentUser: Bool {
         process.uid == currentUID
+    }
+
+    /// The sheet edits only run time among the conditions; it names the
+    /// others a rule has, which an update keeps.
+    static func otherConditionsNote(for rule: AutoStopRule?) -> String? {
+        guard let rule, !rule.isRuntimeOnly else { return nil }
+        return "This rule's conditions: \(rule.conditionSummary). Updating keeps them; change them in Settings > Auto-Stop."
     }
 
     static func otherOwnerExplanation(processName: String) -> String {

@@ -558,7 +558,10 @@ final class AutoStopRulesStore: ObservableObject {
                 pid: record.prompt.process.pid,
                 ruleID: record.prompt.rule.id,
                 outcome: record.outcome,
-                detail: record.detail
+                detail: record.detail,
+                // Says which conditions the rule acted on; a run-time rule's
+                // records say so already.
+                conditions: record.prompt.rule.isRuntimeOnly ? nil : record.prompt.rule.conditionSummary
             ))
         }
         let previous = events
@@ -583,9 +586,14 @@ final class AutoStopRulesStore: ObservableObject {
         return AutoStopRuleValidation.pathsMatch(rulePath, processPath)
     }
 
+    /// Whether `rule` would stop `process`: an enabled Auto Stop rule that
+    /// matches it, with its run-time floor reached. The CPU and memory
+    /// conditions are judged over several checks, so an edit or a returning
+    /// stop does not re-judge them here.
     private func qualifiesForAutomaticStop(_ rule: AutoStopRule, process: AppProcess, at sample: UptimeSample) -> Bool {
-        rule.isEnabled && rule.action == .kill && matches(rule, process: process)
-            && (ruleRuntime(of: process, at: sample) ?? 0) >= TimeInterval(rule.runtimeMinutes) * 60
+        guard rule.isEnabled, rule.action == .kill, matches(rule, process: process),
+              let runtime = ruleRuntime(of: process, at: sample) else { return false }
+        return rule.runtimeFloorSeconds.map { runtime >= $0 } ?? true
     }
 
     private func recordUptime() -> UptimeSample {

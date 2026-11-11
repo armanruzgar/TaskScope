@@ -69,8 +69,9 @@ TaskScope uses standard macOS preferences for:
 - saved selections, including process names, executable/command paths, and the
   PID and process start time captured when saved;
 - auto-stop rules, including an optional executable path (required for enabled
-  automatic stopping), and up to 200 recent event records, which can include
-  process name, PID, time, outcome, and result detail;
+  automatic stopping) and their run-time, CPU, and memory conditions, and up to
+  200 recent event records, which can include process name, PID, time,
+  outcome, result detail, and the conditions the rule acted on;
 - global hotkey and onboarding state, including a pending hotkey migration
   notice retained until dismissal or successful shortcut recording;
 - preserved `.corruptBackup` payloads for unreadable stored data and

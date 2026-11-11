@@ -89,6 +89,34 @@ struct AutoStopOccurrenceLedger {
         var prompt: AutoStopPrompt
     }
 
+    /// Engine checks in a row on which a rule's CPU and memory conditions held
+    /// for an occurrence.
+    struct Streak: Equatable {
+        var count: Int
+        /// The check that last added to `count`.
+        var lastCounted: ContinuousClock.Instant
+
+        /// The streak after one more check. A check that fails ends it. One that
+        /// comes less than half an engine cadence after the last counted check
+        /// (the immediate pass a rule edit starts, say) cannot shorten the
+        /// sustained window, so it adds nothing. A gap of more than three
+        /// cadences (sleep, or unreadable process lists) means the checks
+        /// were not in a row, so the streak starts over.
+        static func after(
+            _ streak: Streak?,
+            holds: Bool,
+            at now: ContinuousClock.Instant,
+            cadence: Duration
+        ) -> Streak? {
+            guard holds else { return nil }
+            guard let streak else { return Streak(count: 1, lastCounted: now) }
+            let gap = streak.lastCounted.duration(to: now)
+            if gap > cadence * 3 { return Streak(count: 1, lastCounted: now) }
+            guard gap >= cadence / 2 else { return streak }
+            return Streak(count: streak.count + 1, lastCounted: now)
+        }
+    }
+
     struct Entry: Equatable {
         var state: State?
         /// The user dismissed this occurrence's prompt. Dismiss is the user's
@@ -102,6 +130,9 @@ struct AutoStopOccurrenceLedger {
         /// would still stop this process. Nil once an edit, a deletion or a
         /// moved executable ended that claim.
         var target: AppProcess?
+        /// The checks in a row on which the rule's CPU and memory conditions
+        /// held; nil for a rule without them or after a check where they failed.
+        var streak: Streak?
     }
 
     private(set) var entries: [AutoStopOccurrence: Entry] = [:]
@@ -195,6 +226,7 @@ struct AutoStopOccurrenceLedger {
             existing.isDismissed = existing.isDismissed || entry.isDismissed
             if existing.state == nil { existing.state = entry.state }
             if existing.target == nil { existing.target = entry.target }
+            if existing.streak == nil { existing.streak = entry.streak }
             followed[key] = existing
         }
 
@@ -290,12 +322,24 @@ struct AutoStopOccurrenceLedger {
         let activeRules = rules.filter(\.isEnabled)
         var dueStops: [AutoStopDueStop] = []
         for process in processes {
+            // A process whose run time cannot be read safely (no kernel start
+            // time) is not acted on by any rule, whatever its conditions.
             guard let runtime = runtime(process) else { continue }
             for rule in activeRules where matches(rule, process) {
                 let occurrence = AutoStopOccurrence(ruleID: rule.id, processIdentity: process.identity)
                 var entry = entries[occurrence] ?? Entry()
-                guard runtime >= TimeInterval(rule.runtimeMinutes) * 60,
-                      rule.action != .prompt || !entry.isDismissed else { continue }
+                // CPU and memory are counted on every check, also before the
+                // run-time floor is reached: the floor is a further condition.
+                if rule.hasSampledConditions {
+                    entry.streak = Streak.after(
+                        entry.streak, holds: rule.sampledConditionsHold(for: process), at: now, cadence: cadence
+                    )
+                }
+                guard rule.runtimeFloorSeconds.map({ runtime >= $0 }) ?? true,
+                      rule.action != .prompt || !entry.isDismissed else {
+                    put(entry, at: occurrence)
+                    continue
+                }
 
                 if rule.action == .kill, entry.state != nil { entry.target = process }
                 // A queued prompt shows the process as it is now, not as it was
@@ -308,11 +352,17 @@ struct AutoStopOccurrenceLedger {
 
                 if let state = entry.state, state.isHandled {
                     // Already acted on. The only follow-up is a single re-signal
-                    // of an automatic stop whose target has not exited yet.
+                    // of an automatic stop whose target has not exited yet; it
+                    // belongs to the accepted request, so it does not wait for
+                    // the CPU and memory conditions again.
                     if rule.action == .kill, case .awaitingExit(let waiting) = state, waiting.canRetry,
                        waiting.since.duration(to: now) >= cadence {
                         dueStops.append(AutoStopDueStop(rule: rule, process: process, occurrence: occurrence, isRetry: true))
                     }
+                    put(entry, at: occurrence)
+                    continue
+                }
+                guard !rule.hasSampledConditions || (entry.streak?.count ?? 0) >= rule.sustainedChecks else {
                     put(entry, at: occurrence)
                     continue
                 }
@@ -331,7 +381,10 @@ struct AutoStopOccurrenceLedger {
                     if canLogDurably {
                         entry.state = .logged
                         records.append(AutoStopRecord(
-                            prompt: prompt, outcome: .logged, detail: "Runtime threshold reached.", isDurable: true
+                            prompt: prompt,
+                            outcome: .logged,
+                            detail: rule.isRuntimeOnly ? "Runtime threshold reached." : "Conditions met.",
+                            isDurable: true
                         ))
                     }
                 }
@@ -602,16 +655,22 @@ struct AutoStopOccurrenceLedger {
     /// confirmed stop stays tracked until its process exits: the user already
     /// answered for that occurrence. Auto Stop progress stays only for targets
     /// the edited rule would still stop (`stillApplies`); an accepted request
-    /// that loses its tracking gets a closing record.
+    /// that loses its tracking gets a closing record. Checks counted toward
+    /// the CPU and memory conditions start over only when those conditions
+    /// changed.
     mutating func ruleChanged(
         old: AutoStopRule,
         new: AutoStopRule,
         stillApplies: (AppProcess) -> Bool
     ) -> [AutoStopRecord] {
         assert(old.id == new.id, "A rule change keeps the rule's identity.")
+        let sampledConditionsChanged = old.cpuPercentAtLeast != new.cpuPercentAtLeast
+            || old.memoryMBAtLeast != new.memoryMBAtLeast
+            || old.sustainedChecks != new.sustainedChecks
         var records: [(AwaitingExit, AutoStopRecord)] = []
         for (occurrence, original) in entries where occurrence.ruleID == new.id {
             var entry = original
+            if sampledConditionsChanged { entry.streak = nil }
             let isRetained = entry.target.map(stillApplies) ?? false
             if !isRetained { entry.target = nil }
             switch entry.state {
@@ -650,6 +709,7 @@ struct AutoStopOccurrenceLedger {
             var entry = original
             entry.isDismissed = false
             entry.target = nil
+            entry.streak = nil
             switch entry.state {
             case .awaitingExit(let waiting)? where waiting.isConfirmed:
                 break
@@ -683,12 +743,12 @@ struct AutoStopOccurrenceLedger {
 
     // MARK: - Storage
 
-    /// Stores an entry, dropping it once it holds nothing: no state and no
-    /// dismissal. A target alone is never kept.
+    /// Stores an entry, dropping it once it holds nothing: no state, no
+    /// dismissal and no streak. A target alone is never kept.
     private mutating func put(_ entry: Entry, at key: AutoStopOccurrence) {
         var entry = entry
         if entry.state == nil { entry.target = nil }
-        entries[key] = entry.state == nil && !entry.isDismissed ? nil : entry
+        entries[key] = entry.state == nil && !entry.isDismissed && entry.streak == nil ? nil : entry
     }
 
     private static func sorted(_ records: [(AwaitingExit, AutoStopRecord)]) -> [AutoStopRecord] {
