@@ -10,14 +10,14 @@ final class ProcessSortOrderTests: XCTestCase {
         _ pid: Int32,
         name: String,
         parent: Int32 = 1,
-        uid: uid_t? = 501,
+        owner: String? = "alex",
         cpu: Double = 0,
         memory: Double = 1,
         net: (Double, Double)? = nil,
         disk: (Double, Double)? = nil
     ) -> AppProcess {
         var row = AppProcess(
-            pid: pid, parentPID: parent, uid: uid, cpu: cpu, memoryMB: memory,
+            pid: pid, parentPID: parent, uid: 501, ownerName: owner, cpu: cpu, memoryMB: memory,
             command: name, elapsedTime: "00:01", startTime: "Wed Oct 7 17:04:47 2026",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
         )
@@ -64,10 +64,10 @@ final class ProcessSortOrderTests: XCTestCase {
 
     func testEveryKeySortsBothWaysWithMissingValuesLastAndStableTies() {
         let rows = [
-            process(10, name: "Delta", parent: 7, uid: 0, cpu: 5, memory: 30, net: (1, 1), disk: (100, 0)),
-            process(11, name: "alpha", parent: 3, uid: 501, cpu: 50, memory: 10, net: nil, disk: (5, 5)),
-            process(12, name: "Charlie", parent: 9, uid: nil, cpu: 0, memory: 20, net: (10, 30), disk: nil),
-            process(13, name: "Bravo", parent: 3, uid: 501, cpu: 0, memory: 20, net: (2, 0), disk: (0, 1))
+            process(10, name: "Delta", parent: 7, owner: "root", cpu: 5, memory: 30, net: (1, 1), disk: (100, 0)),
+            process(11, name: "alpha", parent: 3, owner: "alex", cpu: 50, memory: 10, net: nil, disk: (5, 5)),
+            process(12, name: "Charlie", parent: 9, owner: nil, cpu: 0, memory: 20, net: (10, 30), disk: nil),
+            process(13, name: "Bravo", parent: 3, owner: "alex", cpu: 0, memory: 20, net: (2, 0), disk: (0, 1))
         ]
         var projection = ProcessListProjection(inventory: rows.shuffled())
         func order(_ key: ProcessSortKey, _ direction: ProcessSortDirection) -> [Int32] {
@@ -89,10 +89,9 @@ final class ProcessSortOrderTests: XCTestCase {
         XCTAssertEqual(order(.network, .ascending), [13, 10, 12, 11], "missing values stay last")
         XCTAssertEqual(order(.disk, .descending), [10, 11, 13, 12])
         XCTAssertEqual(order(.disk, .ascending), [13, 11, 10, 12], "missing values stay last")
-        // Owners by account name: root before the 501 account; an unknown owner last.
-        let rootFirst = ProcessOwnerNames.name(for: 0).localizedStandardCompare(ProcessOwnerNames.name(for: 501)) == .orderedAscending
-        XCTAssertEqual(order(.user, .ascending), rootFirst ? [10, 11, 13, 12] : [11, 13, 10, 12])
-        XCTAssertEqual(order(.user, .descending), rootFirst ? [11, 13, 10, 12] : [10, 11, 13, 12])
+        // Owners by the rows' account names, alex before root; an unknown owner last.
+        XCTAssertEqual(order(.user, .ascending), [11, 13, 10, 12])
+        XCTAssertEqual(order(.user, .descending), [10, 11, 13, 12])
     }
 
     /// The limit applies after sorting, and the cached lists, matches and tree

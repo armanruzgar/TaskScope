@@ -201,6 +201,7 @@ final class Batch05ReaderFixTests: XCTestCase {
                 return 123
             },
             processTable: { processTable },
+            ownerName: { $0 == 0 ? "root" : "alex" },
             diskIO: { $0 == 42 ? (4096, 8192) : nil },
             currentPID: 42
         )
@@ -251,6 +252,7 @@ final class Batch05ReaderFixTests: XCTestCase {
         let rows = try await read([shellResult(list)], table: table(live: [42])).get()
 
         XCTAssertEqual(rows.map(\.pid), [42])
+        XCTAssertEqual(rows[0].ownerName, "alex", "the read names each row's owner")
         XCTAssertEqual(rows[0].monotonicStart, .uptimeNanoseconds(123))
         XCTAssertEqual(rows[0].isZombie, false)
         XCTAssertFalse(rows[0].hasExited, "A live process can call itself <defunct>; argv is not exit evidence")
@@ -271,6 +273,7 @@ final class Batch05ReaderFixTests: XCTestCase {
         XCTAssertNil(rows[1].netOutKB)
         XCTAssertNil(rows[1].diskReadBytes)
         XCTAssertNil(rows[1].diskWriteBytes)
+        XCTAssertEqual(rows[1].ownerName, "root")
         XCTAssertFalse(rows[1].hasExited)
         XCTAssertEqual(rows[1].monotonicStart, .notRead)
 

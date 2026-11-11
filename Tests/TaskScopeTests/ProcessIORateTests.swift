@@ -103,7 +103,7 @@ final class ProcessIORateTests: XCTestCase {
 final class ProcessDetailRowsTests: XCTestCase {
     func testWindowRowsShowTheOwnerAndRatesAndThePopoverDoesNot() throws {
         var process = Batch10.process(51)
-        process.uid = 0
+        process.ownerName = "root"
         process.netInRateKBps = 12.5
         process.netOutRateKBps = 0.25
         func row(_ expanded: Bool) -> ProcessRow {
@@ -123,6 +123,15 @@ final class ProcessDetailRowsTests: XCTestCase {
         process.diskWriteBytes = 0
         XCTAssertTrue(try row(true).inspect().find(ViewType.VStack.self).accessibilityValue().string()
             .contains("disk rate shown after the next refresh"))
+
+        // A row without a name shows a dash: drawing never looks one up, so
+        // fixed data (README screenshots) cannot show this Mac's account name.
+        process.uid = getuid()
+        process.ownerName = nil
+        let unnamed = try row(true).inspect()
+        XCTAssertNoThrow(try unnamed.find(text: "—"))
+        XCTAssertThrowsError(try unnamed.find(text: ProcessOwnerNames.name(for: getuid())))
+        XCTAssertTrue(try unnamed.find(ViewType.VStack.self).accessibilityValue().string().contains("user unknown"))
     }
 
     func testDetailSheetShowsEveryNewRowSelectably() throws {

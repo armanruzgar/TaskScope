@@ -68,6 +68,7 @@ final class AuditLeadListTests: XCTestCase {
     func testExpandedRowSummaryReadsParentNetworkAndDisk() throws {
         var process = listProcess(pid: 4_816, command: "Example", path: "/Applications/Example.app/Contents/MacOS/Example")
         process.parentPID = 1_288
+        process.ownerName = "alex"
         process.netInKB = 12.5
         process.netOutKB = 3.5
         process.diskReadBytes = 2 * 1_048_576
@@ -87,7 +88,7 @@ final class AuditLeadListTests: XCTestCase {
         }
         XCTAssertEqual(
             try summary(expanded: true),
-            "CPU 1.0 percent, memory 128 megabytes, parent PID 1288, user \(ProcessOwnerNames.name(for: getuid())), "
+            "CPU 1.0 percent, memory 128 megabytes, parent PID 1288, user alex, "
                 + "network received 12.5, sent 3.5 kilobytes per second, disk read 2.0, written 0.5 megabytes per second"
         )
         XCTAssertEqual(try summary(expanded: false), "CPU 1.0 percent, memory 128 megabytes",

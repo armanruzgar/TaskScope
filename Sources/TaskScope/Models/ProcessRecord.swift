@@ -18,6 +18,11 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     /// A protected process name is treated as the protected *system* daemon only
     /// when this is 0; an unknown uid is never promoted to root.
     var uid: uid_t?
+    /// The owner's account name, which the User column shows and sorts by.
+    /// The live inventory fills it in when it reads the list; the list never
+    /// looks a name up while it draws, so a row built from fixed data shows
+    /// only the name it was given.
+    var ownerName: String?
     var cpu: Double
     var memoryMB: Double
     var command: String {
@@ -62,6 +67,7 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         pid: Int32,
         parentPID: Int32,
         uid: uid_t? = nil,
+        ownerName: String? = nil,
         cpu: Double,
         memoryMB: Double,
         command: String,
@@ -78,6 +84,7 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         self.pid = pid
         self.parentPID = parentPID
         self.uid = uid
+        self.ownerName = ownerName
         self.cpu = cpu
         self.memoryMB = memoryMB
         self.command = command
@@ -119,11 +126,6 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     var diskSortValue: Double? {
         guard let diskReadRateBytesPerSecond, let diskWriteRateBytesPerSecond else { return nil }
         return diskReadRateBytesPerSecond + diskWriteRateBytesPerSecond
-    }
-
-    /// The owner's account name, as the User column shows it.
-    var ownerName: String? {
-        uid.map { ProcessOwnerNames.name(for: $0) }
     }
 
     /// `command` is the argv-backed `ps comm` value. An absolute path names its

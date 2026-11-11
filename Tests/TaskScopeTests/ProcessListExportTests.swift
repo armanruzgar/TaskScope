@@ -7,9 +7,9 @@ import XCTest
 /// L11-19 part 4: the visible rows and columns as tab-separated text or CSV,
 /// never with a command line.
 final class ProcessListTableTests: XCTestCase {
-    private func row(_ pid: Int32, name: String = "Worker", path: String? = "/usr/bin/worker", uid: uid_t? = 0) -> AppProcess {
+    private func row(_ pid: Int32, name: String = "Worker", path: String? = "/usr/bin/worker", owner: String? = "root") -> AppProcess {
         var process = AppProcess(
-            pid: pid, parentPID: 1, uid: uid, cpu: 12.34, memoryMB: 256.6,
+            pid: pid, parentPID: 1, uid: 0, ownerName: owner, cpu: 12.34, memoryMB: 256.6,
             command: path ?? name, executablePath: path, elapsedTime: "00:01", startTime: "",
             netInKB: nil, netOutKB: nil, diskReadBytes: nil, diskWriteBytes: nil
         )
@@ -30,7 +30,7 @@ final class ProcessListTableTests: XCTestCase {
     }
 
     func testTabSeparatedTextHasTitlesAndTheListsValues() {
-        let table = ProcessListTable(columns: ProcessListTable.columns(expandedWindow: true), rows: [row(42), row(43, uid: nil)])
+        let table = ProcessListTable(columns: ProcessListTable.columns(expandedWindow: true), rows: [row(42), row(43, owner: nil)])
         XCTAssertEqual(table.tabSeparated, """
         Name\tPID\tExecutable\tPPID\tUser\tNet In KB/s\tNet Out KB/s\tDisk Read MB/s\tDisk Write MB/s\tCPU %\tMemory MB
         worker\t42\t/usr/bin/worker\t1\troot\t1.2\t0.5\t\t\t12.3\t257

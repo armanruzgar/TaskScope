@@ -57,6 +57,7 @@ enum ProcessListReader {
         executablePath: @Sendable (Int32) -> String? = { executablePath(for: $0) },
         startUptime: @Sendable (Int32) -> UInt64? = { startUptimeNanoseconds(for: $0) },
         processTable: @Sendable () -> KernelProcessTable.TableRead = { KernelProcessTable.allEntries() },
+        ownerName: @Sendable (uid_t) -> String? = { ProcessOwnerNames.name(for: $0) },
         diskIO: @Sendable (Int32) -> (read: Double, written: Double)? = { diskIOBytes(for: $0) },
         currentPID: Int32 = ProcessInfo.processInfo.processIdentifier
     ) async -> Result<[AppProcess], ProcessInventoryError> {
@@ -127,9 +128,12 @@ enum ProcessListReader {
 
         // Exit is decided from the table's process state, never from `comm`,
         // which is argv-backed: a live process can call itself `<defunct>`.
-        // Every row left has a running process.
+        // Every row left has a running process. Owner names are looked up
+        // here, once per user id, so the list never resolves one while it
+        // draws.
         for index in parsed.indices {
             parsed[index].isZombie = false
+            parsed[index].ownerName = parsed[index].uid.flatMap(ownerName)
         }
 
         if fetchExtendedStats {

@@ -60,7 +60,7 @@ struct ProcessListProjection {
 
     private var sortedInventoryCache: (order: ProcessSortOrder, processes: [AppProcess])?
     private var nameRanksCache: [String: Int]?
-    private var ownerRanksCache: [uid_t: Int]?
+    private var ownerRanksCache: [String: Int]?
     /// A body pass needs one key per open presentation (flat and tree), so a
     /// few entries suffice. Without a cap, every search keystroke, slider step
     /// and filter kept its list until the next inventory replaced the caches.
@@ -218,7 +218,7 @@ struct ProcessListProjection {
                 SortEntry(
                     process: process,
                     nameRank: names[process.name] ?? 0,
-                    ownerRank: process.uid.flatMap { owners[$0] }
+                    ownerRank: process.ownerName.flatMap { owners[$0] }
                 )
             }
             .sorted { lhs, rhs in
@@ -266,17 +266,16 @@ struct ProcessListProjection {
         }
     }
 
-    /// Natural order of the owners' account names as ranks, one per user id.
-    private mutating func ownerRanks() -> [uid_t: Int] {
+    /// Natural order of the rows' owner names as ranks. The names come with
+    /// the rows, so sorting looks nothing up.
+    private mutating func ownerRanks() -> [String: Int] {
         if let cached = ownerRanksCache { return cached }
-        let owners = Set(inventory.compactMap(\.uid))
-            .map { (uid: $0, name: ProcessOwnerNames.name(for: $0)) }
-            .sorted {
-                let comparison = $0.name.localizedStandardCompare($1.name)
-                return comparison == .orderedSame ? $0.uid < $1.uid : comparison == .orderedAscending
-            }
+        let names = Set(inventory.compactMap(\.ownerName)).sorted {
+            let comparison = $0.localizedStandardCompare($1)
+            return comparison == .orderedSame ? $0 < $1 : comparison == .orderedAscending
+        }
         let ranks = Dictionary(
-            owners.enumerated().map { ($0.element.uid, $0.offset) },
+            names.enumerated().map { ($0.element, $0.offset) },
             uniquingKeysWith: { first, _ in first }
         )
         ownerRanksCache = ranks
