@@ -45,6 +45,12 @@ assert_no_test_preferences() {
 cleanup_test() {
   local exit_code="$?"
 
+  # bash 3.2 runs the EXIT trap with status 0 after a `set -u` abort, so only
+  # a run that reached its last check may pass.
+  if [[ "$exit_code" -eq 0 && "${PACKAGING_TESTS_FINISHED:-0}" -ne 1 ]]; then
+    echo "Packaging tests stopped before they finished." >&2
+    exit_code=1
+  fi
   if ! assert_no_test_preferences; then
     [[ "$exit_code" -ne 0 ]] || exit_code=1
   fi
@@ -74,7 +80,8 @@ source "$COMMON_SCRIPT"
     taskscope_wait_for_process_identity "$identity_test_pid" 20 /bin/sleep
   )"
   identity_test_executable="$(taskscope_process_executable_path "$identity_test_pid")"
-  trap 'taskscope_signal_process_if_identity_matches KILL "$identity_test_pid" "$identity_test_value" "$identity_test_executable" >/dev/null 2>&1 || true' EXIT
+  # Each case removes its trap on success, so the trap marks a failure.
+  trap 'taskscope_signal_process_if_identity_matches KILL "$identity_test_pid" "$identity_test_value" "$identity_test_executable" >/dev/null 2>&1 || true; exit 1' EXIT
 
   if taskscope_signal_process_if_identity_matches \
     TERM "$identity_test_pid" "not-the-captured-identity" \
@@ -105,7 +112,7 @@ source "$COMMON_SCRIPT"
     taskscope_wait_for_process_identity "$forged_pid" 20 "$forged_executable"
   )"
   actual_executable="$(taskscope_process_executable_path "$forged_pid")"
-  trap 'taskscope_signal_process_if_identity_matches KILL "$forged_pid" "$forged_identity" "$actual_executable" >/dev/null 2>&1 || true' EXIT
+  trap 'taskscope_signal_process_if_identity_matches KILL "$forged_pid" "$forged_identity" "$actual_executable" >/dev/null 2>&1 || true; exit 1' EXIT
 
   forged_command=""
   for _ in {1..20}; do
@@ -147,7 +154,7 @@ source "$COMMON_SCRIPT"
   expected_identity="$(
     taskscope_wait_for_process_identity "$expected_pid" 20 "$expected_executable"
   )"
-  trap 'taskscope_signal_process_if_identity_matches KILL "$expected_pid" "$expected_identity" "$expected_executable" >/dev/null 2>&1 || true' EXIT
+  trap 'taskscope_signal_process_if_identity_matches KILL "$expected_pid" "$expected_identity" "$expected_executable" >/dev/null 2>&1 || true; exit 1' EXIT
 
   taskscope_stop_processes_for_executable "$expected_executable"
   if /bin/kill -0 "$expected_pid" >/dev/null 2>&1; then
@@ -169,7 +176,7 @@ source "$COMMON_SCRIPT"
   "$unicode_executable" 30 &
   unicode_pid="$!"
   # The PID stays this shell's child until it is waited for, so it cannot be reused.
-  trap '/bin/kill -KILL "$unicode_pid" 2>/dev/null || true; wait "$unicode_pid" 2>/dev/null || true' EXIT
+  trap '/bin/kill -KILL "$unicode_pid" 2>/dev/null || true; wait "$unicode_pid" 2>/dev/null || true; exit 1' EXIT
   if ! LC_ALL=C LANG= taskscope_wait_for_process_identity \
     "$unicode_pid" 40 "$unicode_executable" >/dev/null; then
     echo "Process identity capture failed for a non-ASCII path in the C locale." >&2
@@ -628,4 +635,5 @@ if [[ "$(checkout_state)" != "$CHECKOUT_STATE" ]]; then
   exit 1
 fi
 
+PACKAGING_TESTS_FINISHED=1
 echo "Packaging tests passed."

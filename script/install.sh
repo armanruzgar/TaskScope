@@ -46,10 +46,18 @@ PACKAGING_LOCK="$STAGING_DIR/.$APP_NAME.package.lock"
 PACKAGING_LOCK_ACQUIRED=0
 INSTALL_STATE="preparing"
 DESTINATION_STOPPED=0
+# Set only where the installer deliberately finishes; see cleanup_install.
+INSTALL_FINISHED=0
 
 cleanup_install() {
   local exit_code="$?"
 
+  # bash 3.2 runs the EXIT trap with status 0 after a `set -u` abort, so a
+  # run that stopped before a deliberate finish must still fail and roll back.
+  if [[ "$exit_code" -eq 0 && "${INSTALL_FINISHED:-0}" -ne 1 ]]; then
+    echo "The installer stopped before it finished." >&2
+    exit_code=1
+  fi
   if [[ "$exit_code" -ne 0 ]]; then
     case "$INSTALL_STATE" in
       backing-up|backed-up|replacing|replaced)
@@ -234,8 +242,10 @@ if [[ "$OPEN_AFTER_INSTALL" -eq 1 ]]; then
   if ! taskscope_require_no_other_app_instance "$DEST_BUNDLE" "$BUNDLE_ID" \
     || ! /usr/bin/open "$DEST_BUNDLE"; then
     echo "Installed $DEST_BUNDLE; it could not be opened. Open it manually after resolving the launch conflict." >&2
+    INSTALL_FINISHED=1
     exit 0
   fi
 fi
 
 echo "Installed $DEST_BUNDLE"
+INSTALL_FINISHED=1

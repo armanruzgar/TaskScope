@@ -10,7 +10,19 @@ while IFS= read -r git_variable; do unset "$git_variable"; done < <(git rev-pars
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-release-evidence.XXXXXX")"
-trap 'rm -rf "$TEST_DIR"' EXIT
+# bash 3.2 runs an EXIT trap with status 0 after a `set -u` abort, so only a
+# run that reached a deliberate finish may pass.
+TESTS_FINISHED=0
+finish_tests() {
+  local status="$?"
+  rm -rf "$TEST_DIR"
+  if [[ "$status" -eq 0 && "${TESTS_FINISHED:-0}" -ne 1 ]]; then
+    echo "Release compatibility tests stopped before they finished." >&2
+    status=1
+  fi
+  exit "$status"
+}
+trap finish_tests EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -473,6 +485,13 @@ case "$LEAK" in
   main) printf 'synthetic preferences\n' > "$TEST_PREFERENCES_DIR/$TEST_BUNDLE_ID.plist" ;;
   byhost) printf 'synthetic preferences\n' > "$TEST_PREFERENCES_DIR/ByHost/$TEST_BUNDLE_ID.fake-host.plist" ;;
 esac
+# A crash: an unbound variable aborts the run before it finishes. (In a
+# condition, such as the right side of ||, bash 3.2 would not abort.)
+unset TASKSCOPE_UNSET_FOR_TEST
+if [[ "${CRASH:-0}" -eq 1 ]]; then
+  : "$TASKSCOPE_UNSET_FOR_TEST"
+fi
+PACKAGING_TESTS_FINISHED=1
 exit "${TEST_EXIT:-0}"
 EOF
   for leak in main byhost none; do
@@ -497,6 +516,16 @@ EOF
   FIXTURE="$fixture" CLEANUP_DEFINITIONS="$definitions" TOOL_LOG="$TOOL_LOG" LEAK=none TEST_EXIT=31 \
     bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
   [[ "$status" -eq 31 ]] || { echo 'Packaging cleanup hid an earlier test failure.' >&2; exit 1; }
+  # /bin/bash 3.2 runs the trap with status 0 after the abort; it must still fail.
+  status=0
+  FIXTURE="$fixture" CLEANUP_DEFINITIONS="$definitions" TOOL_LOG="$TOOL_LOG" LEAK=none CRASH=1 \
+    /bin/bash "$harness" > "$OUTPUT" 2>&1 || status="$?"
+  if [[ "$status" -eq 0 ]] || ! grep -Fq 'Packaging tests stopped before they finished' "$OUTPUT"; then
+    echo 'An aborted packaging test run reported success.' >&2
+    cat "$OUTPUT" >&2
+    exit 1
+  fi
+  [[ ! -d "$fixture/work" ]] || exit 1
 )
 
 # Packaging tests sign ad hoc and stage into their own temporary directory, so
@@ -1247,7 +1276,7 @@ EOF
         existing-output) mkdir -p "$final_dir" ;;
         keep-rejected) export TASKSCOPE_KEEP_RELEASE_WORK=1 SCENARIO=rejected ;;
       esac
-      bash "$fixture/script/release.sh" "$mode"
+      "${PIPELINE_BASH:-bash}" "$fixture/script/release.sh" "$mode"
     ) > "$pipeline_output" 2>&1
   }
   assert_pipeline_failure() {
@@ -1328,6 +1357,29 @@ EOF
   assert_pipeline_failure keep-rejected 'Release work preserved for diagnosis'
   find "$fixture/dist" -maxdepth 1 -name '.TaskScope.release.*' -type d -print -quit | grep -q . \
     || { echo 'TASKSCOPE_KEEP_RELEASE_WORK=1 did not keep the work directory.' >&2; exit 1; }
+  # A release that aborts right after arming its trap fails, releases its lock
+  # and publishes nothing, although /bin/bash 3.2 runs the trap with status 0.
+  cp "$fixture/script/release.sh" "$pipeline/release.sh.original"
+  awk -v injection=': "$TASKSCOPE_UNSET_FOR_TEST"' \
+    '{ print } !done && /^trap .*cleanup_release.* EXIT$/ { print injection; done = 1 }' \
+    "$pipeline/release.sh.original" > "$fixture/script/release.sh"
+  grep -Fxq ': "$TASKSCOPE_UNSET_FOR_TEST"' "$fixture/script/release.sh"
+  if PIPELINE_BASH=/bin/bash run_pipeline_case clean; then
+    echo 'A release aborted by an unbound variable reported success.' >&2
+    cat "$pipeline_output" >&2
+    exit 1
+  fi
+  grep -Fq 'unbound variable' "$pipeline_output" \
+    && grep -Fq 'The release stopped before it finished' "$pipeline_output" || {
+    cat "$pipeline_output" >&2
+    exit 1
+  }
+  if [[ -e "$fixture/dist/.TaskScope.release.lock" || -e "$final_dir" ]]; then
+    echo 'An aborted release kept its lock or published artifacts.' >&2
+    exit 1
+  fi
+  cp "$pipeline/release.sh.original" "$fixture/script/release.sh"
+  CHECKS=$((CHECKS + 1))
   # A complete run publishes exactly the five artifacts, named with the build
   # number, records where the commit came from, and prunes earlier work.
   if ! run_pipeline_case stale-work; then
@@ -1355,6 +1407,97 @@ EOF
   echo "Release pipeline tests passed ($CHECKS cases)."
 )
 
+# Under /bin/bash 3.2 an EXIT trap runs with status 0 after a `set -u` abort.
+# A fault injected right after a script arms its trap must still fail the run,
+# and the trap must still release what the run held. Nothing is launched.
+test_unexpected_exit_fails() (
+  local fixture="$TEST_DIR/unexpected exit fixture"
+  local injection=': "$TASKSCOPE_UNSET_FOR_TEST"'
+  local status
+  local readiness_function
+  local APP_NAME=TaskScope
+  local BUNDLE_ID=com.example.TaskScopeTests
+  unset TASKSCOPE_UNSET_FOR_TEST
+  mkdir -p "$fixture/script" "$fixture/bin" "$fixture/Applications"
+  cp "$ROOT_DIR/script/packaging_common.sh" "$fixture/script/"
+  printf '1.2.3\n' > "$fixture/VERSION"
+  printf '7\n' > "$fixture/BUILD_NUMBER"
+  printf '#!/usr/bin/env bash\nprintf "Xcode 26.0\\nBuild version 17A1\\n"\n' > "$fixture/bin/xcodebuild"
+  chmod +x "$fixture/bin/xcodebuild"
+  # Prints the input with the fault inserted after the first line matching $1.
+  inject_after() {
+    awk -v pattern="$1" -v injection="$injection" \
+      '{ print } !done && $0 ~ pattern { print injection; done = 1 }'
+  }
+  expect_failure() {
+    local message="$1"
+    if [[ "$status" -eq 0 ]] || ! grep -Fq 'unbound variable' "$OUTPUT" || ! grep -Fq "$message" "$OUTPUT"; then
+      echo "A run aborted by an unbound variable reported success: $message" >&2
+      cat "$OUTPUT" >&2
+      exit 1
+    fi
+  }
+  # Staging, once it holds the packaging lock.
+  inject_after '^PACKAGING_LOCK_ACQUIRED=1$' < "$ROOT_DIR/script/build_and_run.sh" \
+    > "$fixture/script/build_and_run.sh"
+  grep -Fxq "$injection" "$fixture/script/build_and_run.sh"
+  status=0
+  PATH="$fixture/bin:$PATH" TASKSCOPE_BUNDLE_ID="$BUNDLE_ID" TASKSCOPE_CODE_SIGN_IDENTITY=- \
+    TASKSCOPE_OUTPUT_DIR="$fixture/out" /bin/bash "$fixture/script/build_and_run.sh" --stage \
+    > "$OUTPUT" 2>&1 || status="$?"
+  expect_failure 'Packaging stopped before it finished'
+  [[ ! -e "$fixture/out/.TaskScope.package.lock" ]] || {
+    echo 'An aborted stage kept the packaging lock.' >&2
+    exit 1
+  }
+  # Installing, once it holds the destination lock.
+  inject_after '^INSTALL_LOCK_ACQUIRED=1$' < "$ROOT_DIR/script/install.sh" > "$fixture/script/install.sh"
+  grep -Fxq "$injection" "$fixture/script/install.sh"
+  status=0
+  DEST_DIR="$fixture/Applications" TASKSCOPE_SKIP_BUILD=1 TASKSCOPE_BUNDLE_ID="$BUNDLE_ID" \
+    TASKSCOPE_OUTPUT_DIR="$fixture/out" /bin/bash "$fixture/script/install.sh" --no-open \
+    > "$OUTPUT" 2>&1 || status="$?"
+  expect_failure 'The installer stopped before it finished'
+  [[ ! -e "$fixture/Applications/.TaskScope.install.lock" ]] || {
+    echo 'An aborted install kept the destination lock.' >&2
+    exit 1
+  }
+  # Startup verification, before it launches anything. A separate process keeps
+  # the call out of a condition, where bash 3.2 would not abort at all.
+  cat > "$fixture/readiness-harness.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "$COMMON_SCRIPT"
+APP_NAME=TaskScope
+BUNDLE_ID=com.example.TaskScopeTests
+eval "$READINESS_FUNCTION"
+unregister_staged_app() { :; }
+taskscope_send_signal() { return 1; }
+verify_startup_readiness "$NEVER_LAUNCHED_BUNDLE"
+echo 'Startup verification returned success.'
+EOF
+  readiness_function="$(awk '/^verify_startup_readiness\(\)/ { copying = 1 } /^stop_staged_app_instances\(\)/ { exit } copying { print }' \
+    "$ROOT_DIR/script/build_and_run.sh" | inject_after 'trap .*cleanup_readiness_process.* EXIT$')"
+  grep -Fxq "$injection" <<< "$readiness_function"
+  status=0
+  COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh" NEVER_LAUNCHED_BUNDLE="$fixture/Never Launched.app" \
+    READINESS_FUNCTION="$readiness_function" \
+    /bin/bash "$fixture/readiness-harness.sh" > "$OUTPUT" 2>&1 || status="$?"
+  if [[ "$status" -eq 0 ]] || ! grep -Fq 'unbound variable' "$OUTPUT" \
+    || grep -Fq 'Startup verification returned success.' "$OUTPUT"; then
+    echo 'Startup verification reported success after it aborted.' >&2
+    cat "$OUTPUT" >&2
+    exit 1
+  fi
+  # This suite itself, right after it arms its trap.
+  inject_after '^trap .* EXIT$' < "$ROOT_DIR/script/test_release_compatibility.sh" \
+    > "$fixture/script/test_release_compatibility.sh"
+  grep -Fxq "$injection" "$fixture/script/test_release_compatibility.sh"
+  status=0
+  /bin/bash "$fixture/script/test_release_compatibility.sh" --packaging-only > "$OUTPUT" 2>&1 || status="$?"
+  expect_failure 'Release compatibility tests stopped before they finished'
+)
+
 TEST_MODE="${1:-}"
 if [[ -z "$TEST_MODE" || "$TEST_MODE" == --packaging-only ]]; then
   test_packaging_preferences_cleanup
@@ -1376,12 +1519,16 @@ if [[ -z "$TEST_MODE" || "$TEST_MODE" == --packaging-only ]]; then
   test_startup_failure_is_reported
   test_launch_conflict_checked_before_build
   test_signing_uses_hardened_runtime
-  echo 'Packaging regression tests passed (19 groups).'
+  test_unexpected_exit_fails
+  echo 'Packaging regression tests passed (20 groups).'
 fi
 if [[ -z "$TEST_MODE" || "$TEST_MODE" == --pipeline-only ]]; then
   test_release_pipeline
 fi
-[[ -z "$TEST_MODE" || "$TEST_MODE" == --evidence-only ]] || exit 0
+if [[ -n "$TEST_MODE" && "$TEST_MODE" != --evidence-only ]]; then
+  TESTS_FINISHED=1
+  exit 0
+fi
 
 mkdir -p "$FIXTURE_DIR/script" "$FIXTURE_DIR/Sources" "$EVIDENCE_DIR" "$FAKE_BIN"
 cp "$ROOT_DIR/script/release.sh" "$ROOT_DIR/script/packaging_common.sh" "$FIXTURE_DIR/script/"
@@ -1744,4 +1891,5 @@ git -C "$FIXTURE_DIR" commit -qm 'Change candidate without retesting'
 assert_failure 'Candidate content differs from tested source_revision'
 assert_failure 'Candidate content differs from tested source_revision' --release
 
+TESTS_FINISHED=1
 echo "Release compatibility evidence tests passed ($CHECKS cases)."

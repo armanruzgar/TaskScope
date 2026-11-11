@@ -49,6 +49,8 @@ RELEASE_LOCK="$DIST_DIR/.$APP_NAME.release.lock"
 RELEASE_LOCK_ACQUIRED=0
 WORK_DIR=""
 KEEP_RELEASE_WORK="${TASKSCOPE_KEEP_RELEASE_WORK:-0}"
+# Set only where a full release deliberately finishes; see cleanup_release.
+RELEASE_FINISHED=0
 
 fail() {
   echo "$*" >&2
@@ -326,6 +328,13 @@ validate_credential_independent_inputs() {
 cleanup_release() {
   local exit_code="$?"
 
+  # bash 3.2 runs the EXIT trap with status 0 after a `set -u` abort, so a
+  # release that stopped before it finished must still fail.
+  if [[ "$exit_code" -eq 0 && "${RELEASE_FINISHED:-0}" -ne 1 ]]; then
+    echo "The release stopped before it finished." >&2
+    exit_code=1
+  fi
+
   if [[ "$RELEASE_LOCK_ACQUIRED" -eq 1 ]]; then
     taskscope_release_lock "$RELEASE_LOCK"
   fi
@@ -476,7 +485,7 @@ xcrun notarytool history \
 mkdir -p "$DIST_DIR" "$RELEASE_ROOT"
 taskscope_acquire_lock "$RELEASE_LOCK" "release process"
 RELEASE_LOCK_ACQUIRED=1
-trap cleanup_release EXIT
+trap 'cleanup_release; exit $?' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -590,3 +599,4 @@ verify_notarized_bundle "$ROUND_TRIP_DIR/$APP_NAME.app"
 mv "$OUTPUT_DIR" "$FINAL_DIR"
 
 echo "Created verified release artifacts in $FINAL_DIR"
+RELEASE_FINISHED=1

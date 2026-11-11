@@ -386,7 +386,9 @@ verify_startup_readiness() (
     rm -rf "$readiness_home"
     unregister_staged_app
   }
-  trap cleanup_readiness_process EXIT
+  # Success removes this trap, so it runs only for a failed check. It must
+  # still fail after a `set -u` abort, which bash 3.2 reports with status 0.
+  trap 'cleanup_readiness_process; exit 1' EXIT
 
   script_command="$(taskscope_process_command "$$" || true)"
   CFFIXED_USER_HOME="$readiness_home" \
@@ -455,10 +457,18 @@ OUTPUT_BACKUP="$DIST_DIR/.$APP_NAME.output-backup.$$"
 VERIFIED_COPY_TEMP=""
 PUBLISH_COMPLETE=0
 TASKSCOPE_STOPPED_PROCESSES=0
+# Set only where packaging deliberately finishes; see cleanup_packaging_work.
+PACKAGING_FINISHED=0
 
 cleanup_packaging_work() {
   local exit_code="$?"
 
+  # bash 3.2 runs the EXIT trap with status 0 after a `set -u` abort, so a
+  # run that stopped before a deliberate finish must still fail.
+  if [[ "$exit_code" -eq 0 && "${PACKAGING_FINISHED:-0}" -ne 1 ]]; then
+    echo "Packaging stopped before it finished." >&2
+    exit_code=1
+  fi
   if [[ "$exit_code" -ne 0 && "$TASKSCOPE_STOPPED_PROCESSES" -eq 1 ]]; then
     echo "The running staged TaskScope was quit for restaging and has not been restarted." >&2
   fi
@@ -485,7 +495,7 @@ cleanup_packaging_work() {
 
   return "$exit_code"
 }
-trap cleanup_packaging_work EXIT
+trap 'cleanup_packaging_work; exit $?' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -520,6 +530,7 @@ if [[ "$MODE" == "--verify" || "$MODE" == "verify" ]]; then
   verify_bundle "$APP_BUNDLE"
   verify_startup_readiness "$APP_BUNDLE"
   echo "Verified existing $APP_BUNDLE (not rebuilt)"
+  PACKAGING_FINISHED=1
   exit 0
 fi
 
@@ -740,6 +751,7 @@ if [[ -n "$DSYM_COPY" ]]; then
   [[ ! -e "$DSYM_COPY" && ! -L "$DSYM_COPY" ]] || { echo "Refusing to overwrite dSYM copy." >&2; exit 1; }
   /usr/bin/ditto "$METADATA_WORK_DIR/$APP_NAME.dSYM" "$DSYM_COPY"
 fi
+PACKAGING_FINISHED=1
 cleanup_packaging_work
 trap - EXIT INT TERM
 
