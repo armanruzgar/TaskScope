@@ -24,6 +24,12 @@ struct ProcessDetailSheet: View {
                 LabeledContent("User", value: detail.user)
                 LabeledContent("Started", value: detail.displayStartTime())
                 LabeledContent("Command", value: detail.command)
+                LabeledContent("Arguments") {
+                    Text(detail.arguments ?? "Unavailable")
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
                 LabeledContent("CPU %", value: String(format: "%.1f", process.cpu))
                 LabeledContent("Memory (MB)", value: String(format: "%.1f", process.memoryMB))
             } else if failed {

@@ -3,13 +3,6 @@ import XCTest
 @testable import TaskScope
 
 final class ShellCommandRunnerTests: XCTestCase {
-    func testExtendedRegexLiteralEscapesProcessNameMetacharacters() {
-        XCTAssertEqual(
-            ShellCommandRunner.extendedRegexLiteral("Codex (Renderer)+[1].app"),
-            #"Codex \(Renderer\)\+\[1\]\.app"#
-        )
-    }
-
     func testChildPreservesUTF8WithCDateAndNumberFormatting() {
         let sanitized = ShellCommandRunner.childEnvironment(
             from: ["LANG": "de_DE.UTF-8", "LC_NUMERIC": "de_DE.UTF-8", "LC_TIME": "de_DE.UTF-8",
@@ -104,22 +97,28 @@ final class ShellCommandRunnerTests: XCTestCase {
         }
     }
 
+    /// The cancellation arrives after the child was reaped but before the
+    /// command completed: the real exit is reported, and the reaped PID's
+    /// group, whose ID may already be reused, is never signalled.
     func testCommandThatExitedBeforeCancellationReportsItsRealExit() async {
-        let probe = RecordingChildWaitProbe()
-        let task = Task {
-            await ShellCommandRunner.run("exit 3", timeout: 10, waitForChild: { probe.wait($0, $1, $2) })
+        let canceller = ReapWindowCanceller()
+        let signals = RecordedGroupSignals()
+        let hooks = batch05Hooks { hooks in
+            hooks.afterReap = { canceller.cancelInReapWindow() }
+            hooks.signalGroup = { signals.record($0, $1) }
         }
-        // Cancel once the runner has reaped the child, not after a fixed
-        // delay: on a loaded machine the shell may not even have started.
-        let reaped = await waitUntil { probe.childPID.map { probe.didReap($0) } ?? false }
-        XCTAssertTrue(reaped, "The shell never exited")
-        task.cancel()
+        let task = Task {
+            await ShellCommandRunner.run("exit 3", timeout: 10, hooks: hooks)
+        }
+        canceller.attach(task)
 
         let result = await task.value
 
+        XCTAssertTrue(canceller.cancelledInReapWindow, "The cancellation must arrive after the reap")
         XCTAssertEqual(result.exitCode, 3)
         XCTAssertNil(result.terminatedBySignal)
         XCTAssertFalse(result.stderr.contains("cancelled"))
+        XCTAssertEqual(signals.all, [], "A reaped child's group must never be signalled")
     }
 
     /// Exit notification comes from a dispatch source plus a non-blocking
@@ -475,17 +474,19 @@ final class ShellCommandRunnerTests: XCTestCase {
             + Double(usage.ru_stime.tv_sec) + Double(usage.ru_stime.tv_usec) / 1_000_000
     }
 
-    /// A negative `pid` names a process group, as it does for `kill`. Runs on
-    /// the main actor: XCTest sometimes drops a failure recorded off the main
-    /// thread right before an async test returns, which hid a surviving
-    /// descendant in about one run in five.
+    /// A negative `pid` names a process group, as it does for `kill`. Killed
+    /// members stay visible until launchd reaps them, which a loaded machine
+    /// can take seconds to do, so this polls for up to ten seconds; the
+    /// descendants these tests start sleep for 30, so a real survivor still
+    /// fails. The intermittent survivor once blamed on XCTest dropping off-main
+    /// failures was the runner's own race: a fork escaping its single SIGKILL.
     @MainActor
     private static func assertProcessDisappears(
         _ pid: Int32,
         file: StaticString = #filePath,
         line: UInt = #line
     ) async {
-        for _ in 0..<200 {
+        for _ in 0..<1_000 {
             errno = 0
             if Darwin.kill(pid, 0) == -1, errno == ESRCH {
                 return

@@ -37,15 +37,23 @@ final class ProcessDetailReaderTests: XCTestCase {
         XCTAssertEqual(detail.command, "")
     }
 
+    /// Substring checks let a lost UTC pin pass in UTC+0, UTC+2, UTC-10 and
+    /// UTC+12, where the wrong answer also contains "1:04:47". Pin the instant
+    /// itself, and the whole displayed string.
     func testStartTimeIsReadInUTCAndShownInTheViewersTimeZone() {
+        XCTAssertEqual(
+            ProcessDetail.parsedStartTime("Wed Oct 7 17:04:47 2026"),
+            Date(timeIntervalSince1970: 1_791_392_687),
+            "17:04:47 UTC on Oct 7, 2026, whatever this machine's time zone"
+        )
         let detail = ProcessDetail(pid: 1, parentPID: 0, user: "me", startTime: "Wed Oct 7 17:04:47 2026", command: "")
         let shown = detail.displayStartTime(
             timeZone: TimeZone(identifier: "America/New_York")!,
             locale: Locale(identifier: "en_US")
         )
 
-        XCTAssertTrue(shown.contains("Oct 7, 2026"), shown)
-        XCTAssertTrue(shown.contains("1:04:47"), shown)
+        // ICU versions differ in the space before PM (U+202F or U+0020).
+        XCTAssertEqual(shown.replacingOccurrences(of: "\u{202F}", with: " "), "Oct 7, 2026 at 1:04:47 PM")
 
         let unparsed = ProcessDetail(pid: 1, parentPID: 0, user: "me", startTime: "unexpected", command: "")
         XCTAssertEqual(unparsed.displayStartTime(), "unexpected UTC")

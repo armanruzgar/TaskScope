@@ -42,9 +42,21 @@ enum ProcessListReader {
     // UTC, while allowing UTF-8 process names.
     static let processListCommand = "/bin/ps -awwwxo pid=,ppid=,uid=,pcpu=,rss=,lstart=,etime=,comm="
     static let identityValidationCommand = "/bin/ps -awwwxo pid=,lstart="
+    static let networkStatsCommand = "/usr/bin/nettop -P -L 1 -n -x -J bytes_in,bytes_out"
 
-    static func currentProcessList(fetchExtendedStats: Bool) async -> Result<[AppProcess], ProcessInventoryError> {
-        let result = await ShellCommandRunner.run(processListCommand)
+    /// Every command and kernel read goes through a parameter whose default is
+    /// the real one, so tests can script `ps` and `nettop` output, failures and
+    /// cancellations.
+    static func currentProcessList(
+        fetchExtendedStats: Bool,
+        run: @Sendable (String) async -> ShellCommandResult = { await ShellCommandRunner.run($0) },
+        executablePath: @Sendable (Int32) -> String? = { executablePath(for: $0) },
+        startUptime: @Sendable (Int32) -> UInt64? = { startUptimeNanoseconds(for: $0) },
+        zombieState: @Sendable (Int32) -> Bool? = { ProcessSignalGuard.zombieState($0) },
+        diskIO: @Sendable (Int32) -> (read: Double, written: Double)? = { diskIOBytes(for: $0) },
+        currentPID: Int32 = ProcessInfo.processInfo.processIdentifier
+    ) async -> Result<[AppProcess], ProcessInventoryError> {
+        let result = await run(processListCommand)
         if let cancellation = cancellation(of: result) {
             return .failure(cancellation)
         }
@@ -63,7 +75,7 @@ enum ProcessListReader {
 
         let resolvedPaths = Dictionary(
             parsed.compactMap { process in
-                executablePath(for: process.pid).map { (process.pid, $0) }
+                executablePath(process.pid).map { (process.pid, $0) }
             },
             uniquingKeysWith: { first, _ in first }
         )
@@ -73,11 +85,19 @@ enum ProcessListReader {
         let monotonicStarts = Dictionary(
             parsed.compactMap { process -> (Int32, UInt64)? in
                 guard process.uid == currentUID else { return nil }
-                return startUptimeNanoseconds(for: process.pid).map { (process.pid, $0) }
+                return startUptime(process.pid).map { (process.pid, $0) }
             },
             uniquingKeysWith: { first, _ in first }
         )
-        let validation = await ShellCommandRunner.run(identityValidationCommand)
+        // Exit is decided from kernel state: `comm` is argv-backed, so a live
+        // process can call itself `<defunct>`.
+        let zombieStates = Dictionary(
+            parsed.compactMap { process in
+                zombieState(process.pid).map { (process.pid, $0) }
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let validation = await run(identityValidationCommand)
         if let cancellation = cancellation(of: validation) {
             return .failure(cancellation)
         }
@@ -95,7 +115,7 @@ enum ProcessListReader {
         parsed = validatedProcesses(parsed, using: validatedStartTimeMap)
         // This process must survive both snapshots. A nonempty but incomplete
         // validation result must not turn a broken read into "nothing running".
-        guard parsed.contains(where: { $0.pid == ProcessInfo.processInfo.processIdentifier }) else {
+        guard parsed.contains(where: { $0.pid == currentPID }) else {
             return .failure(.parseFailed)
         }
         attachExecutablePaths(
@@ -110,15 +130,20 @@ enum ProcessListReader {
             validatedStartTimes: validatedStartTimeMap
         )
 
+        for index in parsed.indices {
+            parsed[index].isZombie = zombieStates[parsed[index].pid]
+        }
+
         if fetchExtendedStats {
-            let netStats = await currentNetworkStats()
+            let networkResult = await run(networkStatsCommand)
+            let netStats = networkResult.succeeded ? parseNetworkStats(networkResult.stdout) : nil
             if Task.isCancelled {
                 return .failure(.cancelled)
             }
             for index in parsed.indices {
                 parsed[index].netInKB = netStats?[parsed[index].pid]?.0
                 parsed[index].netOutKB = netStats?[parsed[index].pid]?.1
-                let disk = diskIOBytes(for: parsed[index].pid)
+                let disk = diskIO(parsed[index].pid)
                 parsed[index].diskReadBytes = disk?.read
                 parsed[index].diskWriteBytes = disk?.written
             }
@@ -328,20 +353,21 @@ enum ProcessListReader {
         return status == 0 ? info : nil
     }
 
-    private static func currentNetworkStats() async -> [Int32: (Double, Double)]? {
-        let result = await ShellCommandRunner.run(
-            "/usr/bin/nettop -P -L 1 -n -x -J bytes_in,bytes_out"
-        )
-        guard result.succeeded else { return nil }
+    /// Parses `networkStatsCommand` CSV rows, `name.pid,bytes_in,bytes_out,`,
+    /// into KB received and sent per PID. The counts are the last two fields
+    /// and the PID follows the last dot, so names containing dots or commas
+    /// still parse. Nil when no row does.
+    static func parseNetworkStats(_ output: String) -> [Int32: (Double, Double)]? {
         var stats: [Int32: (Double, Double)] = [:]
-        for line in result.stdout.split(separator: "\n") {
-            let parts = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        for line in output.split(separator: "\n") {
+            var parts = line.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            if parts.last == "" { parts.removeLast() }
             guard parts.count >= 3 else { continue }
-            let namePid = parts[0]
+            let namePid = parts.dropLast(2).joined(separator: ",")
             guard let dotIndex = namePid.lastIndex(of: "."),
                   let pid = Int32(namePid[namePid.index(after: dotIndex)...]),
-                  let inBytes = Double(parts[1]),
-                  let outBytes = Double(parts[2]) else { continue }
+                  let inBytes = Double(parts[parts.count - 2]),
+                  let outBytes = Double(parts[parts.count - 1]) else { continue }
             stats[pid] = (inBytes / 1024.0, outBytes / 1024.0)
         }
         return stats.isEmpty ? nil : stats

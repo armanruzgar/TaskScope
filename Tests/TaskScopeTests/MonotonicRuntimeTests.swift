@@ -173,16 +173,25 @@ final class MonotonicRuntimeTests: XCTestCase {
         XCTAssertEqual(rows.map(\.monotonicStart), [.uptimeNanoseconds(7), .unavailable, .unavailable, .notRead])
     }
 
+    /// A live smoke test of the real reader. Its parsing and start-time
+    /// attachment are pinned with fixtures elsewhere; here only a read that
+    /// times out on a heavily loaded machine is skipped instead of failing.
     func testLiveKernelStartTimeUsesTheUptimeClock() async throws {
         let ownPID = ProcessInfo.processInfo.processIdentifier
         let start = try XCTUnwrap(ProcessListReader.startUptimeNanoseconds(for: ownPID))
         XCTAssertLessThanOrEqual(start, UptimeSample.now().uptime)
-        XCTAssertNil(ProcessListReader.startUptimeNanoseconds(for: 1), "root-owned launchd must report unavailable")
+        if getuid() != 0 {
+            XCTAssertNil(ProcessListReader.startUptimeNanoseconds(for: 1), "root-owned launchd must report unavailable")
+        }
         let converted = try XCTUnwrap(UptimeSample.nanoseconds(fromMachTime: mach_absolute_time()))
         let uptime = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         XCTAssertLessThan(max(converted, uptime) - min(converted, uptime), 1_000_000_000)
 
-        let inventory = try await ProcessListReader.currentProcessList(fetchExtendedStats: false).get()
+        let read = await ProcessListReader.currentProcessList(fetchExtendedStats: false)
+        if case .failure(.commandFailed(let detail)) = read, detail.contains("timed out") {
+            throw XCTSkip("The live process list timed out on a loaded machine: \(detail)")
+        }
+        let inventory = try read.get()
         let own = try XCTUnwrap(inventory.first { $0.pid == ownPID })
         guard case .uptimeNanoseconds(let listed) = own.monotonicStart else {
             return XCTFail("The live inventory must read this process's kernel start: \(own.monotonicStart)")

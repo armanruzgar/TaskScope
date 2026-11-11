@@ -68,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         var restorePreviousApplication: () -> Void
         var presentMainWindow: () -> Void
         var waitForInteractiveLaunch: () async -> Void
+        /// Stops the shell commands still running when TaskScope quits, so a
+        /// launchctl or an administrator prompt does not outlive the app.
+        var stopRunningCommands: () -> Void = {}
 
         static var system: Runtime {
             let previous = PreviousApplicationTracker(
@@ -104,7 +107,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
                             .makeKeyAndOrderFront(nil)
                     }
                 },
-                waitForInteractiveLaunch: { try? await Task.sleep(nanoseconds: 500_000_000) }
+                waitForInteractiveLaunch: { try? await Task.sleep(nanoseconds: 500_000_000) },
+                stopRunningCommands: { ShellCommandRunner.liveExecutions.shutDown() }
             )
         }
     }
@@ -176,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     func applicationWillTerminate(_ notification: Notification) {
         willTerminate?()
+        // Bounded to about a second: TERM, then KILL, to each command's group.
+        runtime.stopRunningCommands()
         launchSession.cleanUp()
         terminationHandler.stop()
         interactiveLaunchTask?.cancel()

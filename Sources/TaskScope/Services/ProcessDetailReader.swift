@@ -8,7 +8,14 @@ struct SystemProcessDetailReader: ProcessDetailReading {
     static let detailColumnCount = 8
 
     func readDetail(for process: AppProcess) async -> ProcessDetail? {
-        let result = await ShellCommandRunner.run(
+        await readDetail(for: process, run: { await ShellCommandRunner.run($0) })
+    }
+
+    func readDetail(
+        for process: AppProcess,
+        run: @Sendable (String) async -> ShellCommandResult
+    ) async -> ProcessDetail? {
+        let result = await run(
             "/bin/ps -o pid=,ppid=,user=,lstart=,comm= -p \(process.pid)"
         )
         guard result.succeeded, !result.stdout.isEmpty else { return nil }
@@ -17,7 +24,19 @@ struct SystemProcessDetailReader: ProcessDetailReading {
             .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: true)
             .first
             .map(String.init) ?? ""
-        return Self.parseDetailLine(line, expectedStartTime: process.identity.startTime)
+        guard var detail = Self.parseDetailLine(line, expectedStartTime: process.identity.startTime),
+              detail.pid == process.pid else { return nil }
+        // The command line is read only for the detail sheet the user asked
+        // for, and kept only there: it can contain secrets. The same start-time
+        // check rejects a process that took over the PID in between.
+        let arguments = await run("/bin/ps -ww -o pid=,lstart=,args= -p \(process.pid)")
+        if arguments.succeeded,
+           let (fields, remainder) = Self.leadingFields(in: arguments.stdout, count: 6),
+           Int32(fields[0]) == process.pid,
+           fields[1...5].joined(separator: " ") == detail.startTime {
+            detail.arguments = remainder.isEmpty ? nil : remainder
+        }
+        return detail
     }
 
     /// `pid ppid user lstart(5) comm`. The command is the raw text after the

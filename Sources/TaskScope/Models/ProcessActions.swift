@@ -48,11 +48,17 @@ enum ProcessSignalGuard {
     /// zombie is not alive; when it cannot (another user's process), the
     /// signal-based answer stands.
     static func isZombie(_ pid: Int32) -> Bool {
+        zombieState(pid) == true
+    }
+
+    /// Whether the kernel reports `pid` as a zombie, or nil when its state
+    /// cannot be read.
+    static func zombieState(_ pid: Int32) -> Bool? {
         var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
         var info = kinfo_proc()
         var size = MemoryLayout<kinfo_proc>.size
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else {
-            return false
+            return nil
         }
         return info.kp_proc.p_stat == UInt8(SZOMB)
     }

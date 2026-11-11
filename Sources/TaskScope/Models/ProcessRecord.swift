@@ -27,7 +27,17 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     /// per row rather than on every sort comparison and filter pass.
     private(set) var name: String
     /// Kernel-resolved executable vnode path. Never derived from argv/`ps comm`.
-    var executablePath: String?
+    var executablePath: String? {
+        didSet { identityExecutablePath = Self.standardizedPath(executablePath) }
+    }
+    /// `executablePath` as identities compare it, standardized once when the
+    /// path is set: identities are built for the whole inventory on the main
+    /// actor, and standardizing touches the file system.
+    private var identityExecutablePath: String?
+    /// Whether the kernel reported the process as a zombie (exited, awaiting
+    /// its parent's `waitpid`) when the inventory was read; nil when that state
+    /// was not read.
+    var isZombie: Bool?
     var elapsedTime: String
     var startTime: String
     /// Runtime rules require this for live rows: `elapsedTime` is wall-clock
@@ -52,6 +62,7 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         elapsedTime: String,
         startTime: String = "",
         monotonicStart: MonotonicStart = .notRead,
+        isZombie: Bool? = nil,
         netInKB: Double?,
         netOutKB: Double?,
         diskReadBytes: Double?,
@@ -65,6 +76,8 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         self.command = command
         self.name = Self.name(from: command)
         self.executablePath = executablePath
+        self.identityExecutablePath = Self.standardizedPath(executablePath)
+        self.isZombie = isZombie
         self.elapsedTime = elapsedTime
         self.startTime = startTime
         self.monotonicStart = monotonicStart
@@ -74,11 +87,13 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         self.diskWriteBytes = diskWriteBytes
     }
 
-    /// `ps comm` reports an exited, unreaped process as `<defunct>` and the
-    /// kernel no longer resolves its executable. A missing path alone is not
+    /// An exited, unreaped process must not be signalled. The kernel's process
+    /// state decides: `ps comm` is argv-backed, so a live process can call
+    /// itself `<defunct>`. Only a row whose state was not read falls back to
+    /// that text with no resolvable executable. A missing path alone is not
     /// exit evidence: live processes can also have unreadable paths.
     var hasExited: Bool {
-        executablePath == nil && command.trimmingCharacters(in: .whitespacesAndNewlines) == "<defunct>"
+        isZombie ?? (executablePath == nil && command.trimmingCharacters(in: .whitespacesAndNewlines) == "<defunct>")
     }
 
     var id: Int32 {
@@ -96,14 +111,14 @@ struct AppProcess: Identifiable, Equatable, Sendable {
         let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCommand.isEmpty else { return "" }
         if trimmedCommand.hasPrefix("/") {
-            let lastPathComponent = URL(fileURLWithPath: trimmedCommand).lastPathComponent
+            let lastPathComponent = (trimmedCommand as NSString).lastPathComponent
             return lastPathComponent.isEmpty || lastPathComponent == "/" ? trimmedCommand : lastPathComponent
         }
         guard trimmedCommand.contains("/") else { return trimmedCommand }
         let token = trimmedCommand.prefix { !$0.isWhitespace && $0 != ":" }
         guard !token.isEmpty else { return trimmedCommand }
         guard token.contains("/") else { return String(token) }
-        let lastPathComponent = URL(fileURLWithPath: String(token)).lastPathComponent
+        let lastPathComponent = (String(token) as NSString).lastPathComponent
         return lastPathComponent.isEmpty || lastPathComponent == "/" ? String(token) : lastPathComponent
     }
 
@@ -127,10 +142,12 @@ struct AppProcess: Identifiable, Equatable, Sendable {
             pid: pid,
             startTime: startTime,
             command: command,
-            executablePath: executablePath.map {
-                URL(fileURLWithPath: $0).standardizedFileURL.path
-            }
+            executablePath: identityExecutablePath
         )
+    }
+
+    private static func standardizedPath(_ path: String?) -> String? {
+        path.map { URL(fileURLWithPath: $0, isDirectory: false).standardizedFileURL.path }
     }
 
     /// Runtime reported by `ps etime`, whose shape is `[[dd-]hh:]mm:ss`. It is
@@ -190,20 +207,29 @@ struct ProcessDetail: Equatable, Sendable {
     var user: String
     var startTime: String
     var command: String
+    /// The command line (`ps args`), read only for the detail sheet the user
+    /// asked for. It can contain secrets, so it is never logged or persisted.
+    /// Nil when it could not be read for this process.
+    var arguments: String? = nil
 
     /// `ps lstart` runs in UTC (see ShellCommandRunner) so identities survive
     /// time-zone changes; show it in the viewer's time zone.
     func displayStartTime(timeZone: TimeZone = .current, locale: Locale = .current) -> String {
-        let parser = DateFormatter()
-        parser.locale = Locale(identifier: "en_US_POSIX")
-        parser.timeZone = TimeZone(identifier: "UTC")
-        parser.dateFormat = "EEE MMM d HH:mm:ss yyyy"
-        guard let date = parser.date(from: startTime) else { return "\(startTime) UTC" }
+        guard let date = Self.parsedStartTime(startTime) else { return "\(startTime) UTC" }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
         formatter.dateStyle = .medium
         formatter.timeStyle = .medium
         return formatter.string(from: date)
+    }
+
+    /// The instant a UTC `ps lstart` value names, or nil when it does not parse.
+    static func parsedStartTime(_ lstart: String) -> Date? {
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "UTC")
+        parser.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return parser.date(from: lstart)
     }
 }

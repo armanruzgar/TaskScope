@@ -530,6 +530,43 @@ final class ProcessManagerTests: XCTestCase {
         XCTAssertEqual(manager.operationState, .idle)
     }
 
+    /// Observers outside the operation gate (process history, the auto-stop
+    /// engine) read through the shared inventory. A Stop invalidates it, so a
+    /// list read queued behind the Stop starts its own read instead of joining
+    /// one that began before the process was stopped.
+    func testListReadAfterAStopDoesNotJoinAReadStartedBeforeIt() async {
+        let target = process(pid: 88, name: "Stopped")
+        let survivor = process(pid: 89, name: "Survivor")
+        let upstream = Batch05BlockingUpstream(results: [[target, survivor], [survivor]])
+        let shared = CoalescingProcessInventory(upstream: upstream, maximumAge: 60)
+        let manager = ProcessManager(
+            processInventory: shared,
+            verificationInventory: FakeProcessInventory(results: [.success([target, survivor]), .success([survivor])]),
+            processSignaler: FakeProcessSignaler(alivePids: [target.pid], exitsOnTerminate: true),
+            lifecycle: FakeLifecycleService(),
+            settleAfterProcessChange: {}
+        )
+        manager.enableNotifications = false
+        let observer = Task { await shared.load(fetchExtendedStats: false) }
+        await upstream.waitUntilFirstCallStarted()
+
+        let stop = await manager.terminate(target)
+        XCTAssertEqual(stop, .stopped)
+        let listLoaded = expectation(description: "The list read does not wait for the pre-Stop read")
+        let listRead = Task { () -> Bool in
+            let refreshed = await manager.loadProcessList(showMessage: false)
+            listLoaded.fulfill()
+            return refreshed
+        }
+        await fulfillment(of: [listLoaded], timeout: 10)
+        await upstream.releaseFirstCall()
+        _ = await observer.value
+        let refreshed = await listRead.value
+
+        XCTAssertTrue(refreshed)
+        XCTAssertEqual(manager.inventorySnapshot.map(\.pid), [survivor.pid])
+    }
+
     func testQueuedTerminationRechecksAuthorityImmediatelyBeforeSignal() async {
         let target = process(pid: 88, name: "Revoked")
         let inventory = OrderedBlockingProcessInventory(results: [.success([target])])

@@ -7,14 +7,44 @@ enum ShellCommandRunner {
     /// Exit code reported when the command outlived its timeout.
     static let timedOutExitCode: Int32 = -3
 
+    /// Every command in flight. Quitting stops them through it: a command
+    /// nothing supervises any more keeps running, re-parented to launchd, with
+    /// its timeout gone.
+    static let liveExecutions = ExecutionRegistry()
+
+    /// Stand-ins for the system calls a command makes. Production uses the
+    /// defaults; tests use them to reach failure paths and race windows.
+    struct Hooks: Sendable {
+        /// Creates one pipe, as `pipe(2)` does.
+        var makePipe: @Sendable (UnsafeMutablePointer<Int32>) -> Int32 = { Darwin.pipe($0) }
+        /// Signals every process in a group, as `kill(-group, signal)` does.
+        var signalGroup: @Sendable (_ group: pid_t, _ signal: Int32) -> Int32 = { Darwin.kill(-$0, $1) }
+        /// Runs after the child was reaped and before its exit is processed.
+        var afterReap: @Sendable () -> Void = {}
+        /// Tracks the command while it runs.
+        var registry: ExecutionRegistry = ShellCommandRunner.liveExecutions
+
+        init() {}
+    }
+
     static func run(
         _ command: String,
         timeout: TimeInterval = 15,
         waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t = {
             Darwin.waitpid($0, $1, $2)
-        }
+        },
+        hooks: Hooks = Hooks()
     ) async -> ShellCommandResult {
-        let execution = CommandExecution(command: command, timeout: timeout, waitForChild: waitForChild)
+        let execution = CommandExecution(
+            command: command,
+            timeout: timeout,
+            waitForChild: waitForChild,
+            hooks: hooks
+        )
+        if !hooks.registry.register(execution) {
+            // TaskScope is quitting: never start a command nothing would stop.
+            execution.cancel()
+        }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 execution.start(continuation: continuation)
@@ -61,24 +91,74 @@ enum ShellCommandRunner {
     /// or change the locale.
     static let shellArguments = ["/bin/zsh", "-f", "-c"]
 
-    static func extendedRegexLiteral(_ value: String) -> String {
-        let metacharacters = CharacterSet(charactersIn: "\\.^$|?*+()[]{}")
-        return value.unicodeScalars.map { scalar in
-            metacharacters.contains(scalar) ? "\\\(Character(scalar))" : String(Character(scalar))
-        }.joined()
+    /// The commands in flight, so that quitting can stop them.
+    final class ExecutionRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private let inFlight = DispatchGroup()
+        private var executions: [ObjectIdentifier: CommandExecution] = [:]
+        private var isShutDown = false
+
+        init() {}
+
+        fileprivate func register(_ execution: CommandExecution) -> Bool {
+            lock.withLock {
+                guard !isShutDown else { return false }
+                executions[ObjectIdentifier(execution)] = execution
+                inFlight.enter()
+                return true
+            }
+        }
+
+        fileprivate func deregister(_ execution: CommandExecution) {
+            lock.withLock {
+                if executions.removeValue(forKey: ObjectIdentifier(execution)) != nil {
+                    inFlight.leave()
+                }
+            }
+        }
+
+        /// Refuses new commands, stops every command in flight the way a
+        /// timeout does (TERM to its process group, then KILL to whatever is
+        /// left), and waits until they have finished. The wait is bounded so a
+        /// child that cannot be stopped does not hold up quitting. Returns
+        /// whether every command finished in time.
+        @discardableResult
+        func shutDown(waitingAtMost timeout: TimeInterval = 1) -> Bool {
+            let running = lock.withLock {
+                isShutDown = true
+                return Array(executions.values)
+            }
+            running.forEach { $0.cancel() }
+            return inFlight.wait(timeout: .now() + timeout) == .success
+        }
     }
 
-    private final class CommandExecution: @unchecked Sendable {
+    /// The two ends of one pipe, each closed when its handle is released.
+    private struct CommandPipe {
+        let fileHandleForReading: FileHandle
+        let fileHandleForWriting: FileHandle
+
+        func close() {
+            try? fileHandleForReading.close()
+            try? fileHandleForWriting.close()
+        }
+    }
+
+    fileprivate final class CommandExecution: @unchecked Sendable {
         private enum SpawnResult {
             case success(pid_t)
             case failure(Int32)
         }
 
+        static let lostExitStatusMessage = "The command's exit status could not be collected."
+
         private let command: String
         private let timeout: TimeInterval
         private let waitForChild: @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t
-        private let standardOutput = Pipe()
-        private let standardError = Pipe()
+        private let hooks: Hooks
+        /// Created by `start` only once the command is about to be spawned.
+        private var standardOutput: CommandPipe?
+        private var standardError: CommandPipe?
         private let outputCapture = PipeCapture()
         private let errorCapture = PipeCapture()
         private let stateLock = NSLock()
@@ -93,6 +173,11 @@ enum ShellCommandRunner {
         private var childExitCode: Int32?
         private var childTerminationSignal: Int32?
         private var childReaped = false
+        /// waitpid failed with ECHILD: the exit status is gone, and the PID and
+        /// its group ID may already name other processes, so nothing is
+        /// signalled any more.
+        private var childStatusLost = false
+        private var groupCleanupStarted = false
         private var stopEscalationFinished = false
         private var terminalOverride: (message: String, exitCode: Int32)?
         private var timeoutTask: Task<Void, Never>?
@@ -104,11 +189,13 @@ enum ShellCommandRunner {
         init(
             command: String,
             timeout: TimeInterval,
-            waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t
+            waitForChild: @escaping @Sendable (pid_t, UnsafeMutablePointer<Int32>, Int32) -> pid_t,
+            hooks: Hooks
         ) {
             self.command = command
             self.timeout = max(0.1, timeout)
             self.waitForChild = waitForChild
+            self.hooks = hooks
         }
 
         func start(continuation: CheckedContinuation<ShellCommandResult, Never>) {
@@ -130,6 +217,18 @@ enum ShellCommandRunner {
                 return
             }
 
+            if let errorCode = createPipes() {
+                stateLock.unlock()
+                scheduleImmediateFinish(
+                    ShellCommandResult(
+                        command: command,
+                        stdout: "",
+                        stderr: "Could not start the command: \(String(cString: strerror(errorCode))).",
+                        exitCode: -1
+                    )
+                )
+                return
+            }
             configureReadSources()
             let spawnResult = spawnContainedShell()
             switch spawnResult {
@@ -213,9 +312,31 @@ enum ShellCommandRunner {
             }
             var status: Int32 = 0
             var waitedPID: pid_t
+            var waitError: Int32
             repeat {
                 waitedPID = waitForChild(pid, &status, WNOHANG)
-            } while waitedPID == -1 && errno == EINTR
+                waitError = waitedPID == -1 ? errno : 0
+            } while waitedPID == -1 && waitError == EINTR
+            if waitedPID == -1, waitError == ECHILD {
+                // Something else collected the exit status (a SIGCHLD ignored
+                // in this process makes the kernel reap every child itself).
+                // The child is gone and no exit event will follow, so finish
+                // now with what is known. A stop already requested keeps its
+                // own report.
+                childReaped = true
+                childStatusLost = true
+                childExitCode = -1
+                stopEscalationFinished = true
+                if terminalOverride == nil {
+                    terminalOverride = (Self.lostExitStatusMessage, -1)
+                }
+                let source = exitSource
+                exitSource = nil
+                stateLock.unlock()
+                source?.cancel()
+                finishAfterTermination(exitCode: -1)
+                return
+            }
             guard waitedPID == pid else {
                 stateLock.unlock()
                 if waitedPID == 0, retryUntilReaped {
@@ -234,6 +355,7 @@ enum ShellCommandRunner {
             stateLock.unlock()
             source?.cancel()
 
+            hooks.afterReap()
             let (exitCode, signal) = Self.exitStatus(fromWaitStatus: status)
             childDidExit(exitCode: exitCode, terminationSignal: signal)
         }
@@ -250,7 +372,8 @@ enum ShellCommandRunner {
                 return
             }
             // The child has already exited; its real exit is what gets reported,
-            // not a cancellation or timeout that lost the race by a moment.
+            // not a cancellation or timeout that lost the race by a moment, and
+            // its group, whose ID may already be reused, is never signalled.
             guard !childReaped, childExitCode == nil else {
                 stateLock.unlock()
                 return
@@ -269,28 +392,31 @@ enum ShellCommandRunner {
                         stdout: outputCapture.string,
                         stderr: message,
                         exitCode: exitCode
-                    ),
-                    closeWritersFirst: true
+                    )
                 )
                 return
             }
             let processIdentifier = self.processIdentifier
+            if let processIdentifier {
+                // The shell is atomically created as the leader of a new process
+                // group. Signalling the group contains children and grandchildren
+                // that inherit it. The signal is sent under the lock that reaping
+                // takes, so the leader cannot be reaped, and its ID reused,
+                // between the check above and the signal.
+                _ = hooks.signalGroup(processIdentifier, SIGTERM)
+            }
             stateLock.unlock()
 
-            guard let processIdentifier else {
+            guard processIdentifier != nil else {
                 finishStoppedCommand()
                 return
             }
 
-            // The shell is atomically created as the leader of a new process
-            // group. Signalling the negative group ID contains children and
-            // grandchildren that inherit the shell's group.
-            Darwin.kill(-processIdentifier, SIGTERM)
-
             let fallback = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard !Task.isCancelled else { return }
-                self?.finishStopEscalation()
+                // The leader itself ignores TERM.
+                self?.beginGroupCleanup()
             }
             stateLock.lock()
             if completed {
@@ -321,27 +447,67 @@ enum ShellCommandRunner {
                 return
             }
 
-            guard let processIdentifier = currentProcessIdentifier() else {
-                finishStoppedCommand()
-                return
-            }
+            // The group leader is reaped, so anything still in the group ignored
+            // TERM. The stop is reported once the group is empty; if the
+            // fallback already emptied it, that is now.
+            beginGroupCleanup()
+            finishStoppedCommand()
+        }
 
-            errno = 0
-            if Darwin.kill(-processIdentifier, 0) == -1, errno == ESRCH {
-                markStopEscalationFinished()
-            } else {
-                // The group leader is already reaped, so anything still in the
-                // group ignored TERM. Kill it immediately and avoid leaving a
-                // reused group ID exposed to the delayed fallback.
-                finishStopEscalation()
+        /// Kills what is left of the command's process group until the group is
+        /// empty. One SIGKILL is not enough: a member that ignored TERM and is
+        /// inside fork() when SIGKILL walks the group dies, but the child it is
+        /// creating is not signalled. Starts once, and probes on the I/O queue
+        /// so no caller is blocked.
+        private func beginGroupCleanup() {
+            let shouldStart = stateLock.withLock {
+                guard !groupCleanupStarted, !completed, !childStatusLost else { return false }
+                groupCleanupStarted = true
+                return true
+            }
+            guard shouldStart else { return }
+            let deadline = DispatchTime.now() + .milliseconds(750)
+            ioQueue.async { [self] in
+                killRemainingGroupMembers(until: deadline)
             }
         }
 
-        private func finishStopEscalation() {
-            if let processIdentifier = currentProcessIdentifier() {
-                Darwin.kill(-processIdentifier, SIGKILL)
+        private func killRemainingGroupMembers(until deadline: DispatchTime) {
+            stateLock.lock()
+            guard !completed, !childStatusLost, let processIdentifier else {
+                stateLock.unlock()
+                return
             }
-            markStopEscalationFinished()
+            // While a member can still be signalled, the group ID is still this
+            // command's: the kernel does not reuse an ID that names a live
+            // group. ESRCH, or EPERM for a group whose only members have exited
+            // and wait to be reaped, means nothing is left to kill, and the
+            // group is never signalled again.
+            let membersRemain = hooks.signalGroup(processIdentifier, 0) == 0
+            if membersRemain {
+                _ = hooks.signalGroup(processIdentifier, SIGKILL)
+            }
+            stateLock.unlock()
+
+            guard membersRemain else {
+                markStopEscalationFinished()
+                return
+            }
+            guard DispatchTime.now() < deadline else {
+                stateLock.withLock {
+                    if let override = terminalOverride {
+                        terminalOverride = (
+                            "\(override.message) Some of its processes could not be confirmed stopped.",
+                            override.exitCode
+                        )
+                    }
+                }
+                markStopEscalationFinished()
+                return
+            }
+            ioQueue.asyncAfter(deadline: .now() + .milliseconds(10)) { [self] in
+                killRemainingGroupMembers(until: deadline)
+            }
         }
 
         private func markStopEscalationFinished() {
@@ -413,21 +579,17 @@ enum ShellCommandRunner {
             }
             completionScheduled = true
             stateLock.unlock()
-            finishOnIOQueue(result, closeWritersFirst: true)
+            finishOnIOQueue(result)
         }
 
-        /// Drains and closes the pipes on the I/O queue, then completes. The
-        /// caller must already hold the completion claim (`completionScheduled`).
-        private func finishOnIOQueue(_ result: ShellCommandResult, closeWritersFirst: Bool) {
+        /// Closes the pipes on the I/O queue, then completes with a result that
+        /// is already built. The caller must already hold the completion claim
+        /// (`completionScheduled`). No child ran, so nothing is drained: a read
+        /// from a pipe whose reader was never made nonblocking could wait for
+        /// as long as some other process holds a copy of its write end.
+        private func finishOnIOQueue(_ result: ShellCommandResult) {
             ioQueue.async { [self] in
-                // A cancellation can win before `start` configures nonblocking
-                // readers or spawns the child. Close the writers first so an
-                // otherwise blocking drain observes EOF immediately.
-                if closeWritersFirst {
-                    closePipeWriters()
-                }
-                drainAvailableData(from: standardOutput, into: outputCapture)
-                drainAvailableData(from: standardError, into: errorCapture)
+                closePipeWriters()
                 cancelReadSources()
                 finishState(result)
             }
@@ -454,10 +616,40 @@ enum ShellCommandRunner {
             // The exit source and any reap retries remain active until the
             // child is reaped, including after the timeout task has fired.
             closePipeWriters()
+            hooks.registry.deregister(self)
             continuation?.resume(returning: result)
         }
 
+        /// Creates both pipes close-on-exec, so no other command's child can
+        /// inherit them. On failure nothing is left open and the error from
+        /// pipe(2) is returned: Foundation's `Pipe()` cannot fail, and with no
+        /// free descriptor it handed out descriptor 0, the app's standard input.
+        private func createPipes() -> Int32? {
+            var pipes: [CommandPipe] = []
+            for _ in 0..<2 {
+                var descriptors: [Int32] = [-1, -1]
+                guard hooks.makePipe(&descriptors) == 0 else {
+                    let error = errno
+                    pipes.forEach { $0.close() }
+                    return error
+                }
+                for descriptor in descriptors {
+                    _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+                }
+                pipes.append(
+                    CommandPipe(
+                        fileHandleForReading: FileHandle(fileDescriptor: descriptors[0], closeOnDealloc: true),
+                        fileHandleForWriting: FileHandle(fileDescriptor: descriptors[1], closeOnDealloc: true)
+                    )
+                )
+            }
+            standardOutput = pipes[0]
+            standardError = pipes[1]
+            return nil
+        }
+
         private func configureReadSources() {
+            guard let standardOutput, let standardError else { return }
             let outputHandle = standardOutput.fileHandleForReading
             let errorHandle = standardError.fileHandleForReading
             let outputDescriptor = outputHandle.fileDescriptor
@@ -500,6 +692,7 @@ enum ShellCommandRunner {
         }
 
         private func spawnContainedShell() -> SpawnResult {
+            guard let standardOutput, let standardError else { return .failure(EBADF) }
             let outputRead = standardOutput.fileHandleForReading.fileDescriptor
             let outputWrite = standardOutput.fileHandleForWriting.fileDescriptor
             let errorRead = standardError.fileHandleForReading.fileDescriptor
@@ -515,6 +708,11 @@ enum ShellCommandRunner {
             guard errorCode == 0 else { return .failure(errorCode) }
             defer { posix_spawnattr_destroy(&attributes) }
 
+            // POSIX_SPAWN_CLOEXEC_DEFAULT below closes every descriptor the
+            // file actions do not name, including standard input: give the
+            // child an explicit, empty one.
+            errorCode = posix_spawn_file_actions_addopen(&fileActions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+            guard errorCode == 0 else { return .failure(errorCode) }
             for (source, destination) in [(outputWrite, STDOUT_FILENO), (errorWrite, STDERR_FILENO)] {
                 errorCode = posix_spawn_file_actions_adddup2(&fileActions, source, destination)
                 guard errorCode == 0 else { return .failure(errorCode) }
@@ -537,9 +735,15 @@ enum ShellCommandRunner {
             errorCode = posix_spawnattr_setsigmask(&attributes, &emptyMask)
             guard errorCode == 0 else { return .failure(errorCode) }
 
+            // POSIX_SPAWN_CLOEXEC_DEFAULT: the child inherits only the three
+            // standard streams, never another command's pipes or any other
+            // descriptor the app holds without FD_CLOEXEC.
             errorCode = posix_spawnattr_setflags(
                 &attributes,
-                Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+                Int16(
+                    POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
+                        | POSIX_SPAWN_CLOEXEC_DEFAULT
+                )
             )
             guard errorCode == 0 else { return .failure(errorCode) }
             errorCode = posix_spawnattr_setpgroup(&attributes, 0)
@@ -575,14 +779,14 @@ enum ShellCommandRunner {
             }
         }
 
-        private func drainAvailableData(from pipe: Pipe, into capture: PipeCapture) {
+        private func drainAvailableData(from pipe: CommandPipe?, into capture: PipeCapture) {
             // Checked before `fileDescriptor` is touched, not just before the
             // read: reaching EOF cancels the stream's read source, whose cancel
             // handler closes this file handle, and `fileDescriptor` raises an
             // NSFileHandleOperationException on a closed handle. There is
             // nothing left to read anyway -- EOF means the capture already has
             // everything the writer sent.
-            guard !capture.isAtEOF else { return }
+            guard let pipe, !capture.isAtEOF else { return }
             Self.drain(descriptor: pipe.fileHandleForReading.fileDescriptor, into: capture)
         }
 
@@ -629,19 +833,19 @@ enum ShellCommandRunner {
                 outputSource.cancel()
                 self.outputSource = nil
             } else {
-                try? standardOutput.fileHandleForReading.close()
+                try? standardOutput?.fileHandleForReading.close()
             }
             if let errorSource {
                 errorSource.cancel()
                 self.errorSource = nil
             } else {
-                try? standardError.fileHandleForReading.close()
+                try? standardError?.fileHandleForReading.close()
             }
         }
 
         private func closePipeWriters() {
-            try? standardOutput.fileHandleForWriting.close()
-            try? standardError.fileHandleForWriting.close()
+            try? standardOutput?.fileHandleForWriting.close()
+            try? standardError?.fileHandleForWriting.close()
         }
 
         private static func exitStatus(fromWaitStatus status: Int32) -> (exitCode: Int32, signal: Int32?) {

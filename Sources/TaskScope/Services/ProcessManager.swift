@@ -1256,6 +1256,7 @@ final class ProcessManager: ObservableObject {
     }
 
     private func reconcileSelection(with inventory: [AppProcess]) {
+        guard !selectedIdentities.isEmpty else { return }
         let currentIdentities = Set(inventory.map(\.identity))
         selectedIdentities = selectedIdentities.filter { currentIdentities.contains($0.value) }
         selectedPids = Set(selectedIdentities.keys)
