@@ -1268,12 +1268,6 @@ struct TaskScopePopoverView: View {
     }
 
     private func saveQuickWatchedPreset(_ preset: WatchedAppPreset) -> String? {
-        if watchedApps.presets.contains(where: {
-            $0.mainProcessName.caseInsensitiveCompare(preset.mainProcessName) == .orderedSame
-        }) {
-            return "\(preset.mainProcessName) is already watched."
-        }
-
         guard watchedApps.add(preset) else {
             return watchedApps.validationError
                 ?? watchedApps.persistenceIssue

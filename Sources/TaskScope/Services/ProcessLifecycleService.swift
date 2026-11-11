@@ -85,12 +85,27 @@ extension ProcessTerminating {
 }
 
 struct SystemProcessLifecycleService: ProcessLifecycleServicing {
+    /// True when `path` leads to an app bundle: after following links, a
+    /// directory named `*.app` with `Contents/Info.plist`. `/usr/bin/open` would
+    /// otherwise run a script, open a document or show a folder that a `*.app`
+    /// link points at.
+    static func isAppBundle(at path: String) -> Bool {
+        guard path.hasPrefix("/"), let resolved = realpath(path, nil) else { return false }
+        defer { free(resolved) }
+        let bundle = URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
+        var isDirectory: ObjCBool = false
+        return bundle.pathExtension.caseInsensitiveCompare("app") == .orderedSame
+            && FileManager.default.fileExists(atPath: bundle.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
+            && FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Info.plist").path)
+    }
+
     func disconnectGlobalProtectIfNeeded() async -> GlobalProtectDisconnectResult {
         await GlobalProtectAccessibilityDisconnect.disconnectIfNeeded()
     }
 
     func appBundleExists(at path: String) -> Bool {
-        FileManager.default.fileExists(atPath: path)
+        Self.isAppBundle(at: path)
     }
 
     func settleAfterProcessChange() async {
@@ -173,6 +188,9 @@ struct SystemProcessLifecycleService: ProcessLifecycleServicing {
     }
 
     func openAppBundle(at path: String) async -> Bool {
-        await ProcessLifecycleController.openAppBundle(at: path)
+        // Checked again here: the link may have been re-pointed since Open
+        // checked that the bundle exists.
+        guard Self.isAppBundle(at: path) else { return false }
+        return await ProcessLifecycleController.openAppBundle(at: path)
     }
 }

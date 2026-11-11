@@ -261,7 +261,7 @@ final class ProcessManualRegressionTests: XCTestCase {
         bus.install { await coordinator.perform($0) }
         let mutation = Task { await manager.terminate(self.row()) }
         await verification.waitUntilEntered()
-        let stop = Task { await bus.submit(.stopPreset(preset.displayName)) }
+        let stop = Task { await bus.submit(.stopPresetEntity(.init(id: preset.id, displayName: preset.displayName))) }
         await waitUntil { manager.operationState == .queued }
         stop.cancel()
         let result = await stop.value

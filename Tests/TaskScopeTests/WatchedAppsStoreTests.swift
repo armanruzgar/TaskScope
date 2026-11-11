@@ -98,7 +98,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testValidationTrimsFieldsAndRejectsSemanticDuplicates() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         var preset = validPreset(name: " Example ")
         preset.mainProcessName = " ExampleProcess "
         preset.appPath = " /Applications/Example.app "
@@ -113,7 +113,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testCrossFieldNamesRemainValidAfterPersistenceRoundTrip() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         let first = WatchedAppPreset(
             displayName: "Alpha",
             mainProcessName: "Beta",
@@ -140,7 +140,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testDuplicateLaunchJobLabelsAndPathsAreRejected() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         var duplicateLabel = validPreset(name: "Labels")
         duplicateLabel.userLaunchAgentJobs = [
             UserLaunchAgentJob(label: "example.agent", plistPath: "/agents/first.plist"),
@@ -157,9 +157,9 @@ final class WatchedAppsStoreTests: XCTestCase {
         XCTAssertTrue(store.validationError?.contains("must be unique") == true)
     }
 
-    func testDirectoryOnlyAppPathAndInvalidPortAreRejected() {
+    func testDirectoryOnlyAppPathAndCustomDaemonsAreRejected() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         var directory = validPreset(name: "Directory")
         directory.appPath = "/Applications/"
         XCTAssertFalse(store.add(directory))
@@ -174,6 +174,7 @@ final class WatchedAppsStoreTests: XCTestCase {
             )
         ]
         XCTAssertFalse(store.add(invalidPort))
+        XCTAssertTrue(store.validationError?.contains("cannot configure privileged") == true)
 
         var relativeAgent = validPreset(name: "Relative Agent")
         relativeAgent.userLaunchAgentJobs = [
@@ -185,7 +186,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testImportRejectsRepeatedIDsWithinTheSamePayload() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         let first = validPreset(name: "First")
         var repeatedID = validPreset(name: "Second")
         repeatedID.id = first.id
@@ -199,7 +200,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testSemanticDuplicateRejectionDoesNotUseUpItsID() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         XCTAssertTrue(store.add(validPreset(name: "Foo")))
         let duplicate = validPreset(name: "Foo")
         var unique = validPreset(name: "Bar")
@@ -209,7 +210,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
         XCTAssertEqual(
             preview.items[0].rejectionReason,
-            "A preset with the same name, process, or app path already exists."
+            "A preset named “Foo” already exists."
         )
         XCTAssertNil(preview.items[1].rejectionReason)
         XCTAssertEqual(preview.importableCount, 1)
@@ -221,7 +222,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testImportPreviewDoesNotMutateAndCommitUsesTheSameValidation() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         let valid = validPreset(name: "Valid")
         var invalid = validPreset(name: "Invalid")
         invalid.appPath = "relative/Invalid.app"
@@ -327,7 +328,7 @@ final class WatchedAppsStoreTests: XCTestCase {
 
     func testCustomPrivilegedDaemonsAndProcessRoleOverlapsAreRejected() {
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         var daemon = validPreset(name: "Privileged")
         daemon.systemLaunchDaemonJobs = [
             SystemLaunchDaemonJob(
@@ -522,7 +523,10 @@ final class WatchedAppsStoreTests: XCTestCase {
         preset.appPath = alias.path
         let store = WatchedAppsStore(userDefaults: defaults, key: key)
         XCTAssertTrue(store.add(preset))
-        XCTAssertEqual(store.presets.last?.appPath, AutoStopRuleValidation.canonicalPath(bundle.path))
+        // The configured path is stored as typed; matching follows it to the
+        // bundle's on-disk spelling each time it is used.
+        XCTAssertEqual(store.presets.last?.appPath, alias.standardizedFileURL.path)
+        XCTAssertEqual(store.presets.last?.resolvedAppPath, AutoStopRuleValidation.canonicalPath(bundle.path))
         preset.mainProcessName = "exampleprocess"
         XCTAssertTrue(store.update(preset))
         XCTAssertEqual(store.presets.last?.mainProcessName, "ExampleProcess")

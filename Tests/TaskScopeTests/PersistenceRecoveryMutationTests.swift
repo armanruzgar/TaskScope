@@ -194,7 +194,7 @@ final class PersistenceRecoveryMutationTests: XCTestCase {
         XCTAssertFalse(store.save(name: "New", processes: [process(name: "Example")]))
         XCTAssertFalse(store.rename(selection, to: "Renamed"))
         XCTAssertFalse(store.remove(selection))
-        XCTAssertFalse(store.remove(at: IndexSet()))
+        XCTAssertFalse(store.remove(.init(name: "Missing", pids: [], processes: [])))
         XCTAssertTrue(store.selections.isEmpty)
         XCTAssertNotNil(store.validationError)
         XCTAssertEqual(defaults.data(forKey: key), corrupt)

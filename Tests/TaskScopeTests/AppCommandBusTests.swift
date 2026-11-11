@@ -12,7 +12,7 @@ final class AppCommandBusTests: XCTestCase {
         }
         let caller = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return await bus.submit(.stopPreset("Example"))
+            return await bus.submit(.stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Example")))
         }
         let result = await caller.value
         XCTAssertEqual(result.status, .rejected)
@@ -25,7 +25,7 @@ final class AppCommandBusTests: XCTestCase {
         let finished = expectation(description: "cancelled submission completes")
         let caller = Task {
             submitted.release()
-            let result = await bus.submit(.stopPreset("Example"))
+            let result = await bus.submit(.stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Example")))
             XCTAssertEqual(result.status, .rejected)
             finished.fulfill()
         }
@@ -60,18 +60,18 @@ final class AppCommandBusTests: XCTestCase {
         let submitted = BusTestLatch()
         let cancelled = Task {
             submitted.release()
-            return await bus.submit(.stopPreset("Cancelled"))
+            return await bus.submit(.stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Cancelled")))
         }
         await submitted.wait()
         cancelled.cancel()
         let result = await cancelled.value
         XCTAssertEqual(result.status, .rejected)
-        let next = Task { await bus.submit(.openPreset("Next")) }
+        let next = Task { await bus.submit(.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Next"))) }
         release.release()
         _ = await first.value
         let nextResult = await next.value
         XCTAssertTrue(nextResult.succeeded)
-        XCTAssertEqual(received, [.refresh, .openPreset("Next")])
+        XCTAssertEqual(received, [.refresh, .openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Next"))])
     }
 
     func testCancellationReachesHandlerWaitingForMutationGate() async {
@@ -93,7 +93,7 @@ final class AppCommandBusTests: XCTestCase {
             let ran = await gate.run(kind: .mutation) { mutations += 1 }
             return .init(status: ran ? .completed : .rejected, message: "gate result")
         }
-        let caller = Task { await bus.submit(.stopPreset("Example")) }
+        let caller = Task { await bus.submit(.stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Example"))) }
         await dispatched.wait()
         caller.cancel()
         let result = await caller.value
@@ -101,7 +101,7 @@ final class AppCommandBusTests: XCTestCase {
         release.release()
         _ = await owner.value
         XCTAssertEqual(mutations, 0)
-        let next = await bus.submit(.stopPreset("Next"))
+        let next = await bus.submit(.stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Next")))
         XCTAssertTrue(next.succeeded)
         XCTAssertEqual(mutations, 1)
     }

@@ -1148,7 +1148,7 @@ final class SwiftUIHarnessTests: XCTestCase {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
         let store = fixture.stores.watchedApps
-        XCTAssertTrue(store.remove(at: IndexSet(store.presets.indices)))
+        for preset in store.presets { XCTAssertTrue(store.remove(preset)) }
         let alpha = WatchedAppPreset(
             displayName: "Alpha",
             mainProcessName: "Beta",
@@ -1165,8 +1165,13 @@ final class SwiftUIHarnessTests: XCTestCase {
         )
         XCTAssertTrue(store.add(alpha))
         XCTAssertTrue(store.add(beta))
+        // The removed name-based commands matched a display name or a main
+        // process name and took the first hit.
         XCTAssertEqual(
-            store.presets.first { $0.matchesLookupName("Beta") }?.id,
+            store.presets.first {
+                $0.displayName.caseInsensitiveCompare("Beta") == .orderedSame
+                    || $0.mainProcessName.caseInsensitiveCompare("Beta") == .orderedSame
+            }?.id,
             alpha.id,
             "precondition: a name lookup for Beta resolves to Alpha"
         )

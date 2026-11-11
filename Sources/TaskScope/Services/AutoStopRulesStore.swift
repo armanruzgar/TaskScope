@@ -123,7 +123,7 @@ final class AutoStopRulesStore: ObservableObject {
         let eventsLoad = eventsPersistence.loadRecoveringElements()
         let loadedRules = (
             value: rulesLoad.value,
-            message: rulesLoad.backupKey.map {
+            message: rulesLoad.unrewritableDataDescription.map { "Auto-stop rules were read, but the payload \($0)" } ?? rulesLoad.backupKey.map {
                 PersistenceRecovery.unreadableDataMessage(
                     backupKey: $0,
                     isPreserved: rulesLoad.isBackupPreserved
@@ -132,7 +132,7 @@ final class AutoStopRulesStore: ObservableObject {
         )
         let loadedEvents = (
             value: eventsLoad.value,
-            message: eventsLoad.backupKey.map {
+            message: eventsLoad.unrewritableDataDescription.map { "Auto-stop events were read, but the payload \($0)" } ?? eventsLoad.backupKey.map {
                 PersistenceRecovery.unreadableDataMessage(
                     backupKey: $0,
                     isPreserved: eventsLoad.isBackupPreserved

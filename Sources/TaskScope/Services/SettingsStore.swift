@@ -3,6 +3,12 @@ import Foundation
 
 @MainActor
 final class SettingsStore: ObservableObject {
+    /// "Show all processes". Kept in `processListLimit` rather than a new
+    /// field: an older build clamps it to its own maximum in memory and keeps
+    /// the stored value, instead of finding a payload it cannot decode.
+    nonisolated static let allProcessesLimit = 100_000
+    nonisolated static let processListLimitRange: ClosedRange<Int> = 10...200
+
     /// The memory slider's grid. 1024 (the default) is on it: 128 + 14 × 64.
     nonisolated static let memoryThresholdRange: ClosedRange<Double> = 128...8192
     nonisolated static let memoryThresholdStep: Double = 64
@@ -67,8 +73,10 @@ final class SettingsStore: ObservableObject {
             allowsPersistence = true
         } else if let settings = result.value {
             decoded = settings.normalized()
-            recoveryMessage = nil
-            allowsPersistence = true
+            // Readable settings apply even when the payload cannot be written
+            // back without losing a value; they stay read-only until reset.
+            recoveryMessage = result.unrewritableDataDescription.map { "Settings were read, but the payload \($0)" }
+            allowsPersistence = !result.isDecodedButUnrewritable
         } else {
             decoded = .defaults
             let backupKey = result.backupKey ?? "\(key).corruptBackup"
@@ -87,6 +95,13 @@ final class SettingsStore: ObservableObject {
         selectedSectionRaw = decoded.selectedSectionRaw
         searchText = decoded.searchText
         sortKeyRaw = decoded.sortKeyRaw
+    }
+
+    /// Lifts the process list limit, so every process can be browsed in any
+    /// sort order. Turning it off returns to the default limit.
+    var showsAllProcesses: Bool {
+        get { processListLimit == Self.allProcessesLimit }
+        set { processListLimit = newValue ? Self.allProcessesLimit : CodableSettings.defaults.processListLimit }
     }
 
     var sortKey: ProcessSortKey {
@@ -108,6 +123,10 @@ final class SettingsStore: ObservableObject {
         guard !allowsPersistence else { return }
         allowsPersistence = true
         recoveryMessage = nil
+        // The primary may hold bytes this build cannot decode or write back,
+        // which `save()` refuses to replace; reset is the explicit overwrite.
+        // They were backed up when the problem was found.
+        persistence.save(currentSettings.normalized())
         normalizeAndSave()
     }
 
@@ -181,7 +200,19 @@ final class SettingsStore: ObservableObject {
               var stored = try? JSONSerialization.jsonObject(with: storedData) as? [String: Any],
               let encoded = try? JSONEncoder().encode(settings),
               var values = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
-            persistence.save(settings)
+            guard persistence.hasStoredValue else {
+                persistence.save(settings)
+                return
+            }
+            // Something outside TaskScope replaced the stored settings with a
+            // payload this build cannot read or write back. Overwriting it would
+            // destroy it, so keep it, back it up and stop writing, as load does.
+            let backup = persistence.preserveCurrentPayload(suffix: "corruptBackup")
+                ?? (key: "\(persistence.key).corruptBackup", isPreserved: false)
+            allowsPersistence = false
+            recoveryMessage = "Stored settings were changed outside TaskScope and can no longer be read. "
+                + PersistenceRecovery.preservedPayloadDescription(backupKey: backup.key, isPreserved: backup.isPreserved)
+                + "; the current settings stay in use and are saved again after reset."
             return
         }
         // A downgrade may edit known settings without discarding newer fields
@@ -318,7 +349,10 @@ final class SettingsStore: ObservableObject {
             var value = self
             value.schemaVersion = Self.currentSchemaVersion
             value.refreshIntervalSeconds = min(60, max(2, refreshIntervalSeconds))
-            value.processListLimit = min(200, max(10, processListLimit))
+            let limits = SettingsStore.processListLimitRange
+            value.processListLimit = processListLimit == SettingsStore.allProcessesLimit
+                ? processListLimit
+                : min(limits.upperBound, max(limits.lowerBound, processListLimit))
             value.cpuHighlightThreshold = min(100, max(1, cpuHighlightThreshold))
             value.memHighlightThresholdMB = min(
                 SettingsStore.memoryThresholdRange.upperBound,

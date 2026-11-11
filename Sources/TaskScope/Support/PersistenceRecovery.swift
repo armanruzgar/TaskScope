@@ -67,6 +67,19 @@ struct RecoveringCodableStorage<Value: Codable> {
         /// means every slot was occupied by other payloads.
         var isBackupPreserved: Bool
         var rejectedCount = 0
+        /// The value decoded, but the payload also holds JSON this build cannot
+        /// parse back (an unknown field with a number such as 1e400 or a lone
+        /// surrogate), so a save could not keep it. Stores apply the value but
+        /// stay read-only; the bytes are backed up as for an unreadable payload.
+        var isDecodedButUnrewritable = false
+
+        /// The second half of a store's recovery message for such a payload.
+        var unrewritableDataDescription: String? {
+            guard isDecodedButUnrewritable, let backupKey else { return nil }
+            return "contains a value this build cannot write back without losing it. "
+                + PersistenceRecovery.preservedPayloadDescription(backupKey: backupKey, isPreserved: isBackupPreserved)
+                + "; reset to rewrite only the fields this build knows."
+        }
     }
 
     private let snapshot = StoredJSONSnapshot()
@@ -85,11 +98,18 @@ struct RecoveringCodableStorage<Value: Codable> {
             return unreadableOutcome(data: archivedPayload(object))
         }
         do {
-            return LoadOutcome(
-                value: try decodeAndRemember(data, decode: decode),
-                backupKey: nil,
-                isBackupPreserved: false
-            )
+            let value = try decodeAndRemember(data, decode: decode)
+            guard snapshot.raw != nil else {
+                // JSONDecoder skips the values of keys it does not decode, while
+                // the raw snapshot must parse all of them. Keep the readable value
+                // instead of discarding it as corrupt, but back the bytes up: a
+                // save would silently drop the field the snapshot could not hold.
+                var outcome = unreadableOutcome(data: data)
+                outcome.value = value
+                outcome.isDecodedButUnrewritable = true
+                return outcome
+            }
+            return LoadOutcome(value: value, backupKey: nil, isBackupPreserved: false)
         } catch {
             return unreadableOutcome(data: data)
         }
@@ -130,9 +150,17 @@ struct RecoveringCodableStorage<Value: Codable> {
 
     private func decodeAndRemember(_ data: Data, decode: (Data) throws -> Value) throws -> Value {
         let value = try decode(data)
-        snapshot.raw = try JSONSerialization.jsonObject(with: data)
-        snapshot.baseline = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+        snapshot.raw = try? JSONSerialization.jsonObject(with: data)
+        snapshot.baseline = snapshot.raw == nil
+            ? nil : try? JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
         return value
+    }
+
+    /// The JSON a save of `value` would write: this build's changes merged into
+    /// the stored payload, so fields this build does not model are kept.
+    func mergedJSONObject(_ value: Value) throws -> Any {
+        let current = try JSONSerialization.jsonObject(with: JSONEncoder().encode(value))
+        return StoredJSONSnapshot.merge(raw: snapshot.raw, baseline: snapshot.baseline, current: current)
     }
 
     /// Apply only changes this build made to the decoded value. Unknown fields

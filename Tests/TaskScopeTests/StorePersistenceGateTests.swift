@@ -142,20 +142,40 @@ final class StorePersistenceGateTests: XCTestCase {
 
     // MARK: - Legacy event decoding
 
-    /// Missing defaulted fields in legacy events must remain readable.
+    /// Missing defaulted fields in legacy rules and events must remain readable,
+    /// with the documented defaults: a rule stored without `isEnabled` keeps
+    /// enforcing, and an event stored without an outcome is never shown as
+    /// Logged.
     func testPersistedEventDecoderHonoursPropertyDefaultsLikeEveryOtherPersistedType() throws {
         let ruleMissingDefaultedFields = Data(#"[{"processName":"Example","runtimeMinutes":5,"action":"silent"}]"#.utf8)
-        let eventMissingDefaultedField = Data(
-            #"[{"timestamp":0,"processName":"Example","pid":42,"ruleID":"00000000-0000-0000-0000-000000000001","outcome":"logged","detail":"x"}]"#.utf8
+        let eventsMissingDefaultedFields = Data(
+            #"[{"timestamp":0,"processName":"Example","pid":42,"ruleID":"00000000-0000-0000-0000-000000000001","outcome":"logged","detail":"x"},{"timestamp":0,"processName":"Example","pid":43,"ruleID":"00000000-0000-0000-0000-000000000001","detail":"y"}]"#.utf8
         )
 
-        // Control: the hand-written decoder tolerates missing `id` and `isEnabled`.
-        XCTAssertNoThrow(try JSONDecoder().decode([AutoStopRule].self, from: ruleMissingDefaultedFields))
+        // The hand-written decoders supply `id`, `isEnabled` and the outcome.
+        let rules = try JSONDecoder().decode([AutoStopRule].self, from: ruleMissingDefaultedFields)
+        XCTAssertEqual(rules.count, 1)
+        XCTAssertTrue(rules[0].isEnabled, "A rule stored without isEnabled must keep enforcing.")
+        XCTAssertFalse(rules[0].hasUnknownFields)
 
-        XCTAssertNoThrow(
-            try JSONDecoder().decode([AutoStopEvent].self, from: eventMissingDefaultedField),
-            "The event decoder must supply defaults for omitted legacy fields."
+        let events = try JSONDecoder().decode([AutoStopEvent].self, from: eventsMissingDefaultedFields)
+        XCTAssertEqual(
+            events.map(\.outcome),
+            [.logged, .unknown("missing")],
+            "An event without an outcome must not be reported as Logged."
         )
+        XCTAssertNotEqual(events[0].id, events[1].id)
+        let roundTripped = try JSONDecoder().decode([AutoStopEvent].self, from: JSONEncoder().encode(events))
+        XCTAssertEqual(roundTripped.map(\.outcome), [.logged, .unknown("missing")])
+        XCTAssertEqual(roundTripped.map(\.id), events.map(\.id))
+
+        // The store loads the same payloads with the same defaults.
+        defaults.set(ruleMissingDefaultedFields, forKey: rulesKey)
+        defaults.set(eventsMissingDefaultedFields, forKey: eventsKey)
+        let store = makeRulesStore()
+        XCTAssertFalse(store.hasUnreadableData)
+        XCTAssertEqual(store.rules.map(\.isEnabled), [true])
+        XCTAssertEqual(store.events.map(\.outcome), [.logged, .unknown("missing")])
     }
 
     // MARK: - Helpers

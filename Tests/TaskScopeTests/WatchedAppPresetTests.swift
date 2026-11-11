@@ -39,21 +39,6 @@ final class WatchedAppPresetTests: XCTestCase {
         XCTAssertTrue(preset.notificationsEnabled)
     }
 
-    func testMatchesLookupNameTrimsAndIgnoresCase() {
-        let preset = WatchedAppPreset(
-            displayName: "GlobalProtect",
-            mainProcessName: "PanGPA",
-            helperProcessNames: [],
-            protectedProcessNames: [],
-            appPath: "/Applications/GlobalProtect.app"
-        )
-
-        XCTAssertTrue(preset.matchesLookupName(" globalprotect "))
-        XCTAssertTrue(preset.matchesLookupName("pangpa"))
-        XCTAssertFalse(preset.matchesLookupName(" "))
-        XCTAssertFalse(preset.matchesLookupName("PanGPS"))
-    }
-
     func testSnapshotAggregateStatusPrioritizesMainAppOverHelpers() {
         let preset = WatchedAppPreset.globalProtect
 

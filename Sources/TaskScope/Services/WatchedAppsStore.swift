@@ -1,8 +1,11 @@
-import Darwin
 import Foundation
 
 @MainActor
 final class WatchedAppsStore: ObservableObject {
+    /// Bounds the presets one archive may carry and the presets Add and Import
+    /// may create. Import validation and duplicate checks run on the main actor,
+    /// and a 1 MB archive could otherwise hold about 13,000 minimal presets.
+    nonisolated static let maximumPresetCount = 200
     nonisolated static let maximumPresetArchiveBytes = 1_000_000
 
     struct PresetArchive: Codable, Equatable {
@@ -22,6 +25,7 @@ final class WatchedAppsStore: ObservableObject {
 
     enum PresetArchiveError: LocalizedError, Equatable {
         case exceedsMaximumSize
+        case exceedsMaximumCount
         case unsupportedSchemaVersion(Int)
         case unreadable
         /// The archive shape was recognized but its presets did not decode. The
@@ -32,6 +36,8 @@ final class WatchedAppsStore: ObservableObject {
             switch self {
             case .exceedsMaximumSize:
                 "Preset archives must be 1 MB or smaller."
+            case .exceedsMaximumCount:
+                "Preset archives may contain at most \(WatchedAppsStore.maximumPresetCount) presets."
             case .unsupportedSchemaVersion(let version):
                 "Preset schema version \(version) is not supported by this TaskScope build."
             case .unreadable:
@@ -64,6 +70,8 @@ final class WatchedAppsStore: ObservableObject {
     }
 
     nonisolated static let defaultPersistenceKey = "TaskScope.watchedPresets.v1"
+    nonisolated static let presetLimitMessage = "At most \(maximumPresetCount) presets can be stored."
+    nonisolated static let newerBuildMessage = "This preset contains fields from a newer build and is read-only. Use a build that understands it."
 
     @Published private(set) var presets: [WatchedAppPreset] {
         didSet { persistIfAllowed() }
@@ -100,7 +108,13 @@ final class WatchedAppsStore: ObservableObject {
             let validated = Self.validatedPresets(decoded)
             let rejectedCount = loaded.rejectedCount + validated.rejectedCount
             presets = validated.presets
-            if rejectedCount > 0 {
+            if let unrewritable = loaded.unrewritableDataDescription {
+                // The presets decoded, but the payload also holds a value this
+                // build cannot write back. Use them, and keep the bytes as they are.
+                allowsPersistence = false
+                recoveredDecodedPayload = true
+                persistenceIssue = "Preset data was read, but it \(unrewritable) Review or export the presets before resetting."
+            } else if rejectedCount > 0 {
                 let backup = persistence.preserveCurrentPayload(
                     suffix: "rejectedMigrationBackup"
                 ) ?? (key: "\(key).rejectedMigrationBackup", isPreserved: false)
@@ -146,9 +160,24 @@ final class WatchedAppsStore: ObservableObject {
         return true
     }
 
+    /// A preset that carries a newer build's fields stays exactly as stored. A
+    /// fabricated copy without those fields must not replace or remove it.
+    private func rejectIfRequiresNewerBuild(_ preset: WatchedAppPreset) -> Bool {
+        guard preset.hasUnknownFields
+            || presets.contains(where: { $0.id == preset.id && $0.hasUnknownFields }) else {
+            return false
+        }
+        validationError = Self.newerBuildMessage
+        return true
+    }
+
     @discardableResult
     func add(_ preset: WatchedAppPreset) -> Bool {
         guard !rejectIfReadOnly() else { return false }
+        guard presets.count < Self.maximumPresetCount else {
+            validationError = Self.presetLimitMessage
+            return false
+        }
         guard let normalized = validateAndNormalize(preset),
               !isSemanticDuplicate(normalized) else {
             return false
@@ -159,15 +188,8 @@ final class WatchedAppsStore: ObservableObject {
     }
 
     @discardableResult
-    func remove(at offsets: IndexSet) -> Bool {
-        guard !rejectIfReadOnly() else { return false }
-        presets.remove(atOffsets: offsets)
-        return true
-    }
-
-    @discardableResult
     func remove(_ preset: WatchedAppPreset) -> Bool {
-        guard !rejectIfReadOnly() else { return false }
+        guard !rejectIfReadOnly(), !rejectIfRequiresNewerBuild(preset) else { return false }
         presets.removeAll { $0.id == preset.id }
         return true
     }
@@ -181,7 +203,7 @@ final class WatchedAppsStore: ObservableObject {
 
     @discardableResult
     func update(_ preset: WatchedAppPreset) -> Bool {
-        guard !rejectIfReadOnly() else { return false }
+        guard !rejectIfReadOnly(), !rejectIfRequiresNewerBuild(preset) else { return false }
         guard let index = presets.firstIndex(where: { $0.id == preset.id }),
               let normalized = validateAndNormalize(preset),
               !isSemanticDuplicate(normalized, excluding: preset.id) else {
@@ -238,42 +260,51 @@ final class WatchedAppsStore: ObservableObject {
             })
         }
 
-        var workingPresets = presets
+        var acceptedCount = presets.count
+        var duplicates = DuplicateIndex(presets, comparesResolvedPaths: true)
         var seenIDs = Set(presets.map(\.id))
         var items: [ImportPreviewItem] = []
         for (offset, candidate) in candidates.enumerated() {
-            let validation = Self.validateAndNormalizePreset(candidate)
-            guard let normalized = validation.preset else {
+            func reject(_ reason: String) {
                 items.append(ImportPreviewItem(
                     id: offset,
                     preset: candidate,
                     normalizedPreset: nil,
-                    rejectionReason: validation.error ?? "Invalid preset."
+                    rejectionReason: reason
                 ))
+            }
+            guard acceptedCount < Self.maximumPresetCount else {
+                reject(Self.presetLimitMessage)
+                continue
+            }
+            let validation = Self.validateAndNormalizePreset(candidate)
+            guard let normalized = validation.preset else {
+                reject(validation.error ?? "Invalid preset.")
+                continue
+            }
+            if let bundleError = Self.bundleTargetError(normalized) {
+                reject(bundleError)
+                continue
+            }
+            // Importing would drop the newer build's fields from the payload, and
+            // with them any restriction they place on the preset.
+            guard !normalized.hasUnknownFields else {
+                reject("This preset contains fields from a newer TaskScope build and cannot be imported by this build.")
                 continue
             }
             guard !seenIDs.contains(normalized.id) else {
-                items.append(ImportPreviewItem(
-                    id: offset,
-                    preset: candidate,
-                    normalizedPreset: nil,
-                    rejectionReason: "A preset with this identity already exists."
-                ))
+                reject("A preset with this identity already exists.")
                 continue
             }
-            guard !Self.hasSemanticDuplicate(normalized, in: workingPresets) else {
-                items.append(ImportPreviewItem(
-                    id: offset,
-                    preset: candidate,
-                    normalizedPreset: nil,
-                    rejectionReason: "A preset with the same name, process, or app path already exists."
-                ))
+            if let collision = duplicates.collision(for: normalized) {
+                reject(collision)
                 continue
             }
             // Record the ID only once the candidate is accepted, so a rejected
             // duplicate does not block a later valid candidate with the same ID.
             seenIDs.insert(normalized.id)
-            workingPresets.append(normalized)
+            duplicates.insert(normalized)
+            acceptedCount += 1
             items.append(ImportPreviewItem(
                 id: offset,
                 preset: candidate,
@@ -284,11 +315,15 @@ final class WatchedAppsStore: ObservableObject {
         return ImportPreview(items: items)
     }
 
+    /// Exports the stored JSON of the presets in memory, so fields written by a
+    /// newer build, which ordinary saves keep, are not dropped from a backup.
     func encodedPresetArchive() throws -> Data {
         guard canExportPresets else { throw PresetArchiveError.unreadable }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(PresetArchive(presets: presets))
+        let archive: [String: Any] = [
+            "schemaVersion": PresetArchive.currentSchemaVersion,
+            "presets": try persistence.mergedJSONObject(presets)
+        ]
+        return try JSONSerialization.data(withJSONObject: archive, options: [.prettyPrinted, .sortedKeys])
     }
 
     /// Decodes a versioned archive or a legacy preset array.
@@ -316,13 +351,19 @@ final class WatchedAppsStore: ObservableObject {
             guard schemaVersion == PresetArchive.currentSchemaVersion else {
                 throw PresetArchiveError.unsupportedSchemaVersion(schemaVersion)
             }
+            if let presets = envelope["presets"] as? [Any], presets.count > maximumPresetCount {
+                throw PresetArchiveError.exceedsMaximumCount
+            }
             do {
                 return try decoder.decode(PresetArchive.self, from: data).presets
             } catch {
                 throw PresetArchiveError.invalidContents(describeDecodingError(error))
             }
         }
-        if topLevel is [Any] {
+        if let presets = topLevel as? [Any] {
+            guard presets.count <= maximumPresetCount else {
+                throw PresetArchiveError.exceedsMaximumCount
+            }
             do {
                 return try decoder.decode([WatchedAppPreset].self, from: data)
             } catch {
@@ -358,17 +399,31 @@ final class WatchedAppsStore: ObservableObject {
         }
     }
 
+    /// Validation for a preset the user is adding or editing now. On top of the
+    /// stored-value rules it checks what the app path points at today.
     private func validateAndNormalize(_ preset: WatchedAppPreset) -> WatchedAppPreset? {
         let result = Self.validateAndNormalizePreset(preset)
-        validationError = result.error
-        return result.preset
+        guard let normalized = result.preset else {
+            validationError = result.error
+            return nil
+        }
+        if let bundleError = Self.bundleTargetError(normalized) {
+            validationError = bundleError
+            return nil
+        }
+        validationError = nil
+        return normalized
     }
 
+    /// Revalidates stored presets. Nothing here may depend on the file system
+    /// beyond spelling, because a preset this build saved must load again
+    /// unchanged however links and installs changed in between.
     nonisolated static func validatedPresets(
         _ candidates: [WatchedAppPreset]
     ) -> (presets: [WatchedAppPreset], rejectedCount: Int) {
         var accepted: [WatchedAppPreset] = []
         var seenIDs: Set<UUID> = []
+        var duplicates = DuplicateIndex([], comparesResolvedPaths: false)
         var rejected = 0
 
         for candidate in candidates {
@@ -377,14 +432,31 @@ final class WatchedAppsStore: ObservableObject {
                 continue
             }
             guard seenIDs.insert(preset.id).inserted,
-                  !hasSemanticDuplicate(preset, in: accepted) else {
+                  duplicates.collision(for: preset) == nil else {
                 rejected += 1
                 continue
             }
+            duplicates.insert(preset)
             accepted.append(preset)
         }
         return (accepted, rejected)
     }
+
+    /// Launch agents, daemons and process names that belong to GlobalProtect.
+    /// Only the built-in preset may act on them: its actions disconnect first
+    /// and keep the VPN service, while a custom preset's Quit and Open would
+    /// boot out or start them directly.
+    nonisolated private static let reservedGlobalProtectLabels = Set(
+        (WatchedAppPreset.globalProtectUserLaunchAgentJobs.map(\.label)
+            + WatchedAppPreset.globalProtectSystemLaunchDaemonJobs.map(\.label)).map { $0.lowercased() }
+    )
+    nonisolated private static let reservedGlobalProtectPlistPaths = Set(
+        (WatchedAppPreset.globalProtectUserLaunchAgentJobs.map(\.plistPath)
+            + WatchedAppPreset.globalProtectSystemLaunchDaemonJobs.map(\.plistPath)).map { $0.lowercased() }
+    )
+    nonisolated private static let reservedGlobalProtectProcessNames = Set(
+        WatchedAppPreset.globalProtectSystemLaunchDaemonJobs.map { $0.processName.lowercased() }
+    )
 
     nonisolated private static func validateAndNormalizePreset(
         _ preset: WatchedAppPreset
@@ -405,8 +477,8 @@ final class WatchedAppsStore: ObservableObject {
         guard !listItems.contains(where: { $0.contains(",") }) else {
             return (nil, "Helper and protected process names and launch agent labels and paths cannot contain commas.")
         }
-        // Before path normalization: realpath reads a path only up to an
-        // embedded NUL and could hide it.
+        // Before the path is standardized or resolved: realpath reads a path
+        // only up to an embedded NUL and could hide it.
         if let error = PresetFieldValidation.error(in: value) { return (nil, error) }
         guard !value.displayName.isEmpty, !value.mainProcessName.isEmpty else {
             return (nil, "Display name and main process name are required.")
@@ -415,16 +487,15 @@ final class WatchedAppsStore: ObservableObject {
               URL(fileURLWithPath: value.appPath).pathExtension.caseInsensitiveCompare("app") == .orderedSame else {
             return (nil, "App path must be an absolute .app bundle path.")
         }
+        // The configured path is stored, standardized but not resolved: links are
+        // followed when the preset is matched or opened (`resolvedAppPath`), so
+        // the stored value never depends on what the file system held at save.
         value.appPath = URL(fileURLWithPath: value.appPath).standardizedFileURL.path
         if value.id != WatchedAppPreset.globalProtectID {
-            if let resolved = realpath(value.appPath, nil) {
-                value.appPath = String(cString: resolved)
-                free(resolved)
-            }
             // Process names match case-sensitively, so a main name that differs
             // from the bundle executable only by case could never match. Adopt
             // the executable's spelling rather than rejecting a stored preset.
-            if let executable = Bundle(path: value.appPath)?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
+            if let executable = Bundle(path: value.resolvedAppPath)?.object(forInfoDictionaryKey: "CFBundleExecutable") as? String,
                executable.caseInsensitiveCompare(value.mainProcessName) == .orderedSame {
                 value.mainProcessName = executable
             }
@@ -442,7 +513,7 @@ final class WatchedAppsStore: ObservableObject {
             job.processName = job.processName.trimmingCharacters(in: .whitespacesAndNewlines)
             return job
         }
-        // realpath can resolve the app path to a different spelling.
+        // The main process name can take the bundle executable's spelling.
         if let error = PresetFieldValidation.error(in: value) { return (nil, error) }
         let killable = Set(([value.mainProcessName] + value.helperProcessNames).map { $0.lowercased() })
         let protected = Set(value.protectedProcessNames.map { $0.lowercased() })
@@ -456,8 +527,18 @@ final class WatchedAppsStore: ObservableObject {
             let notificationsEnabled = value.notificationsEnabled
             value = .globalProtect
             value.notificationsEnabled = notificationsEnabled
-        } else if !value.systemLaunchDaemonJobs.isEmpty {
-            return (nil, "Custom presets cannot configure privileged system launch daemons.")
+        } else {
+            guard value.systemLaunchDaemonJobs.isEmpty else {
+                return (nil, "Custom presets cannot configure privileged system launch daemons.")
+            }
+            let usesReservedJob = value.userLaunchAgentJobs.contains {
+                reservedGlobalProtectLabels.contains($0.label.lowercased())
+                    || reservedGlobalProtectPlistPaths.contains($0.plistPath.lowercased())
+            }
+            guard !usesReservedJob,
+                  killable.isDisjoint(with: reservedGlobalProtectProcessNames) else {
+                return (nil, "GlobalProtect's launch agents and its PanGPS service are reserved for the built-in GlobalProtect preset.")
+            }
         }
         guard let jobsError = jobsValidationError(value) else {
             return (value, nil)
@@ -465,11 +546,31 @@ final class WatchedAppsStore: ObservableObject {
         return (nil, jobsError)
     }
 
+    /// A `*.app` link must lead to an app bundle: its name passed the extension
+    /// check, but its target can be a script, a document or any folder, which
+    /// `/usr/bin/open` would run or show. A link with nothing behind it yet stays
+    /// configurable, like an app that is not installed. Checked when a preset is
+    /// added, edited or imported, never at load, where a later change on disk
+    /// must not reject a preset this build saved; Open checks again.
+    nonisolated private static func bundleTargetError(_ preset: WatchedAppPreset) -> String? {
+        guard preset.id != WatchedAppPreset.globalProtectID,
+              (try? FileManager.default.destinationOfSymbolicLink(atPath: preset.appPath)) != nil,
+              FileManager.default.fileExists(atPath: preset.appPath) else {
+            return nil
+        }
+        return SystemProcessLifecycleService.isAppBundle(at: preset.appPath)
+            ? nil
+            : "App path must lead to an app bundle: \(preset.resolvedAppPath) is not a folder named .app with Contents/Info.plist."
+    }
+
     nonisolated private static func normalizedPlistPath(_ value: String) -> String {
         let path = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return path.hasPrefix("/") ? URL(fileURLWithPath: path).standardizedFileURL.path : path
     }
 
+    /// Custom presets cannot carry system daemons, and the built-in preset is
+    /// replaced by its canonical value before this runs, so only user launch
+    /// agents need checking here.
     nonisolated private static func jobsValidationError(_ preset: WatchedAppPreset) -> String? {
         var labels: Set<String> = []
         var paths: Set<String> = []
@@ -478,19 +579,6 @@ final class WatchedAppsStore: ObservableObject {
                   job.plistPath.hasPrefix("/"),
                   URL(fileURLWithPath: job.plistPath).pathExtension.caseInsensitiveCompare("plist") == .orderedSame else {
                 return "Every launch agent requires a label and absolute .plist path."
-            }
-            guard labels.insert(job.label.lowercased()).inserted,
-                  paths.insert(job.plistPath.lowercased()).inserted else {
-                return "Launch job labels and plist paths must be unique."
-            }
-        }
-        for job in preset.systemLaunchDaemonJobs {
-            guard !job.label.isEmpty,
-                  !job.processName.isEmpty,
-                  job.plistPath.hasPrefix("/"),
-                  URL(fileURLWithPath: job.plistPath).pathExtension.caseInsensitiveCompare("plist") == .orderedSame,
-                  job.servicePort.map({ (1...65_535).contains($0) }) ?? true else {
-                return "Every daemon requires valid label, process, plist path, and optional port."
             }
             guard labels.insert(job.label.lowercased()).inserted,
                   paths.insert(job.plistPath.lowercased()).inserted else {
@@ -513,25 +601,12 @@ final class WatchedAppsStore: ObservableObject {
         _ preset: WatchedAppPreset,
         excluding id: UUID? = nil
     ) -> Bool {
-        let duplicate = Self.hasSemanticDuplicate(preset, in: presets, excluding: id)
-        if duplicate {
-            validationError = "A preset with the same name, process, or app path already exists."
+        let others = presets.filter { $0.id != id }
+        guard let collision = DuplicateIndex(others, comparesResolvedPaths: true).collision(for: preset) else {
+            return false
         }
-        return duplicate
-    }
-
-    nonisolated private static func hasSemanticDuplicate(
-        _ preset: WatchedAppPreset,
-        in candidates: [WatchedAppPreset],
-        excluding id: UUID? = nil
-    ) -> Bool {
-        candidates.contains {
-            $0.id != id && (
-                $0.displayName.caseInsensitiveCompare(preset.displayName) == .orderedSame
-                || $0.mainProcessName.caseInsensitiveCompare(preset.mainProcessName) == .orderedSame
-                || $0.appPath.caseInsensitiveCompare(preset.appPath) == .orderedSame
-            )
-        }
+        validationError = collision
+        return true
     }
 
     private func persistIfAllowed() {
@@ -539,4 +614,52 @@ final class WatchedAppsStore: ObservableObject {
         persistence.savePreservingUnknownFields(presets)
     }
 
+}
+
+/// Presets are distinct by display name and by app path, compared
+/// case-insensitively. Two presets may share a main process name: each one only
+/// matches processes inside its own bundle. Lookups are by key, so validating an
+/// archive or a stored list is linear in the number of presets.
+private struct DuplicateIndex {
+    private var names: [String: String] = [:]
+    private var paths: [String: String] = [:]
+    private let comparesResolvedPaths: Bool
+
+    /// `comparesResolvedPaths` also treats two paths that lead to the same
+    /// bundle today as one. Only checks for a change made now may use it; a
+    /// stored list must not depend on the file system.
+    init(_ presets: [WatchedAppPreset], comparesResolvedPaths: Bool) {
+        self.comparesResolvedPaths = comparesResolvedPaths
+        presets.forEach { insert($0) }
+    }
+
+    func collision(for preset: WatchedAppPreset) -> String? {
+        if let owner = names[Self.key(preset.displayName)] {
+            return "A preset named “\(owner)” already exists."
+        }
+        if let owner = pathKeys(for: preset).lazy.compactMap({ paths[$0] }).first {
+            return "The preset “\(owner)” already watches this app path."
+        }
+        return nil
+    }
+
+    mutating func insert(_ preset: WatchedAppPreset) {
+        names[Self.key(preset.displayName)] = names[Self.key(preset.displayName)] ?? preset.displayName
+        for key in pathKeys(for: preset) where paths[key] == nil {
+            paths[key] = preset.displayName
+        }
+    }
+
+    private func pathKeys(for preset: WatchedAppPreset) -> [String] {
+        let configured = Self.key(preset.appPath)
+        guard comparesResolvedPaths else { return [configured] }
+        let resolved = Self.key(preset.resolvedAppPath)
+        return resolved == configured ? [configured] : [configured, resolved]
+    }
+
+    /// Case folding matches `caseInsensitiveCompare`, which this check used
+    /// before, and String equality adds canonical equivalence.
+    private static func key(_ value: String) -> String {
+        value.folding(options: .caseInsensitive, locale: nil)
+    }
 }

@@ -7,6 +7,10 @@ final class SavedSelectionsStore: ObservableObject {
         var command: String
         var executablePath: String?
         var executableName: String
+        /// When the process started, so recall can recognize the saved process
+        /// itself among more running copies. Nil for entries saved before start
+        /// times were kept; older builds leave the field in place.
+        var startTime: String?
 
         var id: String {
             "\(executablePath ?? command)|\(executableName)|\(pid)"
@@ -16,12 +20,14 @@ final class SavedSelectionsStore: ObservableObject {
             pid: Int32,
             command: String,
             executableName: String,
-            executablePath: String? = nil
+            executablePath: String? = nil,
+            startTime: String? = nil
         ) {
             self.pid = pid
             self.command = command
             self.executablePath = executablePath
             self.executableName = executableName
+            self.startTime = startTime
         }
 
         init(process: AppProcess) {
@@ -29,12 +35,13 @@ final class SavedSelectionsStore: ObservableObject {
                 pid: process.pid,
                 command: process.command,
                 executableName: process.name,
-                executablePath: process.executablePath
+                executablePath: process.executablePath,
+                startTime: process.startTime.isEmpty ? nil : process.startTime
             )
         }
 
         private enum CodingKeys: String, CodingKey {
-            case pid, command, executablePath, executableName
+            case pid, command, executablePath, executableName, startTime
         }
 
         init(from decoder: Decoder) throws {
@@ -44,6 +51,7 @@ final class SavedSelectionsStore: ObservableObject {
             executablePath = try container.decodeIfPresent(String.self, forKey: .executablePath)
             executableName = try container.decodeIfPresent(String.self, forKey: .executableName)
                 ?? URL(fileURLWithPath: command).lastPathComponent
+            startTime = try container.decodeIfPresent(String.self, forKey: .startTime)
         }
     }
 
@@ -131,19 +139,35 @@ final class SavedSelectionsStore: ObservableObject {
         self.persistence = persistence
         allowsPersistence = true
         let loaded = persistence.loadRecoveringElements()
-        selections = loaded.value ?? []
-        if loaded.rejectedCount > 0 {
+        // Rename and Delete find a selection by its id, so a repeated id would
+        // send them to the wrong entry, or to all of its copies. Keep the first
+        // and treat later copies as rejected entries.
+        var seenIDs: Set<UUID> = []
+        var recovered: [SavedSelection] = []
+        var repeatedIDCount = 0
+        for selection in loaded.value ?? [] {
+            if seenIDs.insert(selection.id).inserted {
+                recovered.append(selection)
+            } else {
+                repeatedIDCount += 1
+            }
+        }
+        selections = recovered
+        let rejectedCount = loaded.rejectedCount + repeatedIDCount
+        if rejectedCount > 0 {
             let backup = persistence.preserveCurrentPayload(suffix: "rejectedMigrationBackup")
                 ?? (key: "\(key).rejectedMigrationBackup", isPreserved: false)
             allowsPersistence = false
-            recoveryMessage = "Rejected \(loaded.rejectedCount) invalid stored selection\(loaded.rejectedCount == 1 ? "" : "s"). "
+            recoveryMessage = "Rejected \(rejectedCount) invalid or duplicate stored selection\(rejectedCount == 1 ? "" : "s"). "
                 + PersistenceRecovery.preservedPayloadDescription(backupKey: backup.key, isPreserved: backup.isPreserved)
                 + "; review the recovered selections, then reset to commit them."
         } else if let backupKey = loaded.backupKey {
             // Writing now would replace the unreadable payload with the empty
-            // array we fell back to, destroying it at its primary key.
+            // array we fell back to, destroying it at its primary key. A payload
+            // that decoded but cannot be written back keeps its selections.
             allowsPersistence = false
-            recoveryMessage = "Saved selections were unreadable. "
+            recoveryMessage = loaded.unrewritableDataDescription.map { "Saved selections were read, but the payload \($0)" }
+                ?? "Saved selections were unreadable. "
                 + PersistenceRecovery.unreadableDataMessage(
                     backupKey: backupKey,
                     isPreserved: loaded.isBackupPreserved
@@ -181,8 +205,8 @@ final class SavedSelectionsStore: ObservableObject {
     func save(name: String, processes: [AppProcess]) -> Bool {
         guard !rejectIfReadOnly() else { return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else {
-            validationError = "Selection name is required."
+        if let error = Self.nameValidationError(trimmedName) {
+            validationError = error
             return false
         }
         guard !processes.isEmpty else {
@@ -218,8 +242,8 @@ final class SavedSelectionsStore: ObservableObject {
     func rename(_ selection: SavedSelection, to name: String) -> Bool {
         guard !rejectIfReadOnly() else { return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else {
-            validationError = "Selection name is required."
+        if let error = Self.nameValidationError(trimmedName) {
+            validationError = error
             return false
         }
         guard !containsName(trimmedName, excluding: selection.id) else {
@@ -237,6 +261,18 @@ final class SavedSelectionsStore: ObservableObject {
     }
 
     func resolve(_ selection: SavedSelection, in processes: [AppProcess]) -> RecallResult {
+        Self.resolve(selection, in: processes, standardizedPath: Self.standardizedPath)
+    }
+
+    /// Matches a saved selection against the live inventory. Each saved and each
+    /// running executable path is standardized once (standardizing asks the file
+    /// system), so a selection that spans many executables stays linear on the
+    /// main actor. `standardizedPath` is a seam for tests.
+    nonisolated static func resolve(
+        _ selection: SavedSelection,
+        in processes: [AppProcess],
+        standardizedPath: (String) -> String
+    ) -> RecallResult {
         guard !selection.isLegacyUnsupported else {
             return RecallResult(
                 matched: [],
@@ -252,19 +288,48 @@ final class SavedSelectionsStore: ObservableObject {
         var legacyNameMatches: Set<ProcessIdentity> = []
         var claimedIdentities: Set<ProcessIdentity> = []
 
+        let savedPaths = selection.processes.map { $0.executablePath.map(standardizedPath) }
+        // Buckets keep the saved and inventory order of each path's entries.
+        var groups: [String: [SavedProcess]] = [:]
+        for (saved, path) in zip(selection.processes, savedPaths) {
+            if let path { groups[path, default: []].append(saved) }
+        }
+        var runningByPath: [String: [AppProcess]] = [:]
+        for process in processes {
+            if let path = process.executablePath.map(standardizedPath) {
+                runningByPath[path, default: []].append(process)
+            }
+        }
+
         var resolvedPaths: Set<String> = []
-        for saved in selection.processes {
-            if let savedPath = saved.executablePath {
-                let path = standardizedPath(savedPath)
+        for (saved, savedPath) in zip(selection.processes, savedPaths) {
+            if let path = savedPath {
                 guard resolvedPaths.insert(path).inserted else { continue }
-                let group = selection.processes.filter {
-                    $0.executablePath.map(standardizedPath) == path
+                var group = groups[path] ?? []
+                // Checked here, not when bucketing: a legacy entry earlier in the
+                // loop may already have claimed one of these processes.
+                var candidates = (runningByPath[path] ?? []).filter {
+                    !claimedIdentities.contains($0.identity)
                 }
-                // The saved count bounds this path's group; PIDs may have changed.
-                let candidates = processes.filter {
-                    $0.executablePath.map(standardizedPath) == path
-                        && !claimedIdentities.contains($0.identity)
+                // A saved process that is still running is recognized by its PID
+                // and start time even when more copies run than were saved. An
+                // entry saved before start times were kept falls back to its PID,
+                // which with the same executable is no weaker than the path match.
+                group.removeAll { entry in
+                    guard let index = candidates.firstIndex(where: { candidate in
+                        candidate.pid == entry.pid
+                            && (entry.startTime.map { $0 == candidate.startTime } ?? true)
+                    }) else {
+                        return false
+                    }
+                    let original = candidates.remove(at: index)
+                    matched.append(original)
+                    claimedIdentities.insert(original.identity)
+                    return true
                 }
+                // The saved count bounds the rest of this path's group; PIDs may
+                // have changed. More unclaimed copies than saved entries cannot be
+                // told apart, so none of them is selected.
                 if candidates.count > group.count {
                     ambiguous.append(contentsOf: group)
                 } else {
@@ -308,14 +373,6 @@ final class SavedSelectionsStore: ObservableObject {
     }
 
     @discardableResult
-    func remove(at offsets: IndexSet) -> Bool {
-        guard !rejectIfReadOnly() else { return false }
-        selections.remove(atOffsets: offsets)
-        validationError = nil
-        return true
-    }
-
-    @discardableResult
     func remove(_ selection: SavedSelection) -> Bool {
         guard !rejectIfReadOnly() else { return false }
         guard selections.contains(where: { $0.id == selection.id }) else { return false }
@@ -324,14 +381,39 @@ final class SavedSelectionsStore: ObservableObject {
         return true
     }
 
+    nonisolated static let maximumNameLength = 100
+
+    /// Applied to names typed now (Save and Rename), never at load, so an
+    /// existing odd name stays readable and can be renamed. Names are menu and
+    /// sheet titles: line breaks, control characters and bidirectional
+    /// overrides would split or disguise them, and a long one pushes the recall
+    /// sheet's buttons off screen. Other format characters such as the joiners
+    /// in emoji sequences stay allowed.
+    nonisolated static func nameValidationError(_ name: String) -> String? {
+        guard !name.isEmpty else { return "Selection name is required." }
+        guard name.count <= maximumNameLength else {
+            return "Selection names must be \(maximumNameLength) characters or fewer."
+        }
+        let disallowed = name.unicodeScalars.contains {
+            $0.value < 0x20 || (0x7F...0x9F).contains($0.value)
+                || $0.value == 0x2028 || $0.value == 0x2029
+                || (0x202A...0x202E).contains($0.value) || (0x2066...0x2069).contains($0.value)
+        }
+        guard !disallowed else {
+            return "Selection names cannot contain line breaks, control characters or bidirectional formatting characters."
+        }
+        return nil
+    }
+
     private func containsName(_ name: String, excluding id: UUID? = nil) -> Bool {
         selections.contains {
             $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame
         }
     }
 
-    private func standardizedPath(_ path: String) -> String {
-        URL(fileURLWithPath: path).standardizedFileURL.path
+    /// Executables are files, so `isDirectory: false` spares the directory check.
+    nonisolated private static func standardizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path, isDirectory: false).standardizedFileURL.path
     }
 
     private func saveToDefaults() {

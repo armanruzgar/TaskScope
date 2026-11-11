@@ -16,13 +16,15 @@ struct GeneralSettingsTab: View {
                         .frame(width: 36, alignment: .trailing)
                 }
                 Toggle("Auto-refresh process list", isOn: $settings.autoRefreshProcessList)
-                Stepper(value: $settings.processListLimit, in: 10...200, step: 10) {
+                Toggle("Show all processes", isOn: $settings.showsAllProcesses)
+                Stepper(value: $settings.processListLimit, in: SettingsStore.processListLimitRange, step: 10) {
                     HStack {
                         Text("Process list limit")
                         Spacer()
-                        Text("\(settings.processListLimit)").monospacedDigit()
+                        Text(settings.showsAllProcesses ? "All" : "\(settings.processListLimit)").monospacedDigit()
                     }
                 }
+                .disabled(settings.showsAllProcesses)
             }
             .disabled(settings.isReadOnlyAfterCorruption)
 

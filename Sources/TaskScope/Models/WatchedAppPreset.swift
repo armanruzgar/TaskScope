@@ -1,9 +1,15 @@
+import Darwin
 import Foundation
 
 struct UserLaunchAgentJob: Codable, Equatable, Hashable, Sendable {
     var label: String
     var plistPath: String
     var isRequired: Bool
+    /// The stored job carries keys this build does not know. A newer build may
+    /// have added a field that narrows what may be done with the job, so the
+    /// preset that owns it is read-only and refuses lifecycle actions, as rules
+    /// with unknown fields are. Never encoded: the stored JSON keeps the keys.
+    private(set) var hasUnknownFields = false
 
     init(label: String, plistPath: String, isRequired: Bool = true) {
         self.label = label
@@ -11,7 +17,7 @@ struct UserLaunchAgentJob: Codable, Equatable, Hashable, Sendable {
         self.isRequired = isRequired
     }
 
-    private enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
         case label, plistPath, isRequired
     }
 
@@ -20,6 +26,22 @@ struct UserLaunchAgentJob: Codable, Equatable, Hashable, Sendable {
         label = try container.decode(String.self, forKey: .label)
         plistPath = try container.decode(String.self, forKey: .plistPath)
         isRequired = try container.decodeIfPresent(Bool.self, forKey: .isRequired) ?? true
+        hasUnknownFields = try StoredPresetKeys.containsUnknownKey(
+            in: decoder,
+            known: Set(CodingKeys.allCases.map(\.rawValue))
+        )
+    }
+
+    // The marker is not part of a job's identity: the built-in preset's identity
+    // check compares jobs, and a newer build's copy is still the same job.
+    static func == (lhs: UserLaunchAgentJob, rhs: UserLaunchAgentJob) -> Bool {
+        lhs.label == rhs.label && lhs.plistPath == rhs.plistPath && lhs.isRequired == rhs.isRequired
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(label)
+        hasher.combine(plistPath)
+        hasher.combine(isRequired)
     }
 }
 
@@ -40,10 +62,6 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
     var userLaunchAgentJobs: [UserLaunchAgentJob] = []
     var systemLaunchDaemonJobs: [SystemLaunchDaemonJob] = []
     var notificationsEnabled: Bool = true
-
-    var allProcessNames: [String] {
-        [mainProcessName] + helperProcessNames + protectedProcessNames
-    }
 
     var killableNames: [String] {
         [mainProcessName] + helperProcessNames
@@ -98,6 +116,24 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.notificationsEnabled = notificationsEnabled
     }
 
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case id, displayName, mainProcessName, helperProcessNames, protectedProcessNames
+        case appPath, userLaunchAgentJobs, systemLaunchDaemonJobs, notificationsEnabled
+    }
+
+    /// Keys that older builds wrote and this build no longer models. They carry
+    /// no authority, so they are ignored rather than treated as a newer build's
+    /// fields; builds before 1.0 stored `priority` on every preset.
+    static let retiredStoredKeys: Set<String> = ["priority"]
+
+    /// The stored preset, or one of its launch agents, carries keys this build
+    /// does not know. A newer build may have added a field that narrows the
+    /// preset's authority (a stop scope, a confirmation, a job restriction), so
+    /// this build keeps the preset read-only, refuses its lifecycle actions and
+    /// leaves it out of Shortcuts, as it does for rules with unknown fields.
+    /// Never encoded: the stored JSON keeps the unknown keys themselves.
+    private(set) var hasUnknownFields = false
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -109,6 +145,10 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
         userLaunchAgentJobs = try container.decodeIfPresent([UserLaunchAgentJob].self, forKey: .userLaunchAgentJobs) ?? []
         systemLaunchDaemonJobs = try container.decodeIfPresent([SystemLaunchDaemonJob].self, forKey: .systemLaunchDaemonJobs) ?? []
         notificationsEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationsEnabled) ?? true
+        hasUnknownFields = try StoredPresetKeys.containsUnknownKey(
+            in: decoder,
+            known: Set(CodingKeys.allCases.map(\.rawValue)).union(Self.retiredStoredKeys)
+        ) || userLaunchAgentJobs.contains(where: \.hasUnknownFields)
     }
 
     /// Fixed so the built-in preset keeps one identity across launches. It used to
@@ -155,29 +195,42 @@ struct WatchedAppPreset: Codable, Identifiable, Equatable, Hashable, Sendable {
             && appPath == "/Applications/GlobalProtect.app"
     }
 
+    /// The configured app path with symbolic links resolved, in its on-disk
+    /// spelling, which is how the kernel reports executable paths. The stored
+    /// value stays the path the user configured, so it is resolved at use: a
+    /// re-pointed link or a bundle installed later is followed, and nothing
+    /// stored depends on the file system at save time. Falls back to the
+    /// configured path when nothing exists there. The built-in preset is
+    /// matched at its fixed location only.
+    var resolvedAppPath: String {
+        canonicalAppPath ?? appPath
+    }
+
+    private var canonicalAppPath: String? {
+        guard id != Self.globalProtectID, let resolved = realpath(appPath, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     /// `<appPath>/Contents/MacOS/`: a main-process match must be executed from
     /// here. Trailing slash included so prefix checks cannot match a sibling
     /// bundle whose name merely starts with this one.
     var mainExecutableDirectory: String {
-        URL(fileURLWithPath: appPath, isDirectory: true)
-            .appendingPathComponent("Contents/MacOS", isDirectory: true)
-            .standardizedFileURL.path + "/"
+        bundleDirectory("Contents/MacOS")
     }
 
     /// `<appPath>/Contents/`: helper matches must be executed from inside the
     /// bundle, anywhere under Contents.
     var bundleContentsDirectory: String {
-        URL(fileURLWithPath: appPath, isDirectory: true)
-            .appendingPathComponent("Contents", isDirectory: true)
-            .standardizedFileURL.path + "/"
+        bundleDirectory("Contents")
     }
 
-    func matchesLookupName(_ name: String) -> Bool {
-        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalizedName.isEmpty else { return false }
-
-        return displayName.caseInsensitiveCompare(normalizedName) == .orderedSame
-            || mainProcessName.caseInsensitiveCompare(normalizedName) == .orderedSame
+    private func bundleDirectory(_ component: String) -> String {
+        // `realpath` output is already canonical. Standardizing it again would
+        // drop a leading `/private`, which kernel executable paths keep.
+        let root = canonicalAppPath ?? URL(fileURLWithPath: appPath, isDirectory: true).standardizedFileURL.path
+        return URL(fileURLWithPath: root, isDirectory: true)
+            .appendingPathComponent(component, isDirectory: true).path + "/"
     }
 
     static let globalProtectUserLaunchAgentJobs = [
@@ -297,5 +350,20 @@ extension Array where Element == WatchedAppSnapshot {
             return snap.detail
         }
         return running.isEmpty ? "No watched processes" : running.joined(separator: " · ")
+    }
+}
+
+/// Lists every key of a stored object so a decoder can tell whether the
+/// payload holds fields this build does not model.
+private enum StoredPresetKeys {
+    private struct AnyKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    static func containsUnknownKey(in decoder: Decoder, known: Set<String>) throws -> Bool {
+        try decoder.container(keyedBy: AnyKey.self).allKeys.contains { !known.contains($0.stringValue) }
     }
 }

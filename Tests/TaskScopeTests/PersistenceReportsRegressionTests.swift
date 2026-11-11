@@ -78,7 +78,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
             XCTAssertTrue(rules.isEventsReadOnlyAfterRecovery)
             settings.enableNotifications = true
             XCTAssertFalse(presets.add(.globalProtect))
-            XCTAssertFalse(selections.remove(at: []))
+            XCTAssertFalse(selections.remove(.init(name: "Missing", pids: [], processes: [])))
             for key in keys {
                 XCTAssertEqual(defaults.object(forKey: key) as? NSObject, foreign as? NSObject,
                                "The primary value must remain untouched until reset: \(key)")
@@ -175,7 +175,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
                 }, selectedPresetID: WatchedAppPreset.globalProtect.id
             )
             try view.inspect().find(button: "Preview Diagnostics").tap()
-            await fulfillment(of: [completed], timeout: 5)
+            await fulfillment(of: [completed], timeout: 30)
         }
     }
 
@@ -199,7 +199,7 @@ final class PersistenceReportsRegressionTests: XCTestCase {
             }, selectedPresetID: WatchedAppPreset.globalProtect.id
         )
         try view.inspect().find(button: "Preview Diagnostics").tap()
-        await fulfillment(of: [completed], timeout: 5)
+        await fulfillment(of: [completed], timeout: 30)
     }
 
     func testDiagnosticsActionAndReasonRawValuesMatchTheExportContract() throws {

@@ -673,11 +673,9 @@ struct TaskScopeApp: App {
 
     private func eligibleNotificationNames() -> Set<String> {
         let enabledPresetIDs = Set(watchedApps.presets.filter(\.notificationsEnabled).map(\.id))
-        return Set(
-            processManager.snapshots
-                .filter { enabledPresetIDs.contains($0.preset.id) }
-                .flatMap(\.runningNames)
-        )
+        return ProcessManager.notificationNames(for: processManager.snapshots.filter {
+            enabledPresetIDs.contains($0.preset.id)
+        })
     }
 
     private func openOnboardingIfNeeded() {

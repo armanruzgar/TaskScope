@@ -103,7 +103,10 @@ final class SavedSelectionsStoreTests: XCTestCase {
         XCTAssertTrue(result.ambiguous.isEmpty)
     }
 
-    func testRecallGroupsCopiesByPathAndOnlyMarksExcessRunningCopiesAmbiguous() throws {
+    /// None of the saved processes is still running here, so when more copies
+    /// of the executable run than were saved, none is selected and every saved
+    /// entry of that executable is listed as ambiguous.
+    func testRecallMarksTheSavedCopiesAmbiguousWhenMoreUnsavedCopiesRun() throws {
         let store = makeStore()
         let path = "/test/bin/node"
         let originals = [10, 11].map { process(pid: Int32($0), command: "node", executablePath: path) }

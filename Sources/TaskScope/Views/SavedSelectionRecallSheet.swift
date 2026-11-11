@@ -9,6 +9,8 @@ struct SavedSelectionRecallSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Recall “\(selection.name)”")
+                .lineLimit(2)
+                .truncationMode(.tail)
                 .font(.title2)
                 .fontWeight(.semibold)
             Text(result.summary)

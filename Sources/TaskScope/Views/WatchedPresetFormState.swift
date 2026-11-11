@@ -42,14 +42,22 @@ final class WatchedPresetFormState: ObservableObject {
         guard agents.errors.isEmpty else {
             return .failure(ValidationError(message: agents.errors.joined(separator: " ")))
         }
-        // The form edits only labels and paths. Carry each unchanged job's
-        // optional/required flag through, so renaming a preset cannot turn an
-        // optional agent into a required one.
+        // The form edits only labels and paths. Carry each job's optional or
+        // required flag through an edit: match the existing job with the same
+        // label and plist path, compared as the store normalizes them, then one
+        // with the same label, then one with the same plist path, so changing
+        // one of the two fields does not silently make an optional agent
+        // required.
+        func normalizedPath(_ path: String) -> String {
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.hasPrefix("/") ? URL(fileURLWithPath: trimmed).standardizedFileURL.path : trimmed
+        }
         let existingJobs = existing?.userLaunchAgentJobs ?? []
         let jobs = agents.value.map { parsed -> UserLaunchAgentJob in
-            guard let match = existingJobs.first(where: {
-                $0.label == parsed.label && $0.plistPath == parsed.plistPath
-            }) else {
+            let path = normalizedPath(parsed.plistPath)
+            guard let match = existingJobs.first(where: { $0.label == parsed.label && normalizedPath($0.plistPath) == path })
+                ?? existingJobs.first(where: { $0.label == parsed.label })
+                ?? existingJobs.first(where: { normalizedPath($0.plistPath) == path }) else {
                 return parsed
             }
             return UserLaunchAgentJob(

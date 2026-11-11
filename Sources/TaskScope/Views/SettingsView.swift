@@ -194,6 +194,10 @@ struct SettingsView: View {
                             .help("Notifications for this preset")
                             .accessibilityLabel("Notifications for \(preset.displayName)")
                         }
+                        if preset.hasUnknownFields {
+                            Text("Requires a newer build — read-only, and its actions are unavailable")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Text("Main: \(preset.mainProcessName)").font(.caption).foregroundStyle(.secondary)
                         Text("Helpers: \(preset.helperProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
                         Text("Protected: \(preset.protectedProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
@@ -215,6 +219,7 @@ struct SettingsView: View {
                             deletePreset(preset)
                         }
                     }
+                    .disabled(preset.hasUnknownFields)
                 }
                 .onMove { from, to in
                     watchedApps.move(from: from, to: to)
@@ -257,19 +262,7 @@ struct SettingsView: View {
                     TextFieldRow(label: "Plist paths", text: $presetForm.agentPlistPaths)
 
                     Divider().padding(.vertical, 4)
-                    Text(editingSystemLaunchDaemonJobs.isEmpty
-                         ? "System Launch Daemons"
-                         : "Built-in System Launch Daemons")
-                        .font(.headline)
-                    ForEach(editingSystemLaunchDaemonJobs.indices, id: \.self) { index in
-                        let job = editingSystemLaunchDaemonJobs[index]
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(job.label).fontWeight(.medium)
-                            Text("\(job.processName) · \(job.plistPath)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
+                    Text("System Launch Daemons").font(.headline)
                     Text(Self.builtInDaemonGuidance)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -679,13 +672,6 @@ struct SettingsView: View {
         presetForm.prepareForEditing(preset)
         presetValidationError = nil
         showPresetEditor = true
-    }
-
-    private var editingSystemLaunchDaemonJobs: [SystemLaunchDaemonJob] {
-        guard presetForm.editingPresetID == WatchedAppPreset.globalProtectID else { return [] }
-        return watchedApps.presets
-            .first(where: { $0.id == WatchedAppPreset.globalProtectID })?
-            .systemLaunchDaemonJobs ?? []
     }
 
     private func savePresetEditor() {

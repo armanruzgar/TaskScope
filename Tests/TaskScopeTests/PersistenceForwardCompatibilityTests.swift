@@ -93,7 +93,10 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
         XCTAssertEqual(Array(saved.dropFirst()) as NSArray, Array(originals.prefix(2)) as NSArray)
     }
 
-    func testPresetNormalizationEditsAndReorderingPreserveUnknownFieldsAndJobFields() throws {
+    /// A preset with a newer build's fields is read-only in this build: those
+    /// fields may narrow what it is allowed to do. Load normalization, reordering
+    /// and removing another preset still keep every unknown preset and job field.
+    func testPresetNormalizationAndReorderingPreserveUnknownFieldsAndEditsAreRefused() throws {
         let first = WatchedAppPreset(displayName: " First ", mainProcessName: "First", helperProcessNames: ["First", "Helper"], protectedProcessNames: [], appPath: "/test/First.app", userLaunchAgentJobs: [
             UserLaunchAgentJob(label: "one", plistPath: "/tmp/one.plist"),
             UserLaunchAgentJob(label: "two", plistPath: "/tmp/two.plist")
@@ -111,14 +114,20 @@ final class PersistenceForwardCompatibilityTests: XCTestCase {
         XCTAssertEqual(saved[0]["displayName"] as? String, "First")
         XCTAssertEqual(saved[0]["helperProcessNames"] as? [String], ["Helper"])
         XCTAssertEqual(saved[0]["futurePreset"] as? NSDictionary, raw["futurePreset"] as? NSDictionary)
+        XCTAssertEqual(saved[0]["userLaunchAgentJobs"] as? NSArray, jobs as NSArray)
+        XCTAssertFalse(store.isReadOnlyAfterCorruption)
+        XCTAssertTrue(store.presets[0].hasUnknownFields)
+        XCTAssertFalse(store.presets[1].hasUnknownFields)
         var edited = store.presets[0]
         edited.notificationsEnabled = false
         edited.userLaunchAgentJobs.reverse()
-        XCTAssertTrue(store.update(edited))
+        XCTAssertFalse(store.update(edited))
+        XCTAssertEqual(store.validationError, WatchedAppsStore.newerBuildMessage)
         XCTAssertTrue(store.move(from: IndexSet(integer: 0), to: 2))
         saved = try rows("presets")
         XCTAssertEqual(saved[1]["futurePreset"] as? NSDictionary, raw["futurePreset"] as? NSDictionary)
-        XCTAssertEqual(saved[1]["userLaunchAgentJobs"] as? NSArray, Array(jobs.reversed()) as NSArray)
+        XCTAssertEqual(saved[1]["userLaunchAgentJobs"] as? NSArray, jobs as NSArray)
+        XCTAssertEqual(saved[1]["notificationsEnabled"] as? Bool, true)
         XCTAssertTrue(store.remove(second))
         XCTAssertEqual(try rows("presets")[0]["futurePreset"] as? NSDictionary, raw["futurePreset"] as? NSDictionary)
     }

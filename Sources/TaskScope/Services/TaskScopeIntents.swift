@@ -63,7 +63,7 @@ struct WatchedPresetCatalog: Sendable {
             presets = []
         }
 
-        return presets.map(WatchedPresetEntity.init(preset:))
+        return presets.filter { !$0.hasUnknownFields }.map(WatchedPresetEntity.init(preset:))
     }
 }
 

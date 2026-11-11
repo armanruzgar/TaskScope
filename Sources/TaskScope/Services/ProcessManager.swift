@@ -343,8 +343,20 @@ final class ProcessManager: ObservableObject {
         return refreshed
     }
 
+    /// A preset stored with fields from a newer build may carry a restriction
+    /// this build cannot honour, so none of its lifecycle actions run here. The
+    /// store's copy is checked too, in case the caller holds a copy without them.
+    private func refusalForPresetFromNewerBuild(_ preset: WatchedAppPreset) -> TaskScopeCommandResult? {
+        guard preset.hasUnknownFields
+            || watchedAppsProvider?().contains(where: { $0.id == preset.id && $0.hasUnknownFields }) == true else {
+            return nil
+        }
+        return TaskScopeCommandResult(status: .rejected, message: WatchedAppsStore.newerBuildMessage)
+    }
+
     @discardableResult
     func openApp(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
+        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         var commandResult = TaskScopeCommandResult(
             status: .failed,
             message: "Open did not complete."
@@ -600,6 +612,7 @@ final class ProcessManager: ObservableObject {
         recordIntent: Bool,
         confirmedFailureID: UUID? = nil
     ) async -> TaskScopeCommandResult {
+        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         let tracksPendingAction = recordIntent && preset.hasCanonicalGlobalProtectIdentity
         if tracksPendingAction {
             pendingGlobalProtectKeepOffCount += 1
@@ -819,6 +832,7 @@ final class ProcessManager: ObservableObject {
     /// installed session agent supplies the VPN service. Only Open starts it.
     @discardableResult
     func allowToRun(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
+        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         var commandResult = TaskScopeCommandResult(
             status: .failed,
             message: "Could not allow \(preset.displayName) to run."
@@ -921,6 +935,7 @@ final class ProcessManager: ObservableObject {
     }
 
     private func stop(_ preset: WatchedAppPreset, scope: PresetStopScope) async -> TaskScopeCommandResult {
+        if let refusal = refusalForPresetFromNewerBuild(preset) { return refusal }
         var result = PresetStopResult.failed(scope.incompleteMessage, reason: .incomplete)
         var cancelled = false
         let ran = await runAction(kind: .mutation) {
@@ -1247,7 +1262,26 @@ final class ProcessManager: ObservableObject {
     }
 
     func notifiableRunningNames(in watched: [WatchedAppSnapshot]) -> Set<String> {
-        Set(watched.filter { $0.preset.notificationsEnabled }.flatMap { $0.runningNames })
+        Self.notificationNames(for: watched.filter { $0.preset.notificationsEnabled })
+    }
+
+    /// Running names to diff for start and stop notifications. Presets may
+    /// share a process name (two Java apps both run JavaApplicationStub), and a
+    /// flat set would merge them: one app quitting while the other runs would
+    /// go unnoticed. A name that more than one preset lists is therefore keyed,
+    /// and shown, with the preset's display name.
+    nonisolated static func notificationNames(for snapshots: [WatchedAppSnapshot]) -> Set<String> {
+        var owners: [String: Set<UUID>] = [:]
+        for snapshot in snapshots {
+            for name in snapshot.preset.killableNames + snapshot.preset.protectedProcessNames {
+                owners[name, default: []].insert(snapshot.preset.id)
+            }
+        }
+        return Set(snapshots.flatMap { snapshot in
+            snapshot.runningNames.map { name in
+                (owners[name]?.count ?? 0) > 1 ? "\(snapshot.preset.displayName): \(name)" : name
+            }
+        })
     }
 
     /// Seams over the notification singleton so the baseline/diff ordering is

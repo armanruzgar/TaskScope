@@ -69,7 +69,7 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
     func testColdLaunchCommandIsDeliveredExactlyOnceAfterInstall() async {
         let bus = AppCommandBus()
-        let pending = Task { await bus.submit(.openPreset("Example")) }
+        let pending = Task { await bus.submit(.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Example"))) }
         await Task.yield()
         var received: [TaskScopeCommand] = []
 
@@ -79,15 +79,15 @@ final class AppCommandCoordinatorTests: XCTestCase {
         }
 
         let result = await pending.value
-        XCTAssertEqual(received, [.openPreset("Example")])
+        XCTAssertEqual(received, [.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Example"))])
         XCTAssertEqual(result, TaskScopeCommandResult(status: .completed, message: "done"))
     }
 
     func testColdLaunchCommandsDrainInSubmissionOrder() async {
         let bus = AppCommandBus()
-        let first = Task { await bus.submit(.openPreset("First")) }
+        let first = Task { await bus.submit(.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "First"))) }
         await Task.yield()
-        let second = Task { await bus.submit(.openPreset("Second")) }
+        let second = Task { await bus.submit(.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Second"))) }
         await Task.yield()
         var received: [TaskScopeCommand] = []
 
@@ -99,7 +99,7 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
         _ = await first.value
         _ = await second.value
-        XCTAssertEqual(received, [.openPreset("First"), .openPreset("Second")])
+        XCTAssertEqual(received, [.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "First")), .openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Second"))])
     }
 
     func testCoordinatorReturnsMeaningfulMissingPresetResult() async {
@@ -114,7 +114,7 @@ final class AppCommandCoordinatorTests: XCTestCase {
             presets: { [] }
         )
 
-        let missing = await coordinator.perform(.openPreset("Missing"))
+        let missing = await coordinator.perform(.openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "Missing")))
 
         XCTAssertEqual(missing.status, .rejected)
         XCTAssertTrue(missing.message.contains("Missing"))
@@ -241,8 +241,8 @@ final class AppCommandCoordinatorTests: XCTestCase {
 
         for command in [
             TaskScopeCommand.refresh,
-            .openPreset("GlobalProtect"),
-            .stopPreset("GlobalProtect")
+            .openPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect")),
+            .stopPresetEntity(.init(id: WatchedAppPreset.globalProtectID, displayName: "GlobalProtect"))
         ] {
             let result = await coordinator.perform(command)
             XCTAssertEqual(result.status, .rejected)
