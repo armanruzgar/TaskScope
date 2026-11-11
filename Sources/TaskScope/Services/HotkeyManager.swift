@@ -278,12 +278,16 @@ final class HotkeyManager: ObservableObject {
     }
 
     var displayString: String {
+        Self.displayString(keyCode: keyCode, modifiers: modifiers)
+    }
+
+    nonisolated static func displayString(keyCode: UInt32, modifiers: UInt32) -> String {
         var result = ""
         if modifiers & UInt32(controlKey) != 0 { result += "⌃" }
         if modifiers & UInt32(optionKey) != 0 { result += "⌥" }
         if modifiers & UInt32(shiftKey) != 0 { result += "⇧" }
         if modifiers & UInt32(cmdKey) != 0 { result += "⌘" }
-        result += Self.keyName(for: keyCode) ?? "Unsupported"
+        result += keyName(for: keyCode) ?? "Unsupported"
         return result
     }
 
@@ -376,7 +380,7 @@ final class HotkeyManager: ObservableObject {
         }
     }
 
-    static func keyName(for code: UInt32) -> String? {
+    nonisolated static func keyName(for code: UInt32) -> String? {
         switch Int(code) {
         case kVK_ANSI_A: "A"
         case kVK_ANSI_B: "B"
@@ -557,5 +561,49 @@ final class HotkeyManager: ObservableObject {
             return status == noErr ? OSStatus(eventNotHandledErr) : status
         }
         return noErr
+    }
+}
+
+// MARK: - Configuration backup
+
+extension HotkeyManager {
+    /// The hotkey a configuration backup carries.
+    struct Backup: Codable, Equatable, Sendable {
+        var isEnabled: Bool
+        var keyCode: UInt32
+        var modifiers: UInt32
+
+        var displayString: String {
+            HotkeyManager.displayString(keyCode: keyCode, modifiers: modifiers)
+        }
+    }
+
+    /// Nil while the stored hotkey is unreadable: the values in memory are
+    /// then defaults, not the user's shortcut.
+    var backup: Backup? {
+        isReadOnlyAfterCorruption ? nil : Backup(isEnabled: hotkeyEnabled, keyCode: keyCode, modifiers: modifiers)
+    }
+
+    /// Why an imported hotkey cannot be used here, or nil.
+    func backupProblem(_ backup: Backup) -> String? {
+        if isReadOnlyAfterCorruption {
+            return "Hotkey settings are in recovery mode; reset them in Settings > Hotkey first."
+        }
+        return Self.validationFailure(keyCode: backup.keyCode, modifiers: backup.modifiers)
+    }
+
+    /// Applies an imported hotkey: the shortcut through the same validation
+    /// and registration a recording uses, then whether it is on. A shortcut
+    /// another app holds leaves the current one in place and returns false.
+    @discardableResult
+    func applyBackup(_ backup: Backup) -> Bool {
+        guard backupProblem(backup) == nil else { return false }
+        if keyCode != backup.keyCode || modifiers != backup.modifiers {
+            guard updateShortcut(keyCode: backup.keyCode, modifiers: backup.modifiers) else { return false }
+        }
+        if hotkeyEnabled != backup.isEnabled {
+            hotkeyEnabled = backup.isEnabled
+        }
+        return true
     }
 }

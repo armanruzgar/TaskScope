@@ -9,6 +9,10 @@ struct SettingsView: View {
     @ObservedObject var watchedApps: WatchedAppsStore
     @ObservedObject var autoStopRules: AutoStopRulesStore
     let processManager: ProcessManager
+    /// The configuration backup's other stores. Saved selections are left out
+    /// of backups where the caller has none.
+    var savedSelections: SavedSelectionsStore? = nil
+    var hotkey: HotkeyManager = .shared
     @ObservedObject private var notificationService = NotificationService.shared
     @State var selectedTab: Tab = .general
 
@@ -26,9 +30,14 @@ struct SettingsView: View {
     /// Import, export and preset-editor feedback. Injectable so tests can drive
     /// the handlers without a file panel.
     @StateObject var presetActions = PresetSettingsActions()
+    /// Configuration backup export and import. Injectable for the same reason.
+    @StateObject var backupActions = ConfigurationBackupActions()
     /// Pending confirmations and per-row errors. Injectable for the same reason.
     @StateObject var interactions = SettingsInteractionState()
     @State private var showImporter = false
+    /// Which import the shared file importer feeds.
+    @State private var importTarget = ImportTarget.presets
+    @State private var showConfigurationPreview = false
     @State private var showPresetEditor = false
     @State private var showImportPreview = false
     @State private var dryRunPreset: WatchedAppPreset?
@@ -45,13 +54,20 @@ struct SettingsView: View {
                 .tabItem { Label("Support", systemImage: "doc.text.magnifyingglass") }.tag(Tab.support)
         }
         .frame(width: Self.windowSize.width, height: Self.windowSize.height)
+        // One importer for both imports: a second fileImporter modifier on the
+        // same view would replace the first.
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
-            switch result {
-            case .success(let url):
+            switch (importTarget, result) {
+            case (.presets, .success(let url)):
                 presetActions.loadImport(from: url, into: watchedApps)
                 showImportPreview = presetActions.preview != nil
-            case .failure(let err):
+            case (.presets, .failure(let err)):
                 presetActions.importError = err.localizedDescription
+            case (.configuration, .success(let url)):
+                backupActions.loadImport(from: url, into: backupStores)
+                showConfigurationPreview = backupActions.preview != nil
+            case (.configuration, .failure(let err)):
+                backupActions.importError = err.localizedDescription
             }
         }
         .sheet(item: $editingRule, onDismiss: {
@@ -83,6 +99,19 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $showImportPreview) {
             importPreviewSheet
+        }
+        .sheet(isPresented: $showConfigurationPreview) {
+            ConfigurationImportPreviewView(
+                actions: backupActions,
+                onCancel: {
+                    showConfigurationPreview = false
+                    backupActions.preview = nil
+                },
+                onImport: {
+                    backupActions.commitImport(into: backupStores)
+                    showConfigurationPreview = false
+                }
+            )
         }
         .sheet(item: $dryRunPreset) { preset in
             lifecycleDryRunSheet(for: preset)
@@ -139,7 +168,29 @@ struct SettingsView: View {
     private var generalTab: some View {
         GeneralSettingsTab(
             settings: settings,
-            notificationService: notificationService
+            notificationService: notificationService,
+            backupSection: ConfigurationBackupSection(
+                actions: backupActions,
+                exportConfiguration: { backupActions.export(from: backupStores) },
+                importConfiguration: {
+                    // A new attempt replaces the last import's outcome.
+                    backupActions.beginImport()
+                    importTarget = .configuration
+                    showImporter = true
+                }
+            )
+        )
+    }
+
+    enum ImportTarget {
+        case presets
+        case configuration
+    }
+
+    var backupStores: ConfigurationBackupActions.Stores {
+        ConfigurationBackupActions.Stores(
+            watchedApps: watchedApps, autoStopRules: autoStopRules,
+            savedSelections: savedSelections, settings: settings, hotkey: hotkey
         )
     }
 
@@ -162,6 +213,7 @@ struct SettingsView: View {
                 Button {
                     // A new attempt replaces the last import's outcome.
                     presetActions.beginImport()
+                    importTarget = .presets
                     showImporter = true
                 } label: {
                     Label("Import…", systemImage: "square.and.arrow.down")
@@ -385,48 +437,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 List(preview.items) { item in
-                    let displayedPreset = item.normalizedPreset ?? item.preset
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(displayedPreset.displayName)
-                                .fontWeight(.semibold)
-                            Spacer()
-                            Text(item.isAccepted ? "Ready" : "Rejected")
-                                .font(.caption)
-                                .foregroundStyle(item.isAccepted ? Color.green : Color.red)
-                        }
-                        Text("Main process: \(displayedPreset.mainProcessName)")
-                        Text("App path: \(displayedPreset.appPath)")
-                        if !displayedPreset.helperProcessNames.isEmpty {
-                            Text("Helpers: \(displayedPreset.helperProcessNames.joined(separator: ", "))")
-                        }
-                        if !displayedPreset.protectedProcessNames.isEmpty {
-                            Text("Protected: \(displayedPreset.protectedProcessNames.joined(separator: ", "))")
-                        }
-                        ForEach(Array(displayedPreset.userLaunchAgentJobs.enumerated()), id: \.offset) { _, job in
-                            Text(
-                                "Launch agent: \(job.label) — \(job.plistPath)"
-                                    + (job.isRequired ? "" : " (optional)")
-                            )
-                        }
-                        ForEach(Array(displayedPreset.systemLaunchDaemonJobs.enumerated()), id: \.offset) { _, job in
-                            Text("Fixed daemon: \(job.label) — \(job.plistPath)")
-                        }
-                        if let reason = item.rejectionReason {
-                            Text(reason)
-                                .foregroundStyle(.red)
-                        } else {
-                            Text("Import writes configuration only. Potential later operations:")
-                                .foregroundStyle(.secondary)
-                            ForEach(Self.lifecycleDryRunOperations(for: displayedPreset), id: \.self) { operation in
-                                Text("• \(operation)")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .font(.caption)
-                    .textSelection(.enabled)
-                    .padding(.vertical, 4)
+                    PresetImportPreviewRow(item: item)
                 }
 
                 Text("\(preview.importableCount) ready, \(preview.rejectedCount) rejected")
@@ -759,7 +770,7 @@ struct SettingsView: View {
     }
 
     private var hotkeyTab: some View {
-        HotkeySettingsView()
+        HotkeySettingsView(hotkey: hotkey)
     }
 
     /// Re-derived on every draw so the refusal disappears once its cause
@@ -900,5 +911,57 @@ private struct TextFieldRow: View {
             TextField(label, text: $text)
                 .textFieldStyle(.roundedBorder)
         }
+    }
+}
+
+/// One preset of an import preview: what it holds, whether it is ready, and the
+/// lifecycle operations it could later run. Shared by the preset and the
+/// configuration import previews.
+struct PresetImportPreviewRow: View {
+    var item: WatchedAppsStore.ImportPreviewItem
+
+    var body: some View {
+        let displayedPreset = item.normalizedPreset ?? item.preset
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(displayedPreset.displayName)
+                    .fontWeight(.semibold)
+                Spacer()
+                Text(item.isAccepted ? "Ready" : "Rejected")
+                    .font(.caption)
+                    .foregroundStyle(item.isAccepted ? Color.green : Color.red)
+            }
+            Text("Main process: \(displayedPreset.mainProcessName)")
+            Text("App path: \(displayedPreset.appPath)")
+            if !displayedPreset.helperProcessNames.isEmpty {
+                Text("Helpers: \(displayedPreset.helperProcessNames.joined(separator: ", "))")
+            }
+            if !displayedPreset.protectedProcessNames.isEmpty {
+                Text("Protected: \(displayedPreset.protectedProcessNames.joined(separator: ", "))")
+            }
+            ForEach(Array(displayedPreset.userLaunchAgentJobs.enumerated()), id: \.offset) { _, job in
+                Text(
+                    "Launch agent: \(job.label) — \(job.plistPath)"
+                        + (job.isRequired ? "" : " (optional)")
+                )
+            }
+            ForEach(Array(displayedPreset.systemLaunchDaemonJobs.enumerated()), id: \.offset) { _, job in
+                Text("Fixed daemon: \(job.label) — \(job.plistPath)")
+            }
+            if let reason = item.rejectionReason {
+                Text(reason)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Import writes configuration only. Potential later operations:")
+                    .foregroundStyle(.secondary)
+                ForEach(SettingsView.lifecycleDryRunOperations(for: displayedPreset), id: \.self) { operation in
+                    Text("• \(operation)")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.caption)
+        .textSelection(.enabled)
+        .padding(.vertical, 4)
     }
 }

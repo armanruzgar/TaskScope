@@ -3,6 +3,8 @@ import SwiftUI
 struct GeneralSettingsTab: View {
     @ObservedObject var settings: SettingsStore
     @ObservedObject var notificationService: NotificationService
+    /// Shown where the tab can reach every store a backup covers.
+    var backupSection: ConfigurationBackupSection? = nil
 
     var body: some View {
         Form {
@@ -64,6 +66,10 @@ struct GeneralSettingsTab: View {
             }
             .disabled(settings.isReadOnlyAfterCorruption)
 
+            if let backupSection {
+                backupSection
+            }
+
             Section("Notifications") {
                 Toggle("Notify on watched process changes", isOn: $settings.enableNotifications)
                 LabeledContent("System permission", value: notificationService.authorizationState.label)
@@ -91,5 +97,36 @@ struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+}
+
+/// Export Configuration… and Import Configuration…, with their outcome.
+struct ConfigurationBackupSection: View {
+    @ObservedObject var actions: ConfigurationBackupActions
+    var exportConfiguration: () -> Void
+    var importConfiguration: () -> Void
+
+    var body: some View {
+        Section("Configuration Backup") {
+            Text("Save watched-app presets, Auto-Stop rules, saved selections, settings and the hotkey to a file, or import them from one. A backup never holds Keep Off, recovery data or event history. Imported Auto-Stop rules arrive turned off.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Export Configuration…", action: exportConfiguration)
+                Button("Import Configuration…", action: importConfiguration)
+            }
+            if let note = actions.exportNote {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = actions.exportError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+            if let summary = actions.importSummary {
+                Text(summary).font(.caption).foregroundStyle(.secondary)
+            }
+            if let error = actions.importError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
     }
 }

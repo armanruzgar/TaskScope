@@ -518,3 +518,123 @@ final class SettingsStore: ObservableObject {
     }
 
 }
+
+// MARK: - Configuration backup
+
+extension SettingsStore {
+    /// The settings a configuration backup carries. It is an allowlist, so Keep
+    /// Off, the search text, the selected section and any setting added later
+    /// stay out of backups unless they are added here on purpose. Every field
+    /// is optional: only the fields an archive holds are imported.
+    struct Backup: Codable, Equatable, Sendable {
+        var refreshIntervalSeconds: Double?
+        var processListLimit: Int?
+        var cpuHighlightThreshold: Double?
+        var memHighlightThresholdMB: Double?
+        var autoRefreshProcessList: Bool?
+        var enableNotifications: Bool?
+        var showsMenuBarStatus: Bool?
+        var sortKeyRaw: String?
+        var sortDirectionRaw: String?
+        var filterModeRaw: String?
+        var treeMode: Bool?
+    }
+
+    /// One setting an import would change, as the preview lists it.
+    struct BackupChange: Equatable, Identifiable, Sendable {
+        var name: String
+        var current: String
+        var imported: String
+        var id: String { name }
+    }
+
+    var backup: Backup {
+        let settings = currentSettings
+        return Backup(
+            refreshIntervalSeconds: settings.refreshIntervalSeconds,
+            processListLimit: settings.processListLimit,
+            cpuHighlightThreshold: settings.cpuHighlightThreshold,
+            memHighlightThresholdMB: settings.memHighlightThresholdMB,
+            autoRefreshProcessList: settings.autoRefreshProcessList,
+            enableNotifications: settings.enableNotifications,
+            showsMenuBarStatus: settings.showsMenuBarStatus,
+            sortKeyRaw: settings.sortKeyRaw,
+            sortDirectionRaw: settings.sortDirectionRaw,
+            filterModeRaw: settings.filterModeRaw,
+            treeMode: settings.treeMode
+        )
+    }
+
+    /// What `applyBackup` would change, with the values it would store after
+    /// the usual normalization (an out-of-range interval is clamped as it is
+    /// when set here). Settings an archive lacks or already matches are left out.
+    func backupChanges(_ backup: Backup) -> [BackupChange] {
+        let before = currentSettings.normalized()
+        let after = adopting(backup).normalized()
+        func onOff(_ value: Bool) -> String { value ? "On" : "Off" }
+        func limit(_ value: Int) -> String { value == Self.allProcessesLimit ? "All" : "\(value)" }
+        func sort(_ value: CodableSettings) -> String {
+            let key = ProcessSortKey(rawValue: value.sortKeyRaw) ?? .cpu
+            let direction = ProcessSortDirection(rawValue: value.sortDirectionRaw) ?? key.defaultDirection
+            return "\(key.label), \(direction.rawValue)"
+        }
+        func filter(_ value: CodableSettings) -> String {
+            (ProcessFilterMode(rawValue: value.filterModeRaw) ?? .all).rawValue.capitalized
+        }
+        let rows: [(String, String, String)] = [
+            ("Watched status interval", "\(Int(before.refreshIntervalSeconds)) s", "\(Int(after.refreshIntervalSeconds)) s"),
+            ("Process list limit", limit(before.processListLimit), limit(after.processListLimit)),
+            ("CPU highlight threshold", "\(Int(before.cpuHighlightThreshold)) %", "\(Int(after.cpuHighlightThreshold)) %"),
+            ("Memory highlight threshold", "\(Int(before.memHighlightThresholdMB)) MB", "\(Int(after.memHighlightThresholdMB)) MB"),
+            ("Auto-refresh process list", onOff(before.autoRefreshProcessList), onOff(after.autoRefreshProcessList)),
+            ("Notify on watched process changes", onOff(before.enableNotifications), onOff(after.enableNotifications)),
+            ("Show status in the menu-bar icon", onOff(before.showsMenuBarStatus), onOff(after.showsMenuBarStatus)),
+            ("Sort", sort(before), sort(after)),
+            ("Filter", filter(before), filter(after)),
+            ("Tree view", onOff(before.treeMode), onOff(after.treeMode))
+        ]
+        return rows.filter { $0.1 != $0.2 }.map { BackupChange(name: $0.0, current: $0.1, imported: $0.2) }
+    }
+
+    /// Applies the settings an archive holds, normalized as usual. Keep Off is
+    /// not among them, so an import never turns background enforcement on.
+    /// Refused while the settings are in recovery mode.
+    @discardableResult
+    func applyBackup(_ backup: Backup) -> Bool {
+        guard !isReadOnlyAfterCorruption else { return false }
+        let value = adopting(backup).normalized()
+        refreshIntervalSeconds = value.refreshIntervalSeconds
+        processListLimit = value.processListLimit
+        cpuHighlightThreshold = value.cpuHighlightThreshold
+        memHighlightThresholdMB = value.memHighlightThresholdMB
+        autoRefreshProcessList = value.autoRefreshProcessList
+        enableNotifications = value.enableNotifications
+        showsMenuBarStatus = value.showsMenuBarStatus
+        sortKeyRaw = value.sortKeyRaw
+        sortDirectionRaw = value.sortDirectionRaw
+        filterModeRaw = value.filterModeRaw
+        treeMode = value.treeMode
+        return true
+    }
+
+    private func adopting(_ backup: Backup) -> CodableSettings {
+        var value = currentSettings
+        if let imported = backup.refreshIntervalSeconds { value.refreshIntervalSeconds = imported }
+        if let imported = backup.processListLimit { value.processListLimit = imported }
+        if let imported = backup.cpuHighlightThreshold { value.cpuHighlightThreshold = imported }
+        if let imported = backup.memHighlightThresholdMB { value.memHighlightThresholdMB = imported }
+        if let imported = backup.autoRefreshProcessList { value.autoRefreshProcessList = imported }
+        if let imported = backup.enableNotifications { value.enableNotifications = imported }
+        if let imported = backup.showsMenuBarStatus { value.showsMenuBarStatus = imported }
+        if let imported = backup.sortKeyRaw {
+            value.sortKeyRaw = imported
+            // A key without its direction takes the key's default direction.
+            value.sortDirectionRaw = backup.sortDirectionRaw ?? ""
+        } else if let imported = backup.sortDirectionRaw {
+            value.sortDirectionRaw = imported
+        }
+        if let imported = backup.filterModeRaw { value.filterModeRaw = imported }
+        if let imported = backup.treeMode { value.treeMode = imported }
+        return value
+    }
+}

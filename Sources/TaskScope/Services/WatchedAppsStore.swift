@@ -356,6 +356,14 @@ final class WatchedAppsStore: ObservableObject {
         return ImportPreview(items: items)
     }
 
+    /// The stored JSON of the presets for a configuration backup, keeping
+    /// fields a newer build wrote. Nil when there is nothing to export (see
+    /// `canExportPresets`).
+    func exportedPresetsJSON() throws -> Any? {
+        guard canExportPresets else { return nil }
+        return try persistence.mergedJSONObject(presets)
+    }
+
     /// Exports the stored JSON of the presets in memory, so fields written by a
     /// newer build, which ordinary saves keep, are not dropped from a backup.
     func encodedPresetArchive() throws -> Data {
@@ -414,7 +422,7 @@ final class WatchedAppsStore: ObservableObject {
         throw PresetArchiveError.unreadable
     }
 
-    nonisolated private static func describeDecodingError(_ error: Error) -> String {
+    nonisolated static func describeDecodingError(_ error: Error) -> String {
         func path(_ codingPath: [CodingKey]) -> String {
             var joined = ""
             for key in codingPath {

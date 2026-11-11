@@ -131,8 +131,9 @@ metadata against the checkout, as staging and releasing do, checks the signature
 and identity of each copy, replaces the destination transactionally, and
 restores the prior app if replacement fails;
 after an interrupted run, such as a power loss, the next install or stage
-restores or removes what it left. Export important presets before upgrading;
-this rollback does not migrate preferences across incompatible releases.
+restores or removes what it left. Before upgrading, export your configuration
+with **Settings > General > Export Configuration…**; this rollback does not
+migrate preferences across incompatible releases.
 
 Before removing TaskScope:
 

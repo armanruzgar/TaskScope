@@ -49,7 +49,8 @@ TaskScope should protect:
   or lifecycle action.
 - A preset file, custom URL, process name, process output, local preference, and
   other same-user application are untrusted inputs.
-- A same-user local adversary may open a custom URL, alter an exported preset,
+- A same-user local adversary may open a custom URL, alter an exported preset
+  or configuration backup,
   race process exit/PID reuse, or edit preferences. TaskScope should prevent
   those inputs from silently becoming a different destructive action.
 - A system administrator controls authorization policy, protected services,
@@ -216,6 +217,12 @@ Required invariants:
 - bound imported file size and preset count (200), recognize an explicit
   archive schema version, and show every lifecycle field plus rejection reason
   before import is committed;
+- treat a configuration backup (schema version 2) the same way: bound it to
+  1 MB, 500 Auto-Stop rules and 500 saved selections, validate each part with
+  its store's own rules again when committing, preview each rule's executable
+  path or name-only match, action and conditions, and add imported rules turned
+  off; never write or read Keep Off, recovery backups or event history in a
+  backup, so an import cannot start background enforcement;
 - keep a custom app path as entered and resolve links in it whenever the preset
   is matched or opened; require a `*.app` link to lead to an app bundle when a
   preset is added, edited, or imported, and check the bundle again before Open;

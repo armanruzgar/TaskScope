@@ -787,3 +787,80 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
 }
+
+// MARK: - Configuration backup
+
+extension AutoStopRulesStore {
+    /// One rule of an imported backup, as the import preview lists it.
+    struct ImportItem: Identifiable, Equatable {
+        var id: Int
+        /// The rule as the backup holds it.
+        var rule: AutoStopRule
+        /// The rule an import would add: validated and turned off.
+        var importedRule: AutoStopRule?
+        var rejectionReason: String?
+
+        var isAccepted: Bool { importedRule != nil }
+    }
+
+    /// The stored JSON of the rules, keeping fields a newer build wrote. Nil
+    /// while the stored rules are unreadable: the list in memory is then a
+    /// fallback, and exporting it would hide the user's rules.
+    func exportedRulesJSON() throws -> Any? {
+        guard allowsRulesPersistence else { return nil }
+        return try rulesPersistence.mergedJSONObject(rules)
+    }
+
+    /// Validates rules from a backup the way adding them would, turned off: a
+    /// rule is an authority to stop processes, so none runs until the user
+    /// reviews it and turns it on. Rules from a newer build, invalid rules and
+    /// rules whose process name is already used are rejected with a reason.
+    func previewImport(_ candidates: [AutoStopRule]) -> [ImportItem] {
+        guard allowsRulesPersistence else {
+            return candidates.enumerated().map { offset, rule in
+                ImportItem(id: offset, rule: rule, rejectionReason: "Auto-Stop rules are in recovery mode; reset them first.")
+            }
+        }
+        var names = rules.map(\.processName)
+        var ids = Set(rules.map(\.id))
+        var items: [ImportItem] = []
+        for (offset, candidate) in candidates.enumerated() {
+            func reject(_ reason: String) {
+                items.append(ImportItem(id: offset, rule: candidate, rejectionReason: reason))
+            }
+            guard !candidate.hasUnknownFields else {
+                reject("This rule contains fields from a newer TaskScope build and cannot be imported by this build.")
+                continue
+            }
+            var turnedOff = candidate
+            turnedOff.isEnabled = false
+            switch AutoStopRuleValidation.validateForEditing(turnedOff) {
+            case .failure(let failure):
+                reject(failure.message)
+            case .success(var normalized):
+                guard !names.contains(where: {
+                    $0.caseInsensitiveCompare(normalized.processName) == .orderedSame
+                }) else {
+                    reject("A rule for \(normalized.processName) already exists.")
+                    continue
+                }
+                if ids.contains(normalized.id) { normalized.id = UUID() }
+                ids.insert(normalized.id)
+                names.append(normalized.processName)
+                items.append(ImportItem(id: offset, rule: candidate, importedRule: normalized))
+            }
+        }
+        return items
+    }
+
+    /// Adds the accepted rules of a fresh preview, turned off. The preview is
+    /// redone here because the rules may have changed since it was shown.
+    func importRules(_ candidates: [AutoStopRule]) -> (imported: Int, rejected: Int) {
+        guard !rejectRulesIfReadOnly() else { return (0, candidates.count) }
+        let items = previewImport(candidates)
+        let accepted = items.compactMap(\.importedRule)
+        rules.append(contentsOf: accepted)
+        validationError = nil
+        return (accepted.count, items.count - accepted.count)
+    }
+}

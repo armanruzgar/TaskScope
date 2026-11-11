@@ -180,7 +180,11 @@ A preset export is created only after the user chooses a destination. It
 contains configured preset fields and can reveal organization-specific app
 paths, user launch-agent labels and paths, or process names. The immutable
 built-in GlobalProtect entry also contains its fixed service fields. Inspect and
-sanitize an export before sharing.
+sanitize an export before sharing. A configuration backup, also written only to
+a destination the user chooses, adds Auto-Stop rules (process names, executable
+paths, conditions and command-line text), saved selections (process names,
+executable paths, PIDs and start times), the general settings and the hotkey. It
+never contains Keep Off state, recovery backups or the Auto-Stop event history.
 
 TaskScope gives macOS the display name of every valid preset, custom names
 included, as the choices for the **Get Watched App Status**, **Open Watched
@@ -304,7 +308,7 @@ deleting TaskScope's preferences.
   and are excluded from support diagnostics. Reset commits recovered entries;
   preset reset supplies the built-in default if no presets remain. See
   [recovery details](SUPPORT.md#stored-data-is-unreadable).
-- Preset export files remain wherever the user saved them.
+- Preset exports and configuration backups remain wherever the user saved them.
 - Unified Log entries, including the `Actions` record, age out under macOS's
   own log retention; deleting TaskScope or its preferences does not remove
   them.

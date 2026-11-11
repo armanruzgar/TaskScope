@@ -12,6 +12,9 @@ final class PresetSettingsActions: ObservableObject {
     /// The outcome of the last committed import, shown as neutral text.
     @Published var importSummary: String?
     @Published var preview: WatchedAppsStore.ImportPreview?
+    /// Set when the loaded file is a configuration backup with more than
+    /// presets, which this import leaves out.
+    private(set) var otherSectionsNote: String?
 
     var fileSize: (URL) throws -> Int = { url in
         try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
@@ -32,6 +35,7 @@ final class PresetSettingsActions: ObservableObject {
     func beginImport() {
         clearImportFeedback()
         preview = nil
+        otherSectionsNote = nil
     }
 
     /// A later change to the preset list makes the last import's outcome stale.
@@ -53,7 +57,21 @@ final class PresetSettingsActions: ObservableObject {
             guard try fileSize(url) <= WatchedAppsStore.maximumPresetArchiveBytes else {
                 throw WatchedAppsStore.PresetArchiveError.exceedsMaximumSize
             }
-            let decoded = try WatchedAppsStore.decodePresetArchive(readFile(url))
+            let data = try readFile(url)
+            let decoded: [WatchedAppPreset]
+            if ConfigurationArchive.isConfigurationBackup(data) {
+                // A configuration backup: this import takes its presets only.
+                let archive = try ConfigurationArchive.decode(data)
+                guard let presets = archive.presets else {
+                    throw ConfigurationArchive.ArchiveError.noPresets
+                }
+                decoded = presets
+                if archive.sections != [.presets] || !archive.unknownSections.isEmpty {
+                    otherSectionsNote = "The rest of the configuration backup was not imported; use Import Configuration… in Settings > General."
+                }
+            } else {
+                decoded = try WatchedAppsStore.decodePresetArchive(data)
+            }
             preview = store.previewImport(decoded)
         } catch {
             importError = (error as? LocalizedError)?.errorDescription
@@ -74,7 +92,9 @@ final class PresetSettingsActions: ObservableObject {
         } else {
             importError = nil
             importSummary = "Imported \(result.importedCount) preset\(result.importedCount == 1 ? "" : "s")." + rejected
+                + (otherSectionsNote.map { " " + $0 } ?? "")
         }
+        otherSectionsNote = nil
     }
 
     func export(from store: WatchedAppsStore) {

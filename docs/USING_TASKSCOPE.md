@@ -723,6 +723,37 @@ cancels. Open remains cancellable; readiness waits stop polling and the result
 acknowledges possible earlier app or service changes. Cancelled Open and commands
 cancelled before execution are not retained as lifecycle failures.
 
+## Configuration backup
+
+**Settings > General > Configuration Backup** saves your configuration to one
+file and restores it, for example on another Mac or user account, after
+erasing preferences, or before changing the bundle identifier. **Export
+Configuration…** writes the watched-app presets, Auto-Stop rules, saved
+selections, settings and the hotkey, each as stored, so fields a newer build
+added are kept. A backup never holds Keep Off, recovery data or the Auto-Stop
+event history. A part whose stored data is in recovery is left out, and a note
+says which. Backups use schema version 2 and must stay under 1 MB; at most 200
+presets, 500 rules and 500 saved selections import.
+
+**Import Configuration…** reads a configuration backup, a preset archive or a
+bare preset array, and shows a preview before anything changes: each part with a
+switch to leave it out, every preset field, each Auto-Stop rule's executable
+path (or that it matches by name only), action and conditions, each saved
+selection's executables, each setting that would change from its current value,
+and the hotkey. Each part goes through the same validation as adding it by
+hand, and the preview says why an entry is rejected, for example a name already
+in use or fields from a newer build. Parts a newer build wrote and this build
+does not understand are listed and left out. Importing runs no app, process,
+launch agent or privileged operation. **Imported Auto-Stop rules arrive turned
+off**: review each one in Settings > Auto-Stop before turning it on. The
+settings part never includes Keep Off, so an import never starts background
+enforcement. A line then says what was imported and what was not.
+
+**Export…** and **Import…** in Settings > Watched Apps still handle presets
+alone. Their export is the preset archive older builds read; their import also
+reads a configuration backup but takes only its presets and says that the rest
+was left out.
+
 ## Stored configuration
 
 Retained rules, presets, selections, and events preserve unknown JSON fields

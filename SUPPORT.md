@@ -480,7 +480,9 @@ a read-only observation alone is not a successful lifecycle test.
 
 ## Export and upgrade precautions
 
-Export readable watched presets before a risky upgrade. The current development
+Export your configuration with **Settings > General > Export Configuration…**
+before a risky upgrade; it holds presets, Auto-Stop rules, saved selections,
+settings and the hotkey, never Keep Off. The current development
 bundle identifier is `com.local.TaskScope`; changing to a production identifier
 changes the preferences, permissions, Shortcuts, URL, and login-item identity.
 Do not assume local development state migrates until the release explicitly says
@@ -541,7 +543,8 @@ that migration was tested.
    ```
 
 7. Optionally delete files you exported (by default `TaskScope-presets.json`,
-   `TaskScope-diagnostics.json`, and `TaskScope-GlobalProtect-compatibility.txt`,
+   `TaskScope-configuration.json`, `TaskScope-diagnostics.json`, and
+   `TaskScope-GlobalProtect-compatibility.txt`,
    plus `TaskScope-preferences.plist` if you exported preferences before a reset),
    the single-instance lock folder
    `~/Library/Application Support/com.local.TaskScope`, the per-user cache

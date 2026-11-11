@@ -428,3 +428,77 @@ final class SavedSelectionsStore: ObservableObject {
     }
 
 }
+
+// MARK: - Configuration backup
+
+extension SavedSelectionsStore {
+    /// One saved selection of an imported backup, as the import preview lists it.
+    struct ImportItem: Identifiable, Equatable {
+        var id: Int
+        var selection: SavedSelection
+        /// The selection an import would add.
+        var importedSelection: SavedSelection?
+        var rejectionReason: String?
+
+        var isAccepted: Bool { importedSelection != nil }
+    }
+
+    /// The stored JSON of the selections, keeping fields a newer build wrote.
+    /// Nil while the stored selections are unreadable.
+    func exportedSelectionsJSON() throws -> Any? {
+        guard allowsPersistence else { return nil }
+        return try persistence.mergedJSONObject(selections)
+    }
+
+    /// Validates selections from a backup the way saving one would: a valid
+    /// name not in use, and processes that each carry an absolute executable
+    /// path, so an imported selection is never recalled by name alone.
+    func previewImport(_ candidates: [SavedSelection]) -> [ImportItem] {
+        guard allowsPersistence else {
+            return candidates.enumerated().map { offset, selection in
+                ImportItem(id: offset, selection: selection, rejectionReason: "Saved selections are in recovery mode; reset them first.")
+            }
+        }
+        var names = selections.map(\.name)
+        var ids = Set(selections.map(\.id))
+        var items: [ImportItem] = []
+        for (offset, candidate) in candidates.enumerated() {
+            func reject(_ reason: String) {
+                items.append(ImportItem(id: offset, selection: candidate, rejectionReason: reason))
+            }
+            var imported = candidate
+            imported.name = candidate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let error = Self.nameValidationError(imported.name) {
+                reject(error)
+                continue
+            }
+            guard !imported.isLegacyUnsupported, !imported.processes.isEmpty else {
+                reject("This selection holds only process IDs from an older build and cannot be recalled.")
+                continue
+            }
+            guard imported.processes.allSatisfy({ $0.executablePath?.hasPrefix("/") == true }) else {
+                reject("Every process in an imported selection needs an absolute executable path, so it is never recalled by name alone.")
+                continue
+            }
+            guard !names.contains(where: { $0.caseInsensitiveCompare(imported.name) == .orderedSame }) else {
+                reject("A saved selection named \(imported.name) already exists.")
+                continue
+            }
+            if ids.contains(imported.id) { imported.id = UUID() }
+            ids.insert(imported.id)
+            names.append(imported.name)
+            items.append(ImportItem(id: offset, selection: candidate, importedSelection: imported))
+        }
+        return items
+    }
+
+    /// Adds the accepted selections of a fresh preview.
+    func importSelections(_ candidates: [SavedSelection]) -> (imported: Int, rejected: Int) {
+        guard !rejectIfReadOnly() else { return (0, candidates.count) }
+        let items = previewImport(candidates)
+        let accepted = items.compactMap(\.importedSelection)
+        selections.append(contentsOf: accepted)
+        validationError = nil
+        return (accepted.count, items.count - accepted.count)
+    }
+}

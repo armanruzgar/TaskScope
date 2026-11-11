@@ -440,7 +440,8 @@ exercise that transaction.
 If an installed development build must be downgraded after a successful
 install:
 
-1. Export readable presets and preserve needed preference data.
+1. Export the configuration (**Settings > General > Export Configuration…**)
+   and preserve needed preference data.
 2. Turn off Launch at Login and quit TaskScope.
 3. Install the previously verified app bundle through the same transactional
    installer or restore a known-good backup.
