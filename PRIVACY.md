@@ -203,6 +203,10 @@ no separate journal:
   `kickstart`, and similar), app `open`, and administrator request it runs,
   with the exit status public and the command line private. Failures are
   logged as errors;
+- in the `AutoStop` category, a debug-level line for each auto-stop engine
+  pass with the number of processes it read, or that the process list could
+  not be read. macOS does not store debug lines by default; they appear while
+  they are being streamed;
 - for failed handling of `taskscope://` URLs, a fixed message for a malformed
   URL and, logged with private visibility, the error text of a failed refresh
   or a rejected URL. A rejected URL's text repeats the URL's action word;

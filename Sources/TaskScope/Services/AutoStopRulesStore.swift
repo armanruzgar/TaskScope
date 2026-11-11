@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 
 /// Why the engine is asking for a process to be stopped. The authority check
 /// differs by kind: an automatic stop needs an enabled Auto Stop rule whose
@@ -15,6 +16,10 @@ typealias AutoStopActionHandler = (AutoStopRule, AppProcess, AutoStopActionKind)
 @MainActor
 final class AutoStopRulesStore: ObservableObject {
     static let maximumRuntimeMinutes = AutoStopRuleValidation.maximumRuntimeMinutes
+    /// One debug line per engine pass, so its cadence can be checked:
+    /// `log stream --level debug --predicate 'subsystem == "<bundle id>" AND category == "AutoStop"'`.
+    /// It holds counts only, never process names.
+    private static let logger = Logger(subsystem: TaskScopeLogging.subsystem(), category: "AutoStop")
 
     @Published private(set) var rules: [AutoStopRule] {
         didSet {
@@ -404,8 +409,10 @@ final class AutoStopRulesStore: ObservableObject {
             guard !Task.isCancelled else { break }
             switch loaded {
             case .failure(let error):
+                Self.logger.debug("Auto-stop pass: the process list could not be read.")
                 engineError = error.localizedDescription
             case .success(let processes):
+                Self.logger.debug("Auto-stop pass over \(processes.count, privacy: .public) processes.")
                 engineError = nil
                 await evaluate(processes)
             }

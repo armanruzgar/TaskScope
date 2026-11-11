@@ -201,7 +201,16 @@ and administrator request it runs, in the macOS Unified Log (see
 log show --last 1h --predicate 'subsystem == "com.local.TaskScope" AND category == "Actions"'
 ```
 
-Process names and command lines appear as `<private>`. If TaskScope crashes,
+Process names and command lines appear as `<private>`. To check that
+auto-stop rules are being evaluated, stream the engine's debug line, one per
+pass (every 10 seconds while a rule is switched on), which holds only the
+number of processes read:
+
+```bash
+log stream --level debug --predicate 'subsystem == "com.local.TaskScope" AND category == "AutoStop"'
+```
+
+If TaskScope crashes,
 macOS keeps the crash report in `~/Library/Logs/DiagnosticReports`. Sanitize
 both before sharing them.
 
