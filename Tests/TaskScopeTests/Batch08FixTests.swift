@@ -323,7 +323,14 @@ final class Batch08FixTests: XCTestCase {
                 }
                 await inventory.set([process(start: reused ? "new" : "start", path: "/batch08/other/Example", elapsed: "00:01")])
                 await store.evaluateNow()
-                XCTAssertEqual(store.events.first?.outcome, reused ? (mode == "prompt" ? .processEnded : .stopped) : .failed, "\(mode), reused=\(reused)")
+                // A10-3 (lead): an unanswered name-only prompt follows its moved
+                // executable, so nothing failed; a confirmed or automatic stop
+                // whose executable moved is still an identity failure.
+                let movedOutcome: AutoStopEvent.Outcome? = mode == "prompt" ? nil : .failed
+                XCTAssertEqual(store.events.first?.outcome, reused ? (mode == "prompt" ? .processEnded : .stopped) : movedOutcome, "\(mode), reused=\(reused)")
+                if mode == "prompt", !reused {
+                    XCTAssertEqual(store.currentPrompt?.process.executablePath, "/batch08/other/Example")
+                }
             }
         }
     }

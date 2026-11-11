@@ -10,7 +10,7 @@ struct SaveSelectionSheet: View {
     var body: some View {
         VStack(spacing: 16) {
             Text("Save Selection").font(.headline)
-            Text("Save \(count) selected processes as a named selection for quick recall.")
+            Text("Save \(count) selected \(count == 1 ? "process" : "processes") as a named selection for quick recall.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

@@ -1042,8 +1042,10 @@ final class ProcessManager: ObservableObject {
             // finish all scoped stops and verification even if its caller leaves.
             await Task { @MainActor in
                 var diagnosticJobs: [LifecycleJobResult] = []
+                let previousMessage = message
+                message = scope.progressMessage(for: preset)
                 defer {
-                    if !cancelled { message = result.message }
+                    message = cancelled ? previousMessage : result.message
                     if !cancelled, let reason = result.failureReason {
                         lifecycleDiagnostics.record(
                             presetID: preset.id, action: scope.diagnosticAction,

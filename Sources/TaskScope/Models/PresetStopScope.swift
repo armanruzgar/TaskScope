@@ -19,6 +19,16 @@ enum PresetStopScope {
         }
     }
 
+    /// Shown while the stop runs, so the footer's spinner is not next to an
+    /// earlier, unrelated result.
+    func progressMessage(for preset: WatchedAppPreset) -> String {
+        switch self {
+        case .app: "Quitting \(preset.displayName)…"
+        case .helpers: "Quitting the helpers of \(preset.displayName)…"
+        case .all: "Quitting \(preset.displayName) and its helpers…"
+        }
+    }
+
     func inventoryFailure(for preset: WatchedAppPreset) -> PresetStopResult {
         .failed(
             self == .helpers

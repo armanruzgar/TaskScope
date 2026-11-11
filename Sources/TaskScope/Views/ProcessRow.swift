@@ -160,6 +160,15 @@ struct ProcessRow: View {
         "\(process.name), PID \(String(process.pid))"
     }
 
+    private func accessibilityTotals(
+        _ name: String, _ firstValue: Double?, _ secondValue: Double?,
+        unit: String, first: String, second: String
+    ) -> String {
+        guard let firstValue, let secondValue else { return "\(name) totals unavailable" }
+        let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(1))
+        return "\(name) \(first) \(firstValue.formatted(format)), \(second) \(secondValue.formatted(format)) \(unit)"
+    }
+
     private func metricPair(_ first: Double?, _ second: Double?, decimals: Int) -> String {
         guard let first, let second else { return "—" }
         return String(format: "%.*f / %.*f", decimals, first, decimals, second)
@@ -168,6 +177,19 @@ struct ProcessRow: View {
     private var accessibilitySummary: String {
         var values = ["CPU \(process.cpu.formatted(.number.precision(.fractionLength(1)))) percent"]
         values.append("memory \(process.memoryMB.formatted(.number.precision(.fractionLength(0)))) megabytes")
+        if showsExpandedMetrics {
+            // The window's PPID, NET and DISK cells are hidden from VoiceOver
+            // as separate elements, so the row's summary reads them out.
+            values.append("parent PID \(String(process.parentPID))")
+            values.append(accessibilityTotals(
+                "network", process.netInKB, process.netOutKB,
+                unit: "kilobytes", first: "received", second: "sent"
+            ))
+            values.append(accessibilityTotals(
+                "disk", process.diskReadBytes.map { $0 / 1_048_576 }, process.diskWriteBytes.map { $0 / 1_048_576 },
+                unit: "megabytes", first: "read", second: "written"
+            ))
+        }
         if isHighlightedCPU { values.append("high CPU") }
         if isHighlightedMEM { values.append("high memory") }
         if let treeLevel { values.append("level \(treeLevel)") }

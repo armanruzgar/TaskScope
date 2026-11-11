@@ -65,9 +65,18 @@ struct ProcessListQuery: Hashable {
 
     func matches(_ process: AppProcess) -> Bool {
         let search = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The row shows the executable path (with `~` for the home folder)
+        // under the name, which can differ from the `ps` command name. Text
+        // with a slash, or starting with `~`, is a path, so it also matches
+        // that path, as shown and in full. A plain word still matches only the
+        // name, command and PID: it must not pull every process in a folder
+        // of that name into the list, Select All and batch stops.
+        let isPathSearch = search.contains("/") || search.hasPrefix("~")
         let matchesSearch = search.isEmpty
             || process.name.localizedCaseInsensitiveContains(search)
             || process.command.localizedCaseInsensitiveContains(search)
+            || (isPathSearch && (process.displayCommand.localizedCaseInsensitiveContains(search)
+                || (process.executablePath?.localizedCaseInsensitiveContains(search) ?? false)))
             || String(process.pid).contains(search)
         guard matchesSearch else { return false }
 

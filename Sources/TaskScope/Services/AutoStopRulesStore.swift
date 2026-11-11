@@ -811,6 +811,20 @@ final class AutoStopRulesStore: ObservableObject {
         handledOccurrences = Set(carried.compactMap(currentOccurrence))
         reportedFailures = Set(reportedFailures.compactMap(currentOccurrence))
         dismissedOccurrences = Set(dismissedOccurrences.compactMap(currentOccurrence))
+        // An unanswered prompt whose process moved its executable within the
+        // same lifetime stays queued, in its place, under the new identity
+        // while its rule still matches the process (a name-only rule). It has
+        // neither failed nor ended, so nothing is recorded; the prompt of a
+        // rule that no longer matches ends below as an identity change.
+        for index in pendingPrompts.indices
+        where !runningIdentities.contains(pendingPrompts[index].id.processIdentity) {
+            guard let moved = currentOccurrence(pendingPrompts[index].id),
+                  let process = currentByPID[moved.processIdentity.pid],
+                  let rule = rules.first(where: { $0.id == moved.ruleID }),
+                  rule.action == .prompt, isStillActive(rule), matches(rule, process: process) else { continue }
+            pendingPrompts[index] = AutoStopPrompt(id: moved, rule: rule, process: process)
+            handledOccurrences.insert(moved)
+        }
         // A confirmed stop is never re-signalled, but one engine cadence after it
         // was accepted a process that is still running gets one failure record,
         // so the history does not say "waiting" for as long as it runs.

@@ -150,6 +150,41 @@ final class ReviewCoreRegressionTests: XCTestCase {
         }
     }
 
+    /// A10-3 (lead): a prompt that follows its moved executable is still the
+    /// same, unanswered prompt. It records no "identity changed" failure and
+    /// keeps its place in the queue.
+    func testPromptThatFollowsAMovedExecutableRecordsNoFailureAndKeepsItsPlace() async {
+        let first = row(pid: 42)
+        let second = row(pid: 43)
+        let inventory = Inventory([first, second])
+        let store = store(inventory)
+        XCTAssertTrue(store.add(AutoStopRule(processName: "Example", runtimeMinutes: 1, action: .prompt)))
+        await store.evaluateNow()
+        XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [42, 43])
+
+        var moved = first
+        moved.executablePath = "/Applications/Moved.app/Contents/MacOS/Example"
+        inventory.result = .success([moved, second])
+        await store.evaluateNow()
+
+        XCTAssertEqual(store.pendingPrompts.map(\.process.pid), [42, 43], "the moved process keeps its place")
+        XCTAssertEqual(store.currentPrompt?.process.identity, moved.identity)
+        XCTAssertEqual(store.events.map(\.detail), [], "nothing failed or ended")
+
+        // A path-bound rule no longer matches the moved process: its prompt
+        // ends, and that is recorded as an identity change.
+        let pathInventory = Inventory([first])
+        let pathStore = self.store(pathInventory)
+        XCTAssertTrue(pathStore.add(rule(.prompt)))
+        await pathStore.evaluateNow()
+        XCTAssertEqual(pathStore.pendingPrompts.count, 1)
+        pathInventory.result = .success([moved])
+        await pathStore.evaluateNow()
+        XCTAssertEqual(pathStore.pendingPrompts.count, 0)
+        XCTAssertEqual(pathStore.events.map(\.detail),
+                       ["Process identity changed before the prompt was handled; nothing was stopped."])
+    }
+
     func testDefinitiveBootoutRefusalInspectsOnceForUnloadAndDisable() async {
         for keepOff in [false, true] {
             for code: Int32 in [1, 5, 150] {

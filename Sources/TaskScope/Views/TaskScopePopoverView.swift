@@ -813,6 +813,11 @@ struct TaskScopePopoverView: View {
                                 }
                             }
                         }
+                        // Flat and tree rows share their PID ids, so without a
+                        // separate identity per mode the lazy stack kept the
+                        // flat rows on screen after Tree View was turned on:
+                        // no indent and no disclosure button.
+                        .id(listState.treeMode)
                     }
                     // Edit > Select All (and its Command-A key equivalent) acts like
                     // the Command-A key handler below.

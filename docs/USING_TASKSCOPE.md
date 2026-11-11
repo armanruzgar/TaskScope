@@ -49,7 +49,9 @@ Dock icon.
 
 ## Process actions and observations
 
-Type in the search field to match a process name, command, or PID. Sort with
+Type in the search field to match a process name, command, or PID. Text with a
+slash, or starting with `~`, also matches the executable path shown under the
+name, as shown or in full (`/usr/bin`, `~/dev/`). Sort with
 the sort menu (CPU, memory, name, or PID) or by clicking the **CPU** or **MEM
 MB** column title, or **PID** in the window: CPU and memory sort highest first,
 PID lowest first, and the active column is marked. Use the **All / Watched /
@@ -412,7 +414,8 @@ rules act only on your own processes.
 
 Prompt alerts show a PID and are presented anew when the queued target changes.
 An unanswered name-only prompt follows a still-matching process when its
-executable moves within the same lifetime.
+executable moves within the same lifetime; it keeps its place in the queue and
+adds nothing to the history.
 Dismissal survives rule toggles and executable moves for that process occurrence;
 changing the rule action to Auto Stop or Log Only allows it to act again.
 Rule edits revoke captured pre-signal authority without adding a failure event
