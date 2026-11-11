@@ -13,6 +13,16 @@ import XCTest
 // MARK: - Action log (L11-22)
 
 final class Batch02ActionLogTests: XCTestCase {
+    /// Pause, Resume and User 1/2 were logged as "signal 17" and the like.
+    func testActionLogNamesEverySignalTaskScopeSends() {
+        XCTAssertEqual(TaskScopeActionLog.name(ofSignal: SIGTERM), "SIGTERM")
+        XCTAssertEqual(TaskScopeActionLog.name(ofSignal: SIGKILL), "SIGKILL")
+        for action in ProcessSignalAction.allCases {
+            XCTAssertEqual(TaskScopeActionLog.name(ofSignal: action.signal), action.signalName, "\(action)")
+        }
+        XCTAssertEqual(TaskScopeActionLog.name(ofSignal: SIGWINCH), "signal \(SIGWINCH)")
+    }
+
     func testOnlyCommandsThatChangeSystemStateAreLogged() {
         XCTAssertEqual(TaskScopeActionLog.loggedCommandKind(.launchctl("bootout", "gui/501/com.example")),
                        "launchctl bootout")

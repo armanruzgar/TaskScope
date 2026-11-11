@@ -64,12 +64,18 @@ enum TaskScopeActionLog {
         "bootout", "bootstrap", "disable", "enable", "kickstart", "kill", "load", "unload", "remove"
     ]
 
-    private static func name(ofSignal signal: Int32) -> String {
+    /// Every signal TaskScope sends has a name here: Stop, Force Stop, Pause,
+    /// Resume and the Send Signal submenu.
+    static func name(ofSignal signal: Int32) -> String {
         switch signal {
         case SIGTERM: "SIGTERM"
         case SIGKILL: "SIGKILL"
         case SIGINT: "SIGINT"
         case SIGHUP: "SIGHUP"
+        case SIGSTOP: "SIGSTOP"
+        case SIGCONT: "SIGCONT"
+        case SIGUSR1: "SIGUSR1"
+        case SIGUSR2: "SIGUSR2"
         default: "signal \(signal)"
         }
     }
