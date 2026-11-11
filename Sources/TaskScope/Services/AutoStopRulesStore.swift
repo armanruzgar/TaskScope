@@ -24,6 +24,8 @@ final class AutoStopRulesStore: ObservableObject {
             updateEnginePolling()
         }
     }
+    /// The ledger's prompt queue, published for the alert and the prompt
+    /// coordinator; see `ledger`.
     @Published private(set) var pendingPrompts: [AutoStopPrompt] = []
     @Published private(set) var events: [AutoStopEvent]
     @Published private(set) var engineError: String?
@@ -58,30 +60,6 @@ final class AutoStopRulesStore: ObservableObject {
         pendingPrompts.first
     }
 
-    private struct InFlightAction {
-        /// The rule value captured when the action started. Any edit to the
-        /// rule makes this differ from the stored rule and cancels the action.
-        var rule: AutoStopRule
-        var task: Task<ProcessActionResult, Never>
-    }
-
-    /// A stop that was accepted but whose target had not exited when checked.
-    /// Resolved on a later tick: `.stopped` once the identity disappears, or
-    /// one re-signal for automatic stops followed by a single failure record.
-    private struct PendingExit {
-        var prompt: AutoStopPrompt
-        var canRetry: Bool
-        /// A confirmed Stop Now records one failure if the process is still
-        /// running one engine cadence after the request was accepted.
-        var reportsStillRunning = false
-        var firstAcceptedAt: ContinuousClock.Instant
-
-        /// A stop the user confirmed from a prompt. It is never re-signalled,
-        /// so it carries no authority, and its exit is tracked as history
-        /// even after the rule is edited, switched off or deleted.
-        var isConfirmedStop: Bool { prompt.rule.action == .prompt }
-    }
-
     private let rulesPersistence: RecoveringCodableStorage<[AutoStopRule]>
     private let eventsPersistence: RecoveringCodableStorage<[AutoStopEvent]>
     private let now: () -> Date
@@ -94,18 +72,21 @@ final class AutoStopRulesStore: ObservableObject {
     private let inventory: any ProcessInventoryProviding
     private let pollingController: ProcessPollingController
     private let eventLimit: Int
-    private var handledOccurrences: Set<AutoStopOccurrence> = []
-    private var reportedFailures: Set<AutoStopOccurrence> = []
-    /// Last matching targets retain their signal budget across still-matching
-    /// Auto Stop edits, including edits made while a signal is in flight.
-    private var automaticProcesses: [AutoStopOccurrence: AppProcess] = [:]
-    /// Occurrences the user dismissed. Deliberately survives rule edits and
-    /// enable toggles: a dismissed process must not prompt again just because
-    /// the rule was switched off and on.
-    private var dismissedOccurrences: Set<AutoStopOccurrence> = []
-    private var pendingExits: [AutoStopOccurrence: PendingExit] = [:]
+    /// Everything the engine remembers about each rule-and-process occurrence:
+    /// prompts, dismissals, Log Only records, stops in flight or waiting for an
+    /// exit, and reported failures. Every change goes through its transitions.
+    private var ledger = AutoStopOccurrenceLedger() {
+        didSet {
+            let prompts = ledger.prompts
+            if prompts != pendingPrompts { pendingPrompts = prompts }
+        }
+    }
     private var actionHandler: AutoStopActionHandler?
-    private var inFlightActions: [AutoStopOccurrence: InFlightAction] = [:]
+    /// The automatic stop being sent, with the rule value captured when it
+    /// started. Passes never overlap and run their stops one at a time, so
+    /// there is at most one. Any edit to the rule makes the captured value
+    /// differ from the stored rule and cancels the stop.
+    private var automaticStop: (rule: AutoStopRule, task: Task<ProcessActionResult, Never>)?
     private var isNormalizing = false
     private var isEvaluating = false
     private var needsReevaluation = false
@@ -204,7 +185,7 @@ final class AutoStopRulesStore: ObservableObject {
     }
 
     deinit {
-        inFlightActions.values.forEach { $0.task.cancel() }
+        automaticStop?.task.cancel()
     }
 
     /// Test convenience; Settings reads the two read-only flags below.
@@ -297,29 +278,14 @@ final class AutoStopRulesStore: ObservableObject {
         }
         validationError = nil
         let sample = recordUptime()
-        var retained = Set(automaticProcesses.compactMap { occurrence, process in
-            occurrence.ruleID == rule.id && qualifiesForAutomaticStop(normalized, process: process, at: sample)
-                ? occurrence : nil
-        })
-        // A confirmed Stop Now stays handled until its process exits, whatever
-        // the edit: the user already answered for that occurrence, and its
-        // signal was accepted, so it must neither prompt nor be signalled again.
-        retained.formUnion(pendingExits.compactMap { occurrence, pending in
-            occurrence.ruleID == rule.id && pending.isConfirmedStop ? occurrence : nil
-        })
-        let untracked = pendingExits.compactMap { occurrence, pending in
-            occurrence.ruleID == rule.id && !retained.contains(occurrence) ? pending : nil
+        // Editing or disabling a rule retires its live prompts, exactly as
+        // deleting it does, so a switched-off rule's alert is not actionable;
+        // see `AutoStopOccurrenceLedger.ruleChanged` for what an edit keeps.
+        let records = ledger.ruleChanged(old: rules[index], new: normalized) { process in
+            qualifiesForAutomaticStop(normalized, process: process, at: sample)
         }
         rules[index] = normalized
-        handledOccurrences = handledOccurrences.filter { $0.ruleID != rule.id || retained.contains($0) }
-        reportedFailures = reportedFailures.filter { $0.ruleID != rule.id || retained.contains($0) }
-        pendingExits = pendingExits.filter { $0.key.ruleID != rule.id || retained.contains($0.key) }
-        automaticProcesses = automaticProcesses.filter { $0.key.ruleID != rule.id || retained.contains($0.key) }
-        recordUntrackedExits(untracked)
-        // Editing or disabling a rule must retire its live prompts too, exactly as
-        // `remove(_:)` does; otherwise a disabled rule's alert stays actionable.
-        // Dismissed occurrences are kept on purpose (see `dismissedOccurrences`).
-        pendingPrompts.removeAll { $0.rule.id == rule.id }
+        record(records)
         return true
     }
 
@@ -365,37 +331,11 @@ final class AutoStopRulesStore: ObservableObject {
         return true
     }
 
+    /// A deleted rule's prompts, dismissals and progress go with it; see
+    /// `AutoStopOccurrenceLedger.ruleRemoved` for what stays.
     private func forgetOccurrences(forRuleIDs removedIDs: Set<UUID>) {
-        let untracked = pendingExits.compactMap { occurrence, pending in
-            removedIDs.contains(occurrence.ruleID) && !pending.isConfirmedStop ? pending : nil
-        }
-        handledOccurrences = handledOccurrences.filter { !removedIDs.contains($0.ruleID) }
-        reportedFailures = reportedFailures.filter { !removedIDs.contains($0.ruleID) }
-        dismissedOccurrences = dismissedOccurrences.filter { !removedIDs.contains($0.ruleID) }
-        // A confirmed Stop Now's exit is still recorded once it happens; it is
-        // history and needs no rule (see `PendingExit.isConfirmedStop`).
-        pendingExits = pendingExits.filter { !removedIDs.contains($0.key.ruleID) || $0.value.isConfirmedStop }
-        automaticProcesses = automaticProcesses.filter { !removedIDs.contains($0.key.ruleID) }
-        pendingPrompts.removeAll { removedIDs.contains($0.rule.id) }
-        recordUntrackedExits(untracked)
+        record(removedIDs.flatMap { ledger.ruleRemoved(id: $0) })
     }
-
-    /// An accepted Auto Stop whose rule was switched off, deleted, or edited so
-    /// that it no longer applies loses its retry and its exit tracking, because
-    /// a retired rule has no authority left. Close its "waiting for the process
-    /// to exit" record so the history does not wait forever. A spent retry
-    /// already ended with its own failure record, and a retry still in flight
-    /// records its own outcome.
-    private func recordUntrackedExits(_ untracked: [PendingExit]) {
-        let closing = EventBatch()
-        for pending in untracked where pending.canRetry {
-            record(pending.prompt, outcome: .stopRequested, detail: Self.untrackedExitDetail, batch: closing)
-        }
-        flush(closing)
-    }
-
-    private static let untrackedExitDetail =
-        "The rule changed or was removed before the process exited; its exit will not be tracked."
 
     /// Starts the engine with a handler that receives the kind of stop it is
     /// being asked to perform, so it can apply the matching authority check.
@@ -422,8 +362,8 @@ final class AutoStopRulesStore: ObservableObject {
 
     func stop() {
         pollingController.stop()
-        inFlightActions.values.forEach { $0.task.cancel() }
-        inFlightActions.removeAll()
+        automaticStop?.task.cancel()
+        automaticStop = nil
         isEngineRunning = false
     }
 
@@ -431,7 +371,7 @@ final class AutoStopRulesStore: ObservableObject {
     /// stop waits for its process to exit, so that exit is still recorded after
     /// the user switches off or deletes the last rule.
     private var needsPolling: Bool {
-        rules.contains(where: \.isEnabled) || pendingExits.values.contains(where: \.isConfirmedStop)
+        rules.contains(where: \.isEnabled) || ledger.hasConfirmedStopAwaitingExit
     }
 
     private func updateEnginePolling() {
@@ -489,55 +429,30 @@ final class AutoStopRulesStore: ObservableObject {
     /// before any `Task { }` the button enqueued — so an action that re-resolved the
     /// target afterwards would act on whatever prompt had become the queue head.
     func claimPrompt(_ prompt: AutoStopPrompt) -> AutoStopPrompt? {
-        guard let index = pendingPrompts.firstIndex(where: { $0.id == prompt.id }) else { return nil }
-        return pendingPrompts.remove(at: index)
+        ledger.claimPrompt(prompt.id)
     }
 
     /// Completes a stop for a prompt already claimed via `claimPrompt`.
     func finishStop(_ prompt: AutoStopPrompt) async {
         let result = await actionHandler?(prompt.rule, prompt.process, .confirmedPrompt) ?? .rejected
-        if result.succeeded {
-            record(prompt, outcome: .stopped, detail: "Stopped after confirmation.")
-        } else if result.isAwaitingExit {
-            // The signal was accepted; the exit is observed on a later tick. A
-            // confirmed prompt is never re-signalled automatically.
-            handledOccurrences.insert(prompt.id)
-            pendingExits[prompt.id] = PendingExit(
-                prompt: prompt,
-                canRetry: false,
-                reportsStillRunning: true,
-                firstAcceptedAt: monotonicNow()
-            )
-            // The last enabled rule may have been switched off while the signal
-            // was in flight, which stopped polling; resume it to see this exit.
-            if !rules.contains(where: \.isEnabled) { updateEnginePolling() }
-            record(
-                prompt,
-                outcome: .stopRequested,
-                detail: "Stop requested after confirmation; waiting for the process to exit."
-            )
-        } else if result == .identityChanged {
-            record(prompt, outcome: .failed, detail: "Process identity changed; nothing was stopped.")
-        } else if result == .stale {
-            record(prompt, outcome: .processEnded, detail: "Process ended before the stop request.")
-        } else if result == .refused {
-            record(prompt, outcome: .failed, detail: refusalDetail(for: prompt.process))
-        } else {
-            // Nothing was signalled for a reason that may clear (an unreadable
-            // process list, a stopped engine). Un-handle so a still-running
-            // occurrence prompts again instead of being silently abandoned.
-            handledOccurrences.remove(prompt.id)
-            record(prompt, outcome: .failed, detail: "Stop request did not complete.")
-        }
+        let outcome = ledger.confirmedStopFinished(
+            prompt,
+            result: result,
+            refusalDetail: refusalDetail(for: prompt.process),
+            at: monotonicNow()
+        )
+        // The last enabled rule may have been switched off while the signal
+        // was in flight, which stopped polling; resume it to see this exit.
+        if result.isAwaitingExit, !rules.contains(where: \.isEnabled) { updateEnginePolling() }
+        record([outcome])
     }
 
     /// Dismisses one specific prompt. Idempotent: dismissing a prompt that a button
     /// already claimed is a no-op, so SwiftUI's automatic write-back cannot consume
     /// a second, never-displayed prompt.
     func dismissPrompt(_ prompt: AutoStopPrompt) {
-        guard let claimed = claimPrompt(prompt) else { return }
-        dismissedOccurrences.insert(claimed.id)
-        record(claimed, outcome: .dismissed, detail: "Dismissed; this process occurrence will not prompt again.")
+        guard let dismissal = ledger.dismissPrompt(prompt.id) else { return }
+        record([dismissal])
     }
 
     /// Test convenience; the alert claims a specific prompt (see `claimPrompt`).
@@ -568,356 +483,91 @@ final class AutoStopRulesStore: ObservableObject {
         rule.isEnabled && rules.contains(rule)
     }
 
-    /// An automatic stop found due during a pass, dispatched after every
-    /// prompt and Log Only event of that pass has been handled.
-    private struct DueStop {
-        var rule: AutoStopRule
-        var process: AppProcess
-        var occurrence: AutoStopOccurrence
-        var isRetry: Bool
-    }
-
     private func evaluate(_ processes: [AppProcess]) async {
-        // Resolve ended and moved occurrences first. A handled mark then already
-        // follows a moved executable (same PID and start time) to its new
-        // identity, so the loop below cannot act on that occurrence twice.
-        let observations = EventBatch()
-        pruneEndedOccurrences(processes, batch: observations)
+        // The ledger follows moved and ended occurrences before it evaluates
+        // the rules, so the pass cannot act on one occurrence twice. This call
+        // never suspends, so no rule can change while it runs.
+        let sample = recordUptime()
+        let pass = ledger.observed(
+            inventory: processes,
+            rules: rules,
+            at: monotonicNow(),
+            cadence: .seconds(engineCadence),
+            canLogDurably: allowsEventsPersistence,
+            matches: { rule, process in matches(rule, process: process) },
+            runtime: { process in ruleRuntime(of: process, at: sample) }
+        )
         if isEngineRunning, !needsPolling {
             // Polling outlived the last enabled rule only to see a confirmed
             // stop's process exit, and none is left to watch.
             pollingController.stop()
         }
-
-        // This loop never suspends, so no rule can change while it runs.
-        let activeRules = rules.filter(\.isEnabled)
-        let sample = recordUptime()
-        var dueStops: [DueStop] = []
-        for process in processes {
-            guard let runtime = ruleRuntime(of: process, at: sample) else { continue }
-            for rule in activeRules where matches(rule, process: process) && isStillActive(rule) {
-                let occurrence = AutoStopOccurrence(ruleID: rule.id, processIdentity: process.identity)
-                guard runtime >= TimeInterval(rule.runtimeMinutes) * 60,
-                      (rule.action != .prompt || !dismissedOccurrences.contains(occurrence)) else {
-                    continue
-                }
-
-                if rule.action == .kill { automaticProcesses[occurrence] = process }
-                // A queued prompt shows the process as it is now, not as it was
-                // when the threshold was first crossed (same occurrence, so an
-                // answer still acts on the same process).
-                if let index = pendingPrompts.firstIndex(where: { $0.id == occurrence }),
-                   pendingPrompts[index].process != process {
-                    pendingPrompts[index].process = process
-                }
-                if handledOccurrences.contains(occurrence) {
-                    // Already acted on. The only follow-up is a single re-signal of
-                    // an automatic stop whose target has not exited yet.
-                    guard rule.action == .kill,
-                          let pending = pendingExits[occurrence],
-                          pending.canRetry,
-                          pending.firstAcceptedAt.duration(to: monotonicNow()) >= .seconds(engineCadence) else {
-                        continue
-                    }
-                    dueStops.append(DueStop(rule: rule, process: process, occurrence: occurrence, isRetry: true))
-                    continue
-                }
-
-                let prompt = AutoStopPrompt(id: occurrence, rule: rule, process: process)
-                switch rule.action {
-                case .prompt:
-                    handledOccurrences.insert(occurrence)
-                    pendingPrompts.append(prompt)
-                case .kill:
-                    // Marked handled only when it is dispatched below, so a pass
-                    // that ends before reaching it leaves it to the next pass.
-                    dueStops.append(DueStop(rule: rule, process: process, occurrence: occurrence, isRetry: false))
-                case .silent:
-                    handledOccurrences.insert(occurrence)
-                    if !record(
-                        prompt,
-                        outcome: .logged,
-                        detail: "Runtime threshold reached.",
-                        requiresDurability: true,
-                        batch: observations
-                    ) {
-                        // A log-only occurrence has not completed until its event is
-                        // durably recorded. Retry after the event recovery gate is reset.
-                        handledOccurrences.remove(occurrence)
-                    }
-                }
-            }
-        }
-        // One save for the whole pass. `flush` also un-handles any Log Only
-        // occurrence whose event could not be saved.
-        flush(observations)
+        // One save for the whole pass. `record` also undoes any Log Only
+        // record that could not be saved, so its occurrence is logged later.
+        record(pass.records)
 
         // An automatic stop can wait on the process-operation gate behind another
         // mutation (a preset stop, or Keep GlobalProtect Off waiting for an
         // administrator), so stops run only after every other rule was served.
-        for stop in dueStops {
+        for stop in pass.dueStops {
             guard !Task.isCancelled else { return }
             // An earlier stop's suspension lets rules change. A changed rule no
             // longer authorizes this stop; the next pass evaluates the new value.
-            guard isStillActive(stop.rule) else { continue }
-            if stop.isRetry {
-                guard let pending = pendingExits[stop.occurrence], pending.canRetry else { continue }
-                pendingExits[stop.occurrence]?.canRetry = false
-            } else {
-                guard handledOccurrences.insert(stop.occurrence).inserted else { continue }
-            }
+            guard isStillActive(stop.rule), ledger.beginAutomaticStop(stop) else { continue }
             // A stop records at most one event and saves it at once, so the
             // history stays current while a later stop waits on the gate.
-            await performAutomaticStop(
-                rule: stop.rule,
-                process: stop.process,
-                occurrence: stop.occurrence,
-                prompt: AutoStopPrompt(id: stop.occurrence, rule: stop.rule, process: stop.process),
-                isRetry: stop.isRetry
-            )
+            await performAutomaticStop(stop)
         }
     }
 
-    private func performAutomaticStop(
-        rule: AutoStopRule,
-        process: AppProcess,
-        occurrence: AutoStopOccurrence,
-        prompt: AutoStopPrompt,
-        isRetry: Bool
-    ) async {
-        let firstAcceptedAt = pendingExits[occurrence]?.firstAcceptedAt
+    private func performAutomaticStop(_ stop: AutoStopDueStop) async {
         let action = Task { [actionHandler] in
             guard !Task.isCancelled else { return ProcessActionResult.rejected }
-            return await actionHandler?(rule, process, .automatic) ?? .rejected
+            return await actionHandler?(stop.rule, stop.process, .automatic) ?? .rejected
         }
-        inFlightActions[occurrence] = InFlightAction(rule: rule, task: action)
+        automaticStop = (stop.rule, action)
         let result = await action.value
-        inFlightActions[occurrence] = nil
+        automaticStop = nil
 
-        // A retired rule cannot authorize more work, but a signal already
-        // delivered must remain in the event history.
         let sample = recordUptime()
-        let isActive = isStillActive(rule) || (automaticProcesses[occurrence] != nil && rules.contains {
-            $0.id == rule.id && qualifiesForAutomaticStop($0, process: process, at: sample)
-        })
-        if result == .rejected, !isStillActive(rule), isActive {
-            // An edit revoked the captured pre-signal authority. Preserve any
-            // accepted first request's retry budget, but do not log a failure
-            // for an action that never sent its signal.
-            if let pending = pendingExits[occurrence] {
-                pendingExits[occurrence] = PendingExit(
-                    prompt: pending.prompt, canRetry: true, firstAcceptedAt: pending.firstAcceptedAt
-                )
-            } else {
-                handledOccurrences.remove(occurrence)
-            }
-            return
-        }
-        if !isActive {
-            handledOccurrences.remove(occurrence)
-            pendingExits[occurrence] = nil
-            guard result == .stopped || result == .requestedStillRunning else {
-                // A retry follows an accepted first request whose record says it
-                // is waiting for the exit; the retired rule tracks nothing more,
-                // so close that record (see `recordUntrackedExits`).
-                if isRetry {
-                    if result == .stale {
-                        record(prompt, outcome: .stopped, detail: "Exited after the stop request.")
-                    } else {
-                        record(prompt, outcome: .stopRequested, detail: Self.untrackedExitDetail)
-                    }
-                }
-                return
-            }
-        }
-
-        switch result {
-        case .stopped:
-            reportedFailures.remove(occurrence)
-            pendingExits[occurrence] = nil
-            record(
-                prompt,
-                outcome: .stopped,
-                detail: isRetry ? "Stopped automatically after a second stop request." : "Stopped automatically."
-            )
-        case .identityChanged:
-            pendingExits[occurrence] = nil
-            record(prompt, outcome: .failed, detail: "Process identity changed; automatic stopping will not retry.")
-        case .stale:
-            // The verified identity is gone: the process exited after the
-            // engine observed it, or after the first stop request on a retry.
-            pendingExits[occurrence] = nil
-            if isRetry {
-                record(prompt, outcome: .stopped, detail: "Exited after the stop request.")
-            } else {
-                record(prompt, outcome: .processEnded, detail: "Process ended before the automatic stop.")
-            }
-        case .requestedStillRunning where !isRetry || !isActive:
-            if isActive {
-                pendingExits[occurrence] = PendingExit(prompt: prompt, canRetry: true, firstAcceptedAt: firstAcceptedAt ?? monotonicNow())
-            }
-            record(prompt, outcome: .stopRequested, detail: isActive
-                ? "Stop requested; waiting for the process to exit."
-                : "Stop requested; the rule changed or was removed, so automatic stopping will not retry.")
-        case .requestedStillRunning:
-            // Two stop requests were accepted and the process is still running.
-            // Stop retrying so a process that ignores SIGTERM is not signalled on
-            // every tick; the user can force stop it. A later exit is still
-            // recorded when the identity disappears.
-            pendingExits[occurrence] = PendingExit(prompt: prompt, canRetry: false, firstAcceptedAt: firstAcceptedAt ?? monotonicNow())
-            record(
-                prompt,
-                outcome: .failed,
-                detail: "Still running after a second stop request; automatic stopping will not retry. Use Force Stop if it must exit."
-            )
-        case .refused:
-            // The kernel or a safety guard refused the signal. Retrying every tick
-            // cannot succeed, so the occurrence stays handled until it exits.
-            pendingExits[occurrence] = nil
-            record(prompt, outcome: .failed, detail: refusalDetail(for: process) + " Automatic stopping will not retry.")
-        case .rejected where isRetry:
-            // The re-signal never ran (most often an unreadable process list).
-            // Keep the single retry available for the next tick.
-            pendingExits[occurrence] = PendingExit(prompt: prompt, canRetry: true, firstAcceptedAt: firstAcceptedAt ?? monotonicNow())
-        case .rejected:
-            // Nothing was signalled — most often because the process list could
-            // not be read. Un-handle so the next tick retries instead of
-            // abandoning a still-running process, but log the failure only once
-            // per occurrence so a persistent fault cannot flood the event log.
-            handledOccurrences.remove(occurrence)
-            pendingExits[occurrence] = nil
-            if reportedFailures.insert(occurrence).inserted {
-                record(prompt, outcome: .failed, detail: "Automatic stop did not complete.")
-            }
-        }
+        record(ledger.automaticStopFinished(
+            stop,
+            result: result,
+            isAuthorized: isStillActive(stop.rule),
+            stillApplies: rules.contains {
+                $0.id == stop.rule.id && qualifiesForAutomaticStop($0, process: stop.process, at: sample)
+            },
+            refusalDetail: refusalDetail(for: stop.process),
+            at: monotonicNow()
+        ))
     }
 
-    private func pruneEndedOccurrences(_ processes: [AppProcess], batch: EventBatch) {
-        let runningProcesses = processes.filter { !$0.hasExited }
-        let runningIdentities = Set(runningProcesses.map(\.identity))
-        automaticProcesses = automaticProcesses.filter { runningIdentities.contains($0.key.processIdentity) }
-        let currentByPID = Dictionary(runningProcesses.map { ($0.pid, $0) }, uniquingKeysWith: { first, _ in first })
-        // A kernel path can change during one lifetime. Keep Dismiss and the
-        // automatic signal budget, but let unanswered prompts use the new identity.
-        func currentOccurrence(_ occurrence: AutoStopOccurrence) -> AutoStopOccurrence? {
-            guard let process = currentByPID[occurrence.processIdentity.pid],
-                  process.startTime == occurrence.processIdentity.startTime else { return nil }
-            return AutoStopOccurrence(ruleID: occurrence.ruleID, processIdentity: process.identity)
+    /// Publishes records newest first and saves the log once: every save
+    /// re-encodes, merges and rewrites the whole log. When the save fails, a
+    /// Log Only occurrence has not completed (see `AutoStopRecord.isDurable`),
+    /// so its record is dropped and the occurrence is logged on a later pass.
+    /// Other records stay in memory: truthful history while an unreadable
+    /// primary payload is preserved. The recovery banner makes that state
+    /// visible, and an explicit reset commits the session's history.
+    private func record(_ records: [AutoStopRecord]) {
+        guard !records.isEmpty else { return }
+        let written = records.map { record in
+            (record: record, event: AutoStopEvent(
+                timestamp: now(),
+                processName: record.prompt.process.name,
+                pid: record.prompt.process.pid,
+                ruleID: record.prompt.rule.id,
+                outcome: record.outcome,
+                detail: record.detail
+            ))
         }
-        let unanswered = Set(pendingPrompts.map(\.id))
-        let carried = handledOccurrences.filter {
-            runningIdentities.contains($0.processIdentity) || !unanswered.contains($0)
-        }
-        handledOccurrences = Set(carried.compactMap(currentOccurrence))
-        reportedFailures = Set(reportedFailures.compactMap(currentOccurrence))
-        dismissedOccurrences = Set(dismissedOccurrences.compactMap(currentOccurrence))
-        // An unanswered prompt whose process moved its executable within the
-        // same lifetime stays queued, in its place, under the new identity
-        // while its rule still matches the process (a name-only rule). It has
-        // neither failed nor ended, so nothing is recorded; the prompt of a
-        // rule that no longer matches ends below as an identity change.
-        for index in pendingPrompts.indices
-        where !runningIdentities.contains(pendingPrompts[index].id.processIdentity) {
-            guard let moved = currentOccurrence(pendingPrompts[index].id),
-                  let process = currentByPID[moved.processIdentity.pid],
-                  let rule = rules.first(where: { $0.id == moved.ruleID }),
-                  rule.action == .prompt, isStillActive(rule), matches(rule, process: process) else { continue }
-            pendingPrompts[index] = AutoStopPrompt(id: moved, rule: rule, process: process)
-            handledOccurrences.insert(moved)
-        }
-        // A confirmed stop is never re-signalled, but one engine cadence after it
-        // was accepted a process that is still running gets one failure record,
-        // so the history does not say "waiting" for as long as it runs.
-        for (occurrence, pending) in pendingExits where pending.reportsStillRunning
-            && runningIdentities.contains(occurrence.processIdentity)
-            && pending.firstAcceptedAt.duration(to: monotonicNow()) >= .seconds(engineCadence) {
-            pendingExits[occurrence]?.reportsStillRunning = false
-            record(pending.prompt, outcome: .failed,
-                   detail: "Still running after the confirmed stop request. Use Force Stop if it must exit.", batch: batch)
-        }
-        // A different start time on the same PID means the captured lifetime
-        // ended and the kernel reused its PID. Only the same lifetime with a
-        // moved or unreadable executable is an identity change.
-        for (occurrence, pending) in pendingExits
-        where !runningIdentities.contains(occurrence.processIdentity) {
-            pendingExits[occurrence] = nil
-            if currentOccurrence(occurrence) != nil {
-                record(pending.prompt, outcome: .failed,
-                       detail: "Process identity changed; exit could not be confirmed and stopping will not retry.", batch: batch)
-            } else {
-                record(pending.prompt, outcome: .stopped, detail: "Exited after the stop request.", batch: batch)
-            }
-        }
-        for prompt in pendingPrompts where !runningIdentities.contains(prompt.id.processIdentity) {
-            if currentOccurrence(prompt.id) != nil {
-                record(prompt, outcome: .failed, detail: "Process identity changed before the prompt was handled; nothing was stopped.", batch: batch)
-            } else {
-                record(prompt, outcome: .processEnded, detail: "Process ended before the prompt was handled.", batch: batch)
-            }
-        }
-        pendingPrompts.removeAll {
-            !runningIdentities.contains($0.id.processIdentity)
-                || dismissedOccurrences.contains($0.id)
-        }
-    }
-
-    /// Events recorded together (one engine pass, or one rule change) and saved
-    /// once: every save re-encodes, merges and rewrites the whole log.
-    private final class EventBatch {
-        var entries: [(event: AutoStopEvent, durableOccurrence: AutoStopOccurrence?)] = []
-    }
-
-    /// Publishes a batch newest first and saves the log once. When the save
-    /// fails, a Log Only occurrence has not completed (see `record`), so its
-    /// event is dropped and the occurrence is retried on a later pass; other
-    /// events stay in memory, as an unsaved single event does.
-    private func flush(_ batch: EventBatch) {
-        guard !batch.entries.isEmpty else { return }
         let previous = events
-        events = Array((batch.entries.reversed().map(\.event) + previous).prefix(eventLimit))
-        let durable = batch.entries.compactMap(\.durableOccurrence)
+        events = Array((written.reversed().map(\.event) + previous).prefix(eventLimit))
+        let durable = written.filter(\.record.isDurable)
         if !saveEvents(), !durable.isEmpty {
-            handledOccurrences.subtract(durable)
-            events = Array((batch.entries.reversed().filter { $0.durableOccurrence == nil }.map(\.event) + previous).prefix(eventLimit))
+            ledger.revertLogged(durable.map(\.record.prompt.id))
+            events = Array((written.reversed().filter { !$0.record.isDurable }.map(\.event) + previous).prefix(eventLimit))
         }
-        batch.entries.removeAll()
-    }
-
-    @discardableResult
-    private func record(
-        _ prompt: AutoStopPrompt,
-        outcome: AutoStopEvent.Outcome,
-        detail: String,
-        requiresDurability: Bool = false,
-        batch: EventBatch? = nil
-    ) -> Bool {
-        guard !requiresDurability || allowsEventsPersistence else { return false }
-        let event = AutoStopEvent(
-            timestamp: now(),
-            processName: prompt.process.name,
-            pid: prompt.process.pid,
-            ruleID: prompt.rule.id,
-            outcome: outcome,
-            detail: detail
-        )
-        if let batch {
-            // Published and saved by `flush`, which also enforces durability.
-            batch.entries.append((event, requiresDurability ? prompt.id : nil))
-            return true
-        }
-        events.insert(event, at: 0)
-        if events.count > eventLimit {
-            events.removeLast(events.count - eventLimit)
-        }
-        // Keep truthful in-memory history while preserving an unreadable primary
-        // payload. The recovery banner makes its non-durable state visible, and an
-        // explicit reset commits the recovered session history.
-        let persisted = saveEvents()
-        if requiresDurability, !persisted {
-            events.removeAll { $0.id == event.id }
-            return false
-        }
-        return true
     }
 
     private func matches(_ rule: AutoStopRule, process: AppProcess) -> Bool {
@@ -964,12 +614,12 @@ final class AutoStopRulesStore: ObservableObject {
         ProcessSignalGuard.refusalDetail(for: process, currentPID: currentPID, currentUID: currentUID)
     }
 
-    /// Cancels every in-flight automatic stop whose captured rule is no longer
+    /// Cancels the automatic stop in flight when its captured rule is no longer
     /// present exactly as captured: any edit (path, name, runtime, action) or a
     /// disable/delete revokes the authority the action started with.
     private func cancelUnauthorizedActions() {
-        for (_, action) in inFlightActions where !authorizes(action.rule, kind: .automatic) {
-            action.task.cancel()
+        if let automaticStop, !authorizes(automaticStop.rule, kind: .automatic) {
+            automaticStop.task.cancel()
         }
     }
 

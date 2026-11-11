@@ -448,7 +448,8 @@ engine cadence (10 seconds) after the request was accepted, the history gets
 one "Still running after the confirmed stop request. Use Force Stop if it must
 exit." failure, and the exit is still recorded when it happens ("Exited after
 the stop request."). Saving, editing, switching the rule off and on, or
-deleting it neither prompts again for that process nor loses that exit record.
+deleting it, while the request is still running or after it was accepted,
+neither prompts again for that process nor loses that exit record.
 
 A Log Only rule logs each process lifetime once, also when the process's
 executable is moved or renamed while it runs; a new process on a reused PID is
