@@ -216,7 +216,9 @@ final class AutoStopPromptAlertTests: XCTestCase {
             presentationStyle: .menuBarCompact,
             openFullWindow: nil,
             confirmationState: ProcessConfirmationState(),
-            activityMonitor: PromptActivityMonitor()
+            activityMonitor: PromptActivityMonitor(),
+            commandBus: AppCommandBus(),
+            quitAction: {}
         )
     }
 

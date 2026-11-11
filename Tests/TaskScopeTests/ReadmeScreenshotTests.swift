@@ -417,7 +417,9 @@ struct ReadmeScreenshotFixture {
             openFullWindow: style == .menuBarCompact ? {} : nil,
             mainWindowVisible: { false },
             activityMonitor: UIActivityMonitor(),
-            menuBarConfirmation: style == .menuBarCompact ? UIMenuBarConfirmation(answer: false) : nil
+            menuBarConfirmation: style == .menuBarCompact ? UIMenuBarConfirmation(answer: false) : nil,
+            commandBus: AppCommandBus(),
+            quitAction: {}
         )
         .environmentObject(settings)
         .environmentObject(watchedApps)

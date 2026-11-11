@@ -224,6 +224,7 @@ final class Batch10WiringTests: XCTestCase {
             watchedApps: fixture.stores.watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
+            hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: .watchedApps
         )
         try settingsView.inspect().find(button: "Delete…").tap()

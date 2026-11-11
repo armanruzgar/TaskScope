@@ -67,7 +67,9 @@ enum Batch10 {
         confirmer: (any MenuBarConfirming)? = nil,
         style: TaskScopePresentationStyle = .expandedWindow,
         windowState: ControlActiveState? = nil,
-        mainWindowVisible: @escaping @MainActor () -> Bool = { false }
+        mainWindowVisible: @escaping @MainActor () -> Bool = { false },
+        commandBus: AppCommandBus = AppCommandBus(),
+        quitAction: @escaping @MainActor () -> Void = {}
     ) -> TaskScopePopoverView {
         TaskScopePopoverView(
             processManager: manager ?? fixture.manager,
@@ -84,7 +86,9 @@ enum Batch10 {
             reportWindowState: windowState,
             mainWindowVisible: mainWindowVisible,
             activityMonitor: UIActivityMonitor(),
-            menuBarConfirmation: confirmer
+            menuBarConfirmation: confirmer,
+            commandBus: commandBus,
+            quitAction: quitAction
         )
     }
 

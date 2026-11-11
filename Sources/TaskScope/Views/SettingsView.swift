@@ -12,8 +12,11 @@ struct SettingsView: View {
     /// The configuration backup's other stores. Saved selections are left out
     /// of backups where the caller has none.
     var savedSelections: SavedSelectionsStore? = nil
+    /// The app passes nothing and gets the shared services; a test passes its
+    /// own, so inspecting or toggling Settings never reaches the real hotkey
+    /// registration, preferences or notification center.
     var hotkey: HotkeyManager = .shared
-    @ObservedObject private var notificationService = NotificationService.shared
+    @ObservedObject var notificationService: NotificationService = .shared
     @State var selectedTab: Tab = .general
 
     @StateObject private var presetForm = WatchedPresetFormState()

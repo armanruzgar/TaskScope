@@ -162,7 +162,9 @@ final class SystemIntegrationRegressionTests: XCTestCase {
                 autoStopRules: AutoStopRulesStore(userDefaults: defaults, key: "rules", eventsKey: "events", inventory: IntegrationInventory()),
                 history: ProcessHistory(inventory: IntegrationInventory()),
                 presentationStyle: style,
-                activityMonitor: activity
+                activityMonitor: activity,
+                commandBus: AppCommandBus(),
+                quitAction: {}
             )
             try view.processContextMenu(for: process).inspect().find(button: "Open in Activity Monitor").tap()
             await fulfillment(of: [called], timeout: 2)

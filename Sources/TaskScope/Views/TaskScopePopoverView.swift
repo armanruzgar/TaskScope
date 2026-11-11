@@ -13,6 +13,12 @@ struct TaskScopePopoverView: View {
     var openFullWindow: (() -> Void)?
     private let activityMonitor: any ActivityMonitorCoordinating
     private let menuBarConfirmation: (any MenuBarConfirming)?
+    /// Where the Presets section's Refresh goes. The app passes the shared bus
+    /// its command coordinator handles; a test passes its own.
+    private let commandBus: AppCommandBus
+    /// The footer's Quit. It has no default, so a view built in a test can
+    /// never quit the test process.
+    private let quitAction: @MainActor () -> Void
     @StateObject private var confirmationState: ProcessConfirmationState
     @StateObject private var listState: ProcessListInteractionState
     @StateObject private var reportState: ProcessReportPresentationState
@@ -58,8 +64,12 @@ struct TaskScopePopoverView: View {
             NSApplication.shared.windows.contains { $0.isVisible && $0.title == TaskScopeScene.main.title }
         },
         activityMonitor: (any ActivityMonitorCoordinating)? = nil,
-        menuBarConfirmation: (any MenuBarConfirming)? = nil
+        menuBarConfirmation: (any MenuBarConfirming)? = nil,
+        commandBus: AppCommandBus = .shared,
+        quitAction: @escaping @MainActor () -> Void
     ) {
+        self.commandBus = commandBus
+        self.quitAction = quitAction
         self.reportWindowState = reportWindowState
         self.mainWindowVisible = mainWindowVisible
         _reportState = StateObject(wrappedValue: reportState ?? ProcessReportPresentationState())
@@ -114,7 +124,8 @@ struct TaskScopePopoverView: View {
 
     /// The menu-bar commands for this view; each goes through the same path as
     /// the matching control, so a stop from the menu still asks for confirmation.
-    private var viewCommands: TaskScopeViewCommands {
+    /// Internal so a test can run a menu command without a focused scene.
+    var viewCommands: TaskScopeViewCommands {
         let keyboardProcess = keyboardFocusedProcess
         return TaskScopeViewCommands(
             refresh: { refreshVisibleSection() },
@@ -1163,7 +1174,7 @@ struct TaskScopePopoverView: View {
             expandsMessage: settings.selectedSection == .presets,
             summary: footerSummary,
             quitDisabled: processManager.isMutationActive,
-            quitAction: { NSApplication.shared.terminate(nil) }
+            quitAction: quitAction
         )
     }
 
@@ -1336,7 +1347,7 @@ struct TaskScopePopoverView: View {
             case .processes:
                 await processManager.loadProcessList()
             case .presets:
-                _ = await AppCommandBus.shared.submit(.refresh)
+                _ = await commandBus.submit(.refresh)
             }
         }
     }

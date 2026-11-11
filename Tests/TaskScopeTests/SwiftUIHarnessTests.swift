@@ -609,6 +609,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             watchedApps: fixture.stores.watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
+            hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: .watchedApps,
             interactions: interactions
         )
@@ -655,6 +656,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             watchedApps: watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
+            hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: .watchedApps,
             interactions: interactions
         )
@@ -1243,19 +1245,17 @@ final class SwiftUIHarnessTests: XCTestCase {
         fixture.manager.dependencies.watchedPresets = { store.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
 
+        // The view's bus is this test's own (L15-12), so nothing another test
+        // submitted can reach the recorder and nothing is left installed after.
         let recorder = CommandRecorder()
-        AppCommandBus.shared.install { command in
+        let bus = AppCommandBus()
+        bus.install { command in
             recorder.record(command)
             return TaskScopeCommandResult(status: .completed, message: "recorded")
         }
-        defer {
-            AppCommandBus.shared.install { _ in
-                TaskScopeCommandResult(status: .rejected, message: "No handler installed by this test.")
-            }
-        }
 
         let confirmation = ProcessConfirmationState()
-        let view = makePopover(fixture: fixture, confirmationState: confirmation)
+        let view = makePopover(fixture: fixture, confirmationState: confirmation, commandBus: bus)
         let cards = try view.inspect().findAll(PresetCard.self)
         XCTAssertEqual(cards.count, 2)
         XCTAssertEqual(try cards[1].actualView().snapshot.preset.id, beta.id)
@@ -1287,18 +1287,16 @@ final class SwiftUIHarnessTests: XCTestCase {
         fixture.stores.settings.selectedSectionRaw = TaskScopeSection.presets.rawValue
         fixture.manager.dependencies.watchedPresets = { fixture.stores.watchedApps.presets }
         await fixture.manager.refreshWatchedStatus(showMessage: false)
+        // The view's bus is this test's own (L15-12), so nothing another test
+        // submitted can reach the recorder and nothing is left installed after.
         let recorder = CommandRecorder()
-        AppCommandBus.shared.install { command in
+        let bus = AppCommandBus()
+        bus.install { command in
             recorder.record(command)
             return TaskScopeCommandResult(status: .completed, message: "recorded")
         }
-        defer {
-            AppCommandBus.shared.install { _ in
-                TaskScopeCommandResult(status: .rejected, message: "No handler installed by this test.")
-            }
-        }
         let confirmation = ProcessConfirmationState()
-        let view = makePopover(fixture: fixture, confirmationState: confirmation)
+        let view = makePopover(fixture: fixture, confirmationState: confirmation, commandBus: bus)
         let card = try view.inspect().find(PresetCard.self).actualView()
         card.onKeepOffChanged(false)
         await confirmation.waitForActions()
@@ -1630,7 +1628,8 @@ final class SwiftUIHarnessTests: XCTestCase {
             settings: fixture.stores.settings,
             watchedApps: fixture.stores.watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
-            processManager: fixture.manager
+            processManager: fixture.manager,
+            hotkey: .forTests(), notificationService: .forTests()
         )
         let inspected = try view.inspect()
         let tabView = try inspected.find(ViewType.TabView.self)
@@ -1657,6 +1656,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             let selectedView = SettingsView(
                 settings: fixture.stores.settings, watchedApps: fixture.stores.watchedApps,
                 autoStopRules: fixture.stores.autoStopRules, processManager: fixture.manager,
+                hotkey: .forTests(), notificationService: .forTests(),
                 selectedTab: tab
             )
             for expectedText in expectedTexts {
@@ -1695,7 +1695,8 @@ final class SwiftUIHarnessTests: XCTestCase {
                 lifecycle: UILifecycle(),
                 settleAfterProcessChange: {},
                 dependencies: .inert
-            )
+            ),
+            hotkey: .forTests(), notificationService: .forTests()
         )
         let inspected = try view.inspect()
 
@@ -1764,7 +1765,9 @@ final class SwiftUIHarnessTests: XCTestCase {
         confirmationState: ProcessConfirmationState,
         openFullWindow: (() -> Void)? = nil,
         menuBarConfirmation: (any MenuBarConfirming)? = nil,
-        presentationStyle: TaskScopePresentationStyle = .expandedWindow
+        presentationStyle: TaskScopePresentationStyle = .expandedWindow,
+        commandBus: AppCommandBus = AppCommandBus(),
+        quitAction: @escaping @MainActor () -> Void = {}
     ) -> TaskScopePopoverView {
         TaskScopePopoverView(
             processManager: fixture.manager,
@@ -1778,7 +1781,9 @@ final class SwiftUIHarnessTests: XCTestCase {
             openFullWindow: openFullWindow,
             confirmationState: confirmationState,
             activityMonitor: UIActivityMonitor(),
-            menuBarConfirmation: menuBarConfirmation
+            menuBarConfirmation: menuBarConfirmation,
+            commandBus: commandBus,
+            quitAction: quitAction
         )
     }
 

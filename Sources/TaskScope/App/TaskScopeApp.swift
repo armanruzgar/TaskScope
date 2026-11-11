@@ -664,7 +664,8 @@ struct TaskScopeApp: App {
                         history: processHistory,
                         presentationStyle: .expandedWindow,
                         openFullWindow: { showTaskScopeWindow() },
-                        activityMonitor: activityMonitor
+                        activityMonitor: activityMonitor,
+                        quitAction: { NSApplication.shared.terminate(nil) }
                     )
                     // Wide enough for the name column beside PID, PPID, USER,
                     // NET, DISK, CPU and MEM (`ProcessListColumns`).
@@ -755,7 +756,8 @@ struct TaskScopeApp: App {
                     showTaskScopeWindow()
                 },
                 activityMonitor: activityMonitor,
-                menuBarConfirmation: AppModalMenuBarConfirmation()
+                menuBarConfirmation: AppModalMenuBarConfirmation(),
+                quitAction: { NSApplication.shared.terminate(nil) }
             )
             .frame(width: 480, height: 600)
             .environmentObject(settings)

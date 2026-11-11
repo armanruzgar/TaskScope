@@ -50,6 +50,7 @@ final class Batch11FixTests: XCTestCase {
                 settleAfterProcessChange: {},
                 dependencies: .inert
             ),
+            hotkey: .forTests(), notificationService: .forTests(),
             selectedTab: tab,
             presetActions: actions ?? PresetSettingsActions(),
             interactions: interactions ?? SettingsInteractionState()

@@ -110,6 +110,16 @@ and tries to open the user's Contacts database. A new test target must depend
 on `TaskScopeTestEnvironment` too; `TestEnvironmentTests` checks that the setup
 ran.
 
+Views take the process-wide services they use instead of reaching for them.
+`TaskScopePopoverView` takes the command bus its Presets Refresh submits to
+(the app passes `AppCommandBus.shared`) and its Quit action, which has no
+default, so a view built in a test can never quit the test process.
+`SettingsView` takes the `HotkeyManager` and `NotificationService` it shows.
+Tests pass their own from `Tests/TaskScopeTests/Support/ViewTestDependencies.swift`:
+a private bus, a Quit that only counts, `HotkeyManager.forTests()` on in-memory
+preferences with a backend that registers nothing, and
+`NotificationService.forTests()`, which never touches the notification center.
+
 The packaging test requires macOS and Xcode 26 and launches test copies of the
 app. It stages and signs them ad hoc in its own temporary directory, never in
 the checkout's `dist/`, uses a unique test bundle identifier, and checks for
