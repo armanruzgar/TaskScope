@@ -31,7 +31,7 @@ struct TaskScopeFooterView: View {
             if let summary {
                 Text(summary)
                     .monospacedDigit()
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .help("CPU and resident memory summed over the displayed matching rows (up to the display limit), not the whole inventory. In tree view, ancestors shown only for context are not counted and collapsed matches are.")
                     .accessibilityLabel(summary.replacingOccurrences(of: "Σ shown", with: "Total for shown processes:"))
             }

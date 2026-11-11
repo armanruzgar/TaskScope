@@ -118,9 +118,25 @@ enum QuickAutoStopRuleSaver {
             : nil
         guard let existing = existingRule else { return observedPath }
         // Keep a name-wide rule's scope unless Auto Stop requires a path.
-        return existing.executablePath == nil && action != .kill
-            ? nil
-            : observedPath ?? existing.executablePath
+        guard existing.executablePath != nil || action == .kill else { return nil }
+        // The stored path belongs to the rule's current name: a renamed rule
+        // keeping it could match nothing.
+        let keepsName = trimmedName.caseInsensitiveCompare(existing.processName) == .orderedSame
+        return observedPath ?? (keepsName ? existing.executablePath : nil)
+    }
+
+    /// Says which executable a path-bound rule covers now and which one it will
+    /// cover after the update, when the two differ. Nil when nothing changes.
+    static func scopeChangeMessage(
+        existingRule: AutoStopRule?,
+        processName: String,
+        executablePath: String?
+    ) -> String? {
+        guard let oldPath = existingRule?.executablePath else { return nil }
+        if let executablePath, AutoStopRuleValidation.pathsMatch(oldPath, executablePath) { return nil }
+        let name = processName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newScope = executablePath ?? "any process named \(name)"
+        return "This rule currently applies to \(oldPath). Updating it applies it to \(newScope) instead."
     }
 
     static func enablesDisabledRule(
@@ -167,9 +183,13 @@ enum QuickAutoStopRuleSaver {
             )) else {
                 return Outcome(error: rules.validationError ?? "The auto-stop rule could not be updated.")
             }
-            return Outcome(statusMessage: enablesRule
+            let status = enablesRule
                 ? "Enabled auto-stop rule for \(trimmedName)."
-                : "Updated \(isEnabled ? "" : "disabled ")auto-stop rule for \(trimmedName).")
+                : "Updated \(isEnabled ? "" : "disabled ")auto-stop rule for \(trimmedName)."
+            let scopeChange = scopeChangeMessage(
+                existingRule: existing, processName: trimmedName, executablePath: executablePath
+            )
+            return Outcome(statusMessage: scopeChange.map { "\(status) \($0)" } ?? status)
         }
 
         if let collision = rules.rules.first(where: {
@@ -196,6 +216,8 @@ struct QuickAutoStopRuleSheet: View {
     let existingRule: AutoStopRule?
     let onSave: (String, Int, AutoStopRule.Action) -> String?
     let onCancel: () -> Void
+    /// Rules act only on this user's processes (AutoStopRulesStore.matches).
+    let currentUID: uid_t
 
     @StateObject private var form: QuickAutoStopRuleFormState
 
@@ -204,12 +226,14 @@ struct QuickAutoStopRuleSheet: View {
         existingRule: AutoStopRule?,
         onSave: @escaping (String, Int, AutoStopRule.Action) -> String?,
         onCancel: @escaping () -> Void,
-        form: QuickAutoStopRuleFormState? = nil
+        form: QuickAutoStopRuleFormState? = nil,
+        currentUID: uid_t = getuid()
     ) {
         self.process = process
         self.existingRule = existingRule
         self.onSave = onSave
         self.onCancel = onCancel
+        self.currentUID = currentUID
         _form = StateObject(
             wrappedValue: form ?? QuickAutoStopRuleFormState(
                 processName: existingRule?.processName ?? process.name,
@@ -221,29 +245,13 @@ struct QuickAutoStopRuleSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text(existingRule == nil ? "Create Auto-Stop Rule" : "Update Auto-Stop Rule")
-                    .font(.headline)
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-            }
+            Text(existingRule == nil ? "Create Auto-Stop Rule" : "Update Auto-Stop Rule")
+                .font(.headline)
 
             Form {
                 TextField("Process name", text: $form.processName)
 
-                Stepper(
-                    value: $form.runtimeMinutes,
-                    in: 1...AutoStopRulesStore.maximumRuntimeMinutes,
-                    step: 1
-                ) {
-                    HStack {
-                        Text("Runtime minutes")
-                        Spacer()
-                        Text("\(form.runtimeMinutes)")
-                            .monospacedDigit()
-                    }
-                }
+                RuntimeMinutesControl(minutes: $form.runtimeMinutes)
 
                 Picker("Action", selection: $form.action) {
                     ForEach(AutoStopRule.Action.allCases) { action in
@@ -258,6 +266,19 @@ struct QuickAutoStopRuleSheet: View {
                     Text(executablePath ?? "Any process named \(form.processName.trimmingCharacters(in: .whitespacesAndNewlines))")
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
+                    // A refused Auto Stop without a path changes nothing; the
+                    // note below already explains that case.
+                    if !(form.action == .kill && executablePath == nil),
+                       let change = QuickAutoStopRuleSaver.scopeChangeMessage(
+                           existingRule: existingRule,
+                           processName: form.processName,
+                           executablePath: executablePath
+                       ) {
+                        Text(change)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     if QuickAutoStopRuleSaver.enablesDisabledRule(
                         existingRule: existingRule, action: form.action, executablePath: executablePath
                     ) {
@@ -274,6 +295,13 @@ struct QuickAutoStopRuleSheet: View {
             }
             .formStyle(.grouped)
 
+            if !isOwnedByCurrentUser {
+                Text(Self.otherOwnerExplanation(processName: process.name))
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let validationError = form.validationError {
                 Text(validationError)
                     .font(.caption)
@@ -287,6 +315,8 @@ struct QuickAutoStopRuleSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 Button(existingRule == nil ? "Add Rule" : "Update Rule") {
                     form.validationError = onSave(
                         form.processName,
@@ -296,11 +326,23 @@ struct QuickAutoStopRuleSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(form.processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    !isOwnedByCurrentUser
+                        || form.processName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
             }
         }
         .padding(20)
-        .frame(width: 420, height: 400)
+        .frame(width: 460, height: 440)
+    }
+
+    /// An unknown owner counts as another user's: the engine never matches it.
+    private var isOwnedByCurrentUser: Bool {
+        process.uid == currentUID
+    }
+
+    static func otherOwnerExplanation(processName: String) -> String {
+        "Auto-stop rules act only on processes owned by your account. \(processName) belongs to another user (or its owner is unknown), so a rule would never act on it."
     }
 
     private var executablePath: String? {
@@ -327,7 +369,11 @@ struct QuickWatchedPresetSheet: View {
         onCancel: @escaping () -> Void,
         form: QuickWatchedPresetFormState? = nil
     ) {
-        let names = Self.uniqueNames(from: draft.processes)
+        let mainProcess = Self.mainProcess(in: draft.processes)
+        let names = Self.uniqueNames(
+            from: mainProcess.map { main in [main] + draft.processes.filter { $0.id != main.id } }
+                ?? draft.processes
+        )
         let mainName = names.first ?? ""
 
         self.draft = draft
@@ -340,7 +386,7 @@ struct QuickWatchedPresetSheet: View {
                     mainProcessName: mainName,
                     helperNames: names.dropFirst().joined(separator: ", "),
                     appPath: Self.inferredAppPath(
-                        for: draft.processes.first,
+                        for: mainProcess ?? draft.processes.first,
                         fallbackName: mainName
                     )
                 )
@@ -349,13 +395,8 @@ struct QuickWatchedPresetSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Create Watched Preset")
-                    .font(.headline)
-                Spacer()
-                Button("Cancel", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-            }
+            Text("Create Watched Preset")
+                .font(.headline)
 
             Form {
                 TextField("Display name", text: $form.displayName)
@@ -378,6 +419,8 @@ struct QuickWatchedPresetSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
                 Button("Add Preset") {
                     guard let preset = WatchedAppsStore.validatedPresets([form.buildPreset()]).presets.first else {
                         form.validationError = "Enter a valid app preset with an absolute .app bundle path. Non-bundled tools cannot be watched as apps."
@@ -404,6 +447,26 @@ struct QuickWatchedPresetSheet: View {
         return names.joined(separator: ", ")
     }
 
+    /// The selected process that is the outermost app bundle's own executable
+    /// (`<App>.app/Contents/MacOS/<name>`) when every selected process lies in
+    /// that bundle, so a helper listed first (ps order) is not taken for the
+    /// app. Nil when no selected process qualifies.
+    nonisolated static func mainProcess(in processes: [AppProcess]) -> AppProcess? {
+        let candidates = processes.filter { process in
+            guard let path = process.executablePath else { return false }
+            let components = path.split(separator: "/")
+            guard let bundleIndex = components.firstIndex(where: {
+                      $0.count > ".app".count && $0.lowercased().hasSuffix(".app")
+                  }),
+                  components.count == bundleIndex + 4,
+                  components[bundleIndex + 1] == "Contents",
+                  components[bundleIndex + 2] == "MacOS" else { return false }
+            let bundle = "/" + components[...bundleIndex].joined(separator: "/") + "/"
+            return processes.allSatisfy { $0.executablePath?.hasPrefix(bundle) == true }
+        }
+        return candidates.min { ($0.executablePath?.count ?? 0) < ($1.executablePath?.count ?? 0) }
+    }
+
     private static func uniqueNames(from processes: [AppProcess]) -> [String] {
         var seen: Set<String> = []
         var names: [String] = []
@@ -422,7 +485,7 @@ struct QuickWatchedPresetSheet: View {
     /// The bundle is the last path *component* ending in `.app`, bounded by a
     /// separator or the end of the string. A substring match would stop at
     /// `/Users/me/my.apps/Tool` or at `Foo.application`.
-    static func inferredAppPath(for process: AppProcess?, fallbackName: String) -> String {
+    nonisolated static func inferredAppPath(for process: AppProcess?, fallbackName: String) -> String {
         guard let process else { return "" }
 
         let executablePath = process.executablePath?

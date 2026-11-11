@@ -16,23 +16,15 @@ struct SavedSelectionRecallSheet: View {
             Text(result.summary)
                 .foregroundStyle(result.matched.isEmpty ? .orange : .secondary)
 
-            if !result.matched.isEmpty {
-                GroupBox("Will select") {
-                    itemList(result.matched.map {
-                        "\($0.name) — PID \($0.pid)"
-                            + (result.legacyNameMatches.contains($0.identity) ? Self.legacyMarker : "")
-                    })
+            // Saved selections have no size limit. Past a dozen entries the
+            // lists scroll in a fixed height so the buttons stay on screen.
+            if entryCount > Self.maximumUnscrolledEntries {
+                ScrollView {
+                    entryLists
                 }
-            }
-            if !result.unmatched.isEmpty {
-                GroupBox("Not running") {
-                    itemList(result.unmatched.map { Self.savedEntryLabel($0) })
-                }
-            }
-            if !result.ambiguous.isEmpty {
-                GroupBox("Ambiguous — not selected") {
-                    itemList(result.ambiguous.map { Self.savedEntryLabel($0) })
-                }
+                .frame(height: Self.scrollingListHeight)
+            } else {
+                entryLists
             }
 
             if hasLegacyEntries {
@@ -62,6 +54,35 @@ struct SavedSelectionRecallSheet: View {
     }
 
     static let legacyMarker = " · legacy name match"
+    static let maximumUnscrolledEntries = 12
+    static let scrollingListHeight: CGFloat = 360
+
+    private var entryCount: Int {
+        result.matched.count + result.unmatched.count + result.ambiguous.count
+    }
+
+    private var entryLists: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if !result.matched.isEmpty {
+                GroupBox("Will select") {
+                    itemList(result.matched.map {
+                        "\($0.name) — PID \($0.pid)"
+                            + (result.legacyNameMatches.contains($0.identity) ? Self.legacyMarker : "")
+                    })
+                }
+            }
+            if !result.unmatched.isEmpty {
+                GroupBox("Not running") {
+                    itemList(result.unmatched.map { Self.savedEntryLabel($0) })
+                }
+            }
+            if !result.ambiguous.isEmpty {
+                GroupBox("Ambiguous — not selected") {
+                    itemList(result.ambiguous.map { Self.savedEntryLabel($0) })
+                }
+            }
+        }
+    }
 
     private static func savedEntryLabel(_ saved: SavedSelectionsStore.SavedProcess) -> String {
         saved.executableName + (saved.executablePath == nil ? legacyMarker : "")
@@ -104,9 +125,9 @@ struct RenameSavedSelectionSheet: View {
                     .foregroundStyle(.red)
             }
             HStack {
+                Spacer()
                 Button("Cancel", action: onCancel)
                     .keyboardShortcut(.cancelAction)
-                Spacer()
                 Button("Rename", action: onSave)
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)

@@ -179,6 +179,12 @@ final class SavedSelectionsStore: ObservableObject {
         !allowsPersistence
     }
 
+    /// False while the unreadable payload a reset would replace exists in no
+    /// recovery slot, so the reset would destroy its only copy.
+    var isRecoveryBackupPreserved: Bool {
+        persistence.isCurrentPayloadPreserved
+    }
+
     /// Clears a message left by an earlier attempt so a newly presented sheet
     /// does not open with an unrelated error.
     func clearValidationError() {

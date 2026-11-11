@@ -220,6 +220,17 @@ final class AutoStopRulesStore: ObservableObject {
         !allowsEventsPersistence
     }
 
+    /// False while the unreadable rule payload a reset would replace exists in
+    /// no recovery slot, so the reset would destroy its only copy.
+    var isRulesRecoveryBackupPreserved: Bool {
+        rulesPersistence.isCurrentPayloadPreserved
+    }
+
+    /// The same for the event log's payload.
+    var isEventsRecoveryBackupPreserved: Bool {
+        eventsPersistence.isCurrentPayloadPreserved
+    }
+
     /// Accepts only the rules that decoded and passed current validation, then
     /// resumes durable rule mutations.
     func resetRulesAfterCorruption() {
@@ -272,10 +283,11 @@ final class AutoStopRulesStore: ObservableObject {
     func update(_ rule: AutoStopRule) -> Bool {
         guard !rejectUnknownRule(rule) else { return false }
         guard !rejectRulesIfReadOnly() else { return false }
-        guard let index = rules.firstIndex(where: { $0.id == rule.id }),
-              let normalized = validatedForEditing(rule, replacing: rules[index]) else {
+        guard let index = rules.firstIndex(where: { $0.id == rule.id }) else {
+            validationError = "This auto-stop rule no longer exists."
             return false
         }
+        guard let normalized = validatedForEditing(rule, replacing: rules[index]) else { return false }
         guard !rules.contains(where: {
             $0.id != rule.id &&
             $0.processName.caseInsensitiveCompare(normalized.processName) == .orderedSame

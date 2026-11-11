@@ -136,6 +136,8 @@ struct SupportDiagnosticsPreviewSheet: View {
         }
         .padding(20)
         .frame(width: 600, height: 540)
+        // A read-only report: Escape closes it as Return does.
+        .onExitCommand(perform: onClose)
     }
 
     private func save() {

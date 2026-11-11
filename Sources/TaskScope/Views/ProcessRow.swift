@@ -48,7 +48,7 @@ struct ProcessRow: View {
                     // locale digit grouping.
                     Text(verbatim: String(process.pid))
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
 
                 Text(process.displayCommand)

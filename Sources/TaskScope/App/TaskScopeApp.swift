@@ -499,6 +499,11 @@ struct TaskScopeApp: App {
                     showAboutWindow()
                 }
             }
+            CommandGroup(after: .help) {
+                Button("Welcome to TaskScope") {
+                    showOnboardingWindow()
+                }
+            }
         }
 
         MenuBarExtra {
@@ -541,9 +546,12 @@ struct TaskScopeApp: App {
         .windowStyle(.hiddenTitleBar)
 
         WindowGroup("Onboarding", id: "onboarding") {
-            OnboardingView(onComplete: {
-                completeOnboarding()
-            })
+            OnboardingView(
+                hotkeyShortcut: HotkeyManager.shared.hotkeyEnabled ? HotkeyManager.shared.displayString : nil,
+                onComplete: {
+                    completeOnboarding()
+                }
+            )
         }
         .windowResizability(.contentSize)
         .windowStyle(.hiddenTitleBar)
@@ -694,6 +702,13 @@ struct TaskScopeApp: App {
     private func openOnboardingIfNeeded() {
         guard showOnboarding, !didRequestOnboarding else { return }
         didRequestOnboarding = true
+        openWindow(id: "onboarding")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// The intended way back to the introduction after Get Started.
+    private func showOnboardingWindow() {
+        appDelegate.permitWindowPresentation()
         openWindow(id: "onboarding")
         NSApp.activate(ignoringOtherApps: true)
     }

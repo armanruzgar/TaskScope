@@ -182,6 +182,18 @@ final class HotkeyManager: ObservableObject {
         save()
     }
 
+    /// False while the unreadable hotkey payload a reset would replace exists in
+    /// no recovery slot, so the reset would destroy its only copy.
+    var isRecoveryBackupPreserved: Bool {
+        guard let stored = defaults.object(forKey: defaultsKey) else { return true }
+        guard let data = try? PropertyListSerialization.data(
+            fromPropertyList: stored, format: .binary, options: 0
+        ) else { return false }
+        return PersistenceRecovery.slotHolding(
+            data, in: defaults, baseKey: "\(defaultsKey).corruptBackup"
+        ) != nil
+    }
+
     /// Replacing an unreadable primary value requires this explicit user action.
     func resetAfterCorruption() {
         guard isReadOnlyAfterCorruption else { return }

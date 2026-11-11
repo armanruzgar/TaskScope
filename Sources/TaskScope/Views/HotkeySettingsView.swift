@@ -74,7 +74,10 @@ struct HotkeySettingsView: View {
                     Text("The hotkey is disabled until you reset its settings. Reset enables the default ⌃⌥⌘T shortcut.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Button("Reset Hotkey Settings After Backup", role: .destructive) {
+                    RecoveryResetButton(
+                        subject: "Hotkey Settings",
+                        isBackupPreserved: hotkey.isRecoveryBackupPreserved
+                    ) {
                         hotkey.resetAfterCorruption()
                     }
                 }

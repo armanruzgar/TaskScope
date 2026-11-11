@@ -28,6 +28,14 @@ enum PersistenceRecovery {
         return firstFreeKey
     }
 
+    /// The recovery slot under `baseKey` that already holds exactly `data`, or
+    /// nil when no slot does.
+    static func slotHolding(_ data: Data, in userDefaults: UserDefaults, baseKey: String) -> String? {
+        (1...maximumBackupSlots)
+            .map { $0 == 1 ? baseKey : "\(baseKey).\($0)" }
+            .first { (userDefaults.object(forKey: $0) as? Data) == data }
+    }
+
     static func unreadableDataMessage(backupKey: String, isPreserved: Bool) -> String {
         isPreserved
             ? "Unreadable data was backed up as \(backupKey)."
@@ -179,6 +187,17 @@ struct RecoveringCodableStorage<Value: Codable> {
 
     var hasStoredValue: Bool {
         userDefaults.object(forKey: key) != nil
+    }
+
+    /// False when the payload at the primary key is held by no recovery slot of
+    /// this storage, so replacing it would destroy its only copy. That happens
+    /// when every slot already preserved another payload.
+    var isCurrentPayloadPreserved: Bool {
+        guard let object = userDefaults.object(forKey: key) else { return true }
+        guard let data = archivedPayload(object) else { return false }
+        return ["corruptBackup", "rejectedMigrationBackup"].contains {
+            PersistenceRecovery.slotHolding(data, in: userDefaults, baseKey: "\(key).\($0)") != nil
+        }
     }
 
     var rawData: Data? {

@@ -73,6 +73,8 @@ struct GlobalProtectCompatibilitySheet: View {
         }
         .padding(20)
         .frame(width: 600, height: 540)
+        // A read-only report: Escape closes it as Return does.
+        .onExitCommand(perform: onClose)
         .task(id: refreshGeneration) {
             let result = await checker.check(keepOffRequested: keepOffRequested)
             guard !Task.isCancelled else { return }

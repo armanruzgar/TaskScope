@@ -116,6 +116,12 @@ final class SettingsStore: ObservableObject {
         !allowsPersistence
     }
 
+    /// False while the unreadable payload a reset would replace exists in no
+    /// recovery slot, so the reset would destroy its only copy.
+    var isRecoveryBackupPreserved: Bool {
+        persistence.isCurrentPayloadPreserved
+    }
+
     /// Explicitly accepts the safe in-memory settings and resumes persistence. Until
     /// this is called, every property may be used by the running app but the unreadable
     /// primary bytes remain untouched.

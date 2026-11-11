@@ -336,8 +336,95 @@ struct TaskScopePopoverView: View {
         }
     }
 
-    private var processDetailContent: some View {
+    /// Saved-selection deletions and discards save at once and have no undo.
+    /// The menu-bar window asks outside itself; see `MenuBarConfirming`.
+    private var savedSelectionConfirmationContent: some View {
         presetConfirmationContent
+        .confirmationDialog(
+            Self.selectionDeletionTitle(confirmationState.pendingSelectionDeletion),
+            isPresented: selectionDeletionBinding,
+            presenting: confirmationState.pendingSelectionDeletion
+        ) { selection in
+            Button("Delete Selection", role: .destructive) {
+                confirmationState.pendingSelectionDeletion = nil
+                savedSelections.remove(selection)
+            }
+            Button("Cancel", role: .cancel) {
+                confirmationState.pendingSelectionDeletion = nil
+            }
+        } message: { _ in
+            Text("This cannot be undone.")
+        }
+        .confirmationDialog(
+            Self.selectionsDiscardTitle,
+            isPresented: selectionsDiscardBinding
+        ) {
+            Button("Discard and Reset", role: .destructive) {
+                confirmationState.pendingSelectionsDiscard = nil
+                savedSelections.resetAfterCorruption()
+            }
+            Button("Cancel", role: .cancel) {
+                confirmationState.pendingSelectionsDiscard = nil
+            }
+        } message: {
+            Text(Self.selectionsDiscardMessage)
+        }
+        .onChange(of: confirmationState.pendingSelectionDeletion) { _, pending in
+            guard let pending else { return }
+            let selections = savedSelections
+            confirmInMenuBar(
+                MenuBarConfirmationRequest(
+                    title: Self.selectionDeletionTitle(pending),
+                    message: "This cannot be undone.",
+                    confirmTitle: "Delete Selection"
+                ),
+                isCurrent: { $0.pendingSelectionDeletion == pending },
+                clear: { $0.pendingSelectionDeletion = nil },
+                perform: { _ = selections.remove(pending) }
+            )
+        }
+        .onChange(of: confirmationState.pendingSelectionsDiscard) { _, pending in
+            guard let pending else { return }
+            let selections = savedSelections
+            confirmInMenuBar(
+                MenuBarConfirmationRequest(
+                    title: Self.selectionsDiscardTitle,
+                    message: Self.selectionsDiscardMessage,
+                    confirmTitle: "Discard and Reset"
+                ),
+                isCurrent: { $0.pendingSelectionsDiscard == pending },
+                clear: { $0.pendingSelectionsDiscard = nil },
+                perform: { selections.resetAfterCorruption() }
+            )
+        }
+    }
+
+    static func selectionDeletionTitle(_ selection: SavedSelectionsStore.SavedSelection?) -> String {
+        "Delete the saved selection “\(selection?.name ?? "")”?"
+    }
+
+    static let selectionsDiscardTitle = "Discard the unreadable saved selections?"
+
+    static var selectionsDiscardMessage: String {
+        RecoveryResetButton.discardWarning(domain: Bundle.main.bundleIdentifier ?? "com.local.TaskScope")
+    }
+
+    private var selectionDeletionBinding: Binding<Bool> {
+        Binding(
+            get: { menuBarConfirmation == nil && confirmationState.pendingSelectionDeletion != nil },
+            set: { if !$0 { confirmationState.pendingSelectionDeletion = nil } }
+        )
+    }
+
+    private var selectionsDiscardBinding: Binding<Bool> {
+        Binding(
+            get: { menuBarConfirmation == nil && confirmationState.pendingSelectionsDiscard != nil },
+            set: { if !$0 { confirmationState.pendingSelectionsDiscard = nil } }
+        )
+    }
+
+    private var processDetailContent: some View {
+        savedSelectionConfirmationContent
         .sheet(item: $confirmationState.detailProcess) { process in
             ProcessDetailSheet(
                 process: processManager.inventorySnapshot.first(where: { $0.identity == process.identity }) ?? process,
@@ -791,9 +878,16 @@ struct TaskScopePopoverView: View {
                 Text(recoveryMessage)
                 if savedSelections.isReadOnlyAfterCorruption {
                     // Saving stays disabled until this is pressed, so without
-                    // it the user could never save a selection again.
-                    Button("Reset Saved Selections After Backup") {
-                        savedSelections.resetAfterCorruption()
+                    // it the user could never save a selection again. It
+                    // promises a backup only when one exists.
+                    if savedSelections.isRecoveryBackupPreserved {
+                        Button("Reset Saved Selections After Backup") {
+                            savedSelections.resetAfterCorruption()
+                        }
+                    } else {
+                        Button("Discard Unreadable Saved Selections and Reset…") {
+                            confirmationState.pendingSelectionsDiscard = .init()
+                        }
                     }
                 }
                 Divider()
@@ -827,8 +921,8 @@ struct TaskScopePopoverView: View {
                         }
                         .disabled(savedSelections.isReadOnlyAfterCorruption)
                         Divider()
-                        Button("Delete", role: .destructive) {
-                            savedSelections.remove(sel)
+                        Button("Delete…", role: .destructive) {
+                            confirmationState.pendingSelectionDeletion = sel
                         }
                         .disabled(savedSelections.isReadOnlyAfterCorruption)
                     }

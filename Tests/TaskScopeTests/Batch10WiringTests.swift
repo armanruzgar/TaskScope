@@ -226,7 +226,7 @@ final class Batch10WiringTests: XCTestCase {
             processManager: fixture.manager,
             selectedTab: .watchedApps
         )
-        try settingsView.inspect().find(button: "Delete").tap()
+        try settingsView.inspect().find(button: "Delete…").tap()
         XCTAssertTrue(
             fixture.stores.watchedApps.presets.contains { $0.id == WatchedAppPreset.globalProtectID },
             "Deleting the built-in preset while its Keep Off is pending would orphan its launchd overrides"
@@ -396,7 +396,7 @@ final class Batch10WiringTests: XCTestCase {
 
         let menu = try Batch10.popover(fixture).inspect()
         XCTAssertTrue(try menu.find(button: "Rename…").isDisabled())
-        XCTAssertTrue(try menu.find(button: "Delete").isDisabled())
+        XCTAssertTrue(try menu.find(button: "Delete…").isDisabled())
         XCTAssertTrue(try menu.find(button: "Save Current Selection…").isDisabled())
         XCTAssertFalse(try menu.find(button: "Preview & Recall…").isDisabled(), "Recall stays available while mutations are locked")
     }

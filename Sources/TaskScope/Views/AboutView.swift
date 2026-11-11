@@ -1,6 +1,10 @@
 import SwiftUI
 
 struct AboutView: View {
+    /// The bundle's version and build, or nil for a bare SwiftPM executable,
+    /// which embeds no Info.plist.
+    var versionInfo: (version: String, build: String)? = AboutView.bundledAppInfo
+
     var body: some View {
         VStack(spacing: 16) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -12,11 +16,11 @@ struct AboutView: View {
             Text("TaskScope")
                 .font(.title2.bold())
 
-            if let info = appInfo {
-                Text("Version \(info.version) (\(info.build))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // Selectable: bug reports ask for the exact version and build.
+            Text(versionLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
 
             Text("Native macOS menu bar utility for monitoring running processes and stopping selected tasks.")
                 .font(.caption)
@@ -30,7 +34,12 @@ struct AboutView: View {
         .frame(width: 360, height: 280)
     }
 
-    private var appInfo: (version: String, build: String)? {
+    private var versionLine: String {
+        guard let versionInfo else { return "Development build (no bundle version)" }
+        return "Version \(versionInfo.version) (\(versionInfo.build))"
+    }
+
+    private static var bundledAppInfo: (version: String, build: String)? {
         guard
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String,
             !version.isEmpty,

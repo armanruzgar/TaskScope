@@ -11,6 +11,8 @@ struct GeneralSettingsTab: View {
                     Text("Watched status interval")
                     Spacer()
                     Slider(value: $settings.refreshIntervalSeconds, in: 2...60, step: 1)
+                        .accessibilityLabel("Watched status interval")
+                        .accessibilityValue("\(Int(settings.refreshIntervalSeconds)) seconds")
                     Text("\(Int(settings.refreshIntervalSeconds))s")
                         .monospacedDigit()
                         .frame(width: 36, alignment: .trailing)
@@ -33,6 +35,8 @@ struct GeneralSettingsTab: View {
                     Text("CPU %")
                     Spacer()
                     Slider(value: $settings.cpuHighlightThreshold, in: 1...100, step: 1)
+                        .accessibilityLabel("CPU highlight threshold")
+                        .accessibilityValue("\(Int(settings.cpuHighlightThreshold)) percent")
                     Text(String(format: "%.0f%%", settings.cpuHighlightThreshold))
                         .monospacedDigit().frame(width: 44, alignment: .trailing)
                 }
@@ -44,6 +48,8 @@ struct GeneralSettingsTab: View {
                         in: SettingsStore.memoryThresholdRange,
                         step: SettingsStore.memoryThresholdStep
                     )
+                    .accessibilityLabel("Memory highlight threshold")
+                    .accessibilityValue("\(Int(settings.memHighlightThresholdMB)) megabytes")
                     Text(String(format: "%.0f", settings.memHighlightThresholdMB))
                         .monospacedDigit().frame(width: 44, alignment: .trailing)
                 }
@@ -69,7 +75,7 @@ struct GeneralSettingsTab: View {
                     Text(recoveryMessage)
                         .font(.caption)
                         .foregroundStyle(.orange)
-                    Button("Reset Settings After Backup", role: .destructive) {
+                    RecoveryResetButton(subject: "Settings", isBackupPreserved: settings.isRecoveryBackupPreserved) {
                         settings.resetAfterCorruption()
                     }
                 }

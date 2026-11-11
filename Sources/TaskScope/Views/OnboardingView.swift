@@ -3,6 +3,8 @@ import SwiftUI
 struct OnboardingView: View {
     @Environment(\.dismiss) private var dismiss
 
+    /// The global shortcut that shows the main window, or nil while it is off.
+    var hotkeyShortcut: String? = "⌃⌥⌘T"
     var onComplete: () -> Void
 
     var body: some View {
@@ -16,31 +18,45 @@ struct OnboardingView: View {
             Text("Welcome to TaskScope")
                 .font(.title2.bold())
 
-            VStack(alignment: .leading, spacing: 14) {
-                OnboardingRow(
-                    icon: "scope",
-                    title: "Watch Apps",
-                    description: "TaskScope watches apps like GlobalProtect. Notifications stay off until you explicitly enable them in Settings."
-                )
-                OnboardingRow(
-                    icon: "stop.circle",
-                    title: "Stop Processes",
-                    description: "Right-click a row to inspect it or copy its command, then use its Stop button or context menu. Force Stop is an explicit immediate kill."
-                )
-                OnboardingRow(
-                    icon: "gearshape",
-                    title: "Customize",
-                    description: "Open Settings to add your own watched apps, adjust thresholds, and configure auto-stop rules."
-                )
-                OnboardingRow(
-                    icon: "keyboard",
-                    title: "Keyboard",
-                    description: "Use ↑/↓ to navigate visible rows, Return to review Stop, Cmd+A to select visible rows, and Cmd+Shift+A to clear."
-                )
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    OnboardingRow(
+                        icon: "scope",
+                        title: "Watch Apps",
+                        description: "TaskScope watches apps like GlobalProtect. Notifications stay off until you explicitly enable them in Settings."
+                    )
+                    OnboardingRow(
+                        icon: "menubar.rectangle",
+                        title: "Menu Bar and Shortcut",
+                        description: menuBarDescription
+                    )
+                    OnboardingRow(
+                        icon: "stop.circle",
+                        title: "Stop Processes",
+                        description: "Right-click a row to inspect it or copy its command, then use its Stop button or context menu. Force Stop is an explicit immediate kill."
+                    )
+                    OnboardingRow(
+                        icon: "gearshape",
+                        title: "Customize",
+                        description: "Open Settings to add your own watched apps, adjust thresholds, and configure auto-stop rules."
+                    )
+                    OnboardingRow(
+                        icon: "lock.shield",
+                        title: "GlobalProtect Permissions",
+                        description: "Quit All and Keep GlobalProtect Off use Accessibility to press Disconnect, so macOS may ask you to allow TaskScope. Stopping or restoring the VPN service may ask for administrator approval. Settings > Health shows the Accessibility status."
+                    )
+                    OnboardingRow(
+                        icon: "keyboard",
+                        title: "Keyboard",
+                        description: "Use ↑/↓ to navigate visible rows, Return to review Stop, Cmd+A to select visible rows, and Cmd+Shift+A to clear."
+                    )
+                }
+                .padding(.horizontal, 8)
             }
-            .padding(.horizontal, 8)
 
-            Spacer()
+            Text("Show this page again with Help > Welcome to TaskScope.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Button("Get Started") {
                 onComplete()
@@ -51,7 +67,15 @@ struct OnboardingView: View {
             .keyboardShortcut(.defaultAction)
         }
         .padding(32)
-        .frame(width: 460, height: 560)
+        .frame(width: 460, height: 600)
+    }
+
+    private var menuBarDescription: String {
+        let base = "TaskScope keeps running in the menu bar after you close its window. Click its menu bar icon for a compact process list"
+        guard let hotkeyShortcut else {
+            return base + ". Turn on a global shortcut in Settings > Hotkey."
+        }
+        return base + ", or press \(hotkeyShortcut) anywhere to show the main window. Change the shortcut in Settings > Hotkey."
     }
 }
 

@@ -147,6 +147,12 @@ final class WatchedAppsStore: ObservableObject {
         !allowsPersistence
     }
 
+    /// False while the unreadable payload a reset would replace exists in no
+    /// recovery slot, so the reset would destroy its only copy.
+    var isRecoveryBackupPreserved: Bool {
+        persistence.isCurrentPayloadPreserved
+    }
+
     /// Safe recovered presets from a decoded payload may be exported for review even
     /// though persistence stays locked. A payload that could not be decoded has no
     /// trustworthy in-memory representation to export.
@@ -169,6 +175,23 @@ final class WatchedAppsStore: ObservableObject {
         }
         validationError = Self.newerBuildMessage
         return true
+    }
+
+    /// Adds the built-in GlobalProtect preset back after it was deleted. A
+    /// look-alike custom preset blocks it; the refusal names that preset and
+    /// says how to proceed.
+    @discardableResult
+    func restoreBuiltInPreset() -> Bool {
+        guard !rejectIfReadOnly() else { return false }
+        guard !presets.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) else {
+            validationError = nil
+            return true
+        }
+        if let collision = DuplicateIndex(presets, comparesResolvedPaths: true).collision(for: .globalProtect) {
+            validationError = "The built-in GlobalProtect preset cannot be restored. \(collision) Delete or change that preset first."
+            return false
+        }
+        return add(.globalProtect)
     }
 
     @discardableResult
@@ -204,8 +227,11 @@ final class WatchedAppsStore: ObservableObject {
     @discardableResult
     func update(_ preset: WatchedAppPreset) -> Bool {
         guard !rejectIfReadOnly(), !rejectIfRequiresNewerBuild(preset) else { return false }
-        guard let index = presets.firstIndex(where: { $0.id == preset.id }),
-              let normalized = validateAndNormalize(preset),
+        guard let index = presets.firstIndex(where: { $0.id == preset.id }) else {
+            validationError = "This preset no longer exists."
+            return false
+        }
+        guard let normalized = validateAndNormalize(preset),
               !isSemanticDuplicate(normalized, excluding: preset.id) else {
             return false
         }

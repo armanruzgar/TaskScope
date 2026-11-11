@@ -26,32 +26,31 @@ struct AutoStopRuleEditorSheet: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            TextField("Process name", text: $draft.processName)
-                .textFieldStyle(.roundedBorder)
+            // A Form gives each field a visible label; a bare TextField only
+            // shows its title as a placeholder, which an edit never sees.
+            Form {
+                TextField("Process name", text: $draft.processName)
 
-            TextField(
-                "Executable path (required for Auto Stop)",
-                text: Binding(
-                    get: { draft.executablePath ?? "" },
-                    set: { draft.executablePath = $0 }
+                TextField(
+                    "Executable path",
+                    text: Binding(
+                        get: { draft.executablePath ?? "" },
+                        set: { draft.executablePath = $0 }
+                    ),
+                    prompt: Text("Required for Auto Stop")
                 )
-            )
-            .textFieldStyle(.roundedBorder)
 
-            Stepper(
-                value: $draft.runtimeMinutes,
-                in: 1...AutoStopRulesStore.maximumRuntimeMinutes
-            ) {
-                Text("Runtime: \(draft.runtimeMinutes) minute\(draft.runtimeMinutes == 1 ? "" : "s")")
-            }
+                RuntimeMinutesControl(minutes: $draft.runtimeMinutes)
 
-            Picker("Action", selection: $draft.action) {
-                ForEach(AutoStopRule.Action.allCases) { action in
-                    Text(action.label).tag(action)
+                Picker("Action", selection: $draft.action) {
+                    ForEach(AutoStopRule.Action.allCases) { action in
+                        Text(action.label).tag(action)
+                    }
                 }
-            }
 
-            Toggle("Enabled", isOn: $draft.isEnabled)
+                Toggle("Enabled", isOn: $draft.isEnabled)
+            }
+            .formStyle(.grouped)
 
             if let warning = AutoStopRuleValidation.pathWarning(draft.executablePath) {
                 Text(warning).font(.caption).foregroundStyle(.orange)
@@ -75,6 +74,6 @@ struct AutoStopRuleEditorSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 380)
+        .frame(width: 460, height: 440)
     }
 }

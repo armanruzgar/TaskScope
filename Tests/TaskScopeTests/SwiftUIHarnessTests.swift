@@ -601,16 +601,19 @@ final class SwiftUIHarnessTests: XCTestCase {
         let fixture = await makeFixture(processes: [])
         defer { fixture.stores.cleanup() }
         fixture.stores.settings.keepGlobalProtectOff = true
+        let interactions = SettingsInteractionState()
         let view = SettingsView(
             settings: fixture.stores.settings,
             watchedApps: fixture.stores.watchedApps,
             autoStopRules: fixture.stores.autoStopRules,
             processManager: fixture.manager,
-            selectedTab: .watchedApps
+            selectedTab: .watchedApps,
+            interactions: interactions
         )
 
-        try view.inspect().find(button: "Delete").tap()
+        try view.inspect().find(button: "Delete…").tap()
         XCTAssertEqual(fixture.stores.watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
+        XCTAssertTrue(interactions.pendingPresetDeletions.isEmpty, "A refused deletion is not offered for confirmation")
         XCTAssertTrue(
             SettingsView.presetDeletionRefusal(for: .globalProtect, keepGlobalProtectOff: true)?
                 .contains("Turn off Keep GlobalProtect Off") == true
@@ -618,7 +621,13 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertNil(SettingsView.presetDeletionRefusal(for: .globalProtect, keepGlobalProtectOff: false))
 
         fixture.stores.settings.keepGlobalProtectOff = false
-        try view.inspect().find(button: "Delete").tap()
+        try view.inspect().find(button: "Delete…").tap()
+        // Deletion is confirmed first (audit L11-9); confirming deletes it.
+        XCTAssertEqual(interactions.pendingPresetDeletions.map(\.id), [WatchedAppPreset.globalProtectID])
+        XCTAssertEqual(fixture.stores.watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
+        let tabView = try view.inspect().tabView()
+        let dialog = try XCTUnwrap((0..<3).lazy.compactMap { try? tabView.confirmationDialog($0) }.first)
+        try dialog.actions().find(button: "Delete Preset").tap()
         XCTAssertTrue(fixture.stores.watchedApps.presets.isEmpty)
     }
     func testDeletingGlobalProtectIsRefusedWhenKeepOffSettingsAreUnreadable() async throws {
@@ -636,7 +645,7 @@ final class SwiftUIHarnessTests: XCTestCase {
             processManager: fixture.manager,
             selectedTab: .watchedApps
         )
-        try view.inspect().find(button: "Delete").tap()
+        try view.inspect().find(button: "Delete…").tap()
         XCTAssertEqual(fixture.stores.watchedApps.presets.map(\.id), [WatchedAppPreset.globalProtectID])
         XCTAssertEqual(fixture.stores.defaults.data(forKey: "settings"), corrupt)
         XCTAssertTrue(SettingsView.presetDeletionRefusal(
@@ -1441,7 +1450,9 @@ final class SwiftUIHarnessTests: XCTestCase {
         XCTAssertNil(path("Example", .silent, nameWide))
         XCTAssertEqual(path("Example", .kill, nameWide), observedPath)
         XCTAssertEqual(path("Example", .prompt, pathBound), observedPath)
-        XCTAssertEqual(path("Other", .kill, pathBound), pathBound.executablePath)
+        // A renamed path-bound rule cannot keep the old name's binary: it would
+        // match nothing (audit A13-5), so Auto Stop has no path and is refused.
+        XCTAssertNil(path("Other", .kill, pathBound))
         XCTAssertEqual(path("Example", .kill, pathBound, observed: nil), pathBound.executablePath)
         XCTAssertNil(path("Example", .kill, nameWide, observed: nil))
     }
@@ -1474,7 +1485,8 @@ final class SwiftUIHarnessTests: XCTestCase {
     }
 
     func testQuickAutoStopSheetKeepsRejectedDraftAndShowsStoreError() throws {
-        let target = process(pid: 96, parentPID: 1, name: "Rejected")
+        var target = process(pid: 96, parentPID: 1, name: "Rejected")
+        target.uid = getuid()
         var saveAttempts = 0
         let form = QuickAutoStopRuleFormState(
             processName: target.name,
@@ -1618,7 +1630,7 @@ final class SwiftUIHarnessTests: XCTestCase {
 
         let contents: [SettingsView.Tab: [String]] = [
             .general: ["General", "Auto-refresh process list", "Notify on watched process changes"],
-            .watchedApps: ["Watched Apps", "GlobalProtect", "Add", "Export", "Import", "Built-in",
+            .watchedApps: ["Watched Apps", "GlobalProtect", "Add…", "Export…", "Import…", "Built-in",
                            "Built-in lifecycle: 1 protected system daemon", SettingsView.builtInDaemonGuidance],
             .autoStop: ["Auto-Stop"], .hotkey: ["Hotkey", "Global Hotkey"],
             .health: ["Health", "Permission and Installation Health", "Refresh Health"],
@@ -1636,7 +1648,7 @@ final class SwiftUIHarnessTests: XCTestCase {
                                  "Missing Settings UI content: \(expectedText)")
             }
             if tab == .watchedApps {
-                XCTAssertThrowsError(try selectedView.inspect().find(button: "Edit"),
+                XCTAssertThrowsError(try selectedView.inspect().find(button: "Edit…"),
                                      "The built-in GlobalProtect identity must not expose an editor.")
             }
         }

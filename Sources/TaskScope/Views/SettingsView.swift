@@ -22,13 +22,14 @@ struct SettingsView: View {
     @State private var presetDeletionError: String?
     @State private var refusedPresetDeletion: WatchedAppPreset?
     @State private var isGlobalProtectKeepOffPending = false
-    @State private var exportError: String?
-    @State private var importError: String?
-    @State private var presetValidationError: String?
+    /// Import, export and preset-editor feedback. Injectable so tests can drive
+    /// the handlers without a file panel.
+    @StateObject var presetActions = PresetSettingsActions()
+    /// Pending confirmations and per-row errors. Injectable for the same reason.
+    @StateObject var interactions = SettingsInteractionState()
     @State private var showImporter = false
     @State private var showPresetEditor = false
     @State private var showImportPreview = false
-    @State private var importPreview: WatchedAppsStore.ImportPreview?
     @State private var dryRunPreset: WatchedAppPreset?
 
     var body: some View {
@@ -46,9 +47,10 @@ struct SettingsView: View {
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
             switch result {
             case .success(let url):
-                importPresets(from: url)
+                presetActions.loadImport(from: url, into: watchedApps)
+                showImportPreview = presetActions.preview != nil
             case .failure(let err):
-                importError = err.localizedDescription
+                presetActions.importError = err.localizedDescription
             }
         }
         .sheet(item: $editingRule, onDismiss: {
@@ -60,6 +62,7 @@ struct SettingsView: View {
                 validationError: editingRuleError,
                 onSave: { updated in
                     if autoStopRules.update(updated) {
+                        interactions.ruleRowErrors[updated.id] = nil
                         editingRule = nil
                         editingRuleError = nil
                     } else {
@@ -82,6 +85,44 @@ struct SettingsView: View {
         }
         .sheet(item: $dryRunPreset) { preset in
             lifecycleDryRunSheet(for: preset)
+        }
+        // Deletions save at once and have no undo, so each one is confirmed.
+        .confirmationDialog(
+            presetDeletionTitle,
+            isPresented: isPresenting($interactions.pendingPresetDeletions)
+        ) {
+            Button(interactions.pendingPresetDeletions.count > 1 ? "Delete Presets" : "Delete Preset", role: .destructive) {
+                let presets = interactions.pendingPresetDeletions
+                interactions.pendingPresetDeletions = []
+                presets.forEach(deletePreset)
+            }
+            Button("Cancel", role: .cancel) { interactions.pendingPresetDeletions = [] }
+        } message: {
+            Text(presetDeletionMessage)
+        }
+        .confirmationDialog(
+            ruleDeletionTitle,
+            isPresented: isPresenting($interactions.pendingRuleDeletions)
+        ) {
+            Button(interactions.pendingRuleDeletions.count > 1 ? "Delete Rules" : "Delete Rule", role: .destructive) {
+                let rules = interactions.pendingRuleDeletions
+                interactions.pendingRuleDeletions = []
+                rules.forEach(deleteRule)
+            }
+            Button("Cancel", role: .cancel) { interactions.pendingRuleDeletions = [] }
+        } message: {
+            Text("This cannot be undone.")
+        }
+        .confirmationDialog(
+            "Clear all \(autoStopRules.events.count) auto-stop event\(autoStopRules.events.count == 1 ? "" : "s")?",
+            isPresented: $interactions.isConfirmingClearEvents
+        ) {
+            Button("Clear Events", role: .destructive) {
+                autoStopRules.clearEvents()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The event log cannot be restored after it is cleared.")
         }
         .onReceive(processManager.$isGlobalProtectKeepOffPending) { pending in
             isGlobalProtectKeepOffPending = pending
@@ -109,18 +150,20 @@ struct SettingsView: View {
                 Button {
                     prepareNewPreset()
                 } label: {
-                    Label("Add", systemImage: "plus")
+                    Label("Add…", systemImage: "plus")
                 }
                 .disabled(watchedApps.isReadOnlyAfterCorruption)
                 Button {
-                    exportPresets()
+                    presetActions.export(from: watchedApps)
                 } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                    Label("Export…", systemImage: "square.and.arrow.up")
                 }
                 Button {
+                    // A new attempt replaces the last import's outcome.
+                    presetActions.beginImport()
                     showImporter = true
                 } label: {
-                    Label("Import", systemImage: "square.and.arrow.down")
+                    Label("Import…", systemImage: "square.and.arrow.down")
                 }
                 .disabled(watchedApps.isReadOnlyAfterCorruption)
             }
@@ -131,14 +174,33 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal)
 
+            if !watchedApps.isReadOnlyAfterCorruption,
+               !watchedApps.presets.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) {
+                Button("Restore Built-in GlobalProtect Preset") {
+                    refusedPresetDeletion = nil
+                    if watchedApps.restoreBuiltInPreset() {
+                        presetDeletionError = nil
+                        presetActions.clearImportFeedback()
+                    } else {
+                        presetDeletionError = watchedApps.validationError
+                            ?? "The built-in GlobalProtect preset could not be restored."
+                    }
+                }
+                .help("Adds back the built-in preset with its Keep GlobalProtect Off and Disconnect controls.")
+                .padding(.horizontal)
+            }
+
             if let issue = watchedApps.persistenceIssue {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(issue)
                         .font(.caption)
                         .foregroundStyle(.orange)
-                    Button("Reset Presets After Backup", role: .destructive) {
+                    RecoveryResetButton(
+                        subject: "Presets",
+                        isBackupPreserved: watchedApps.isRecoveryBackupPreserved
+                    ) {
                         watchedApps.resetAfterCorruption()
-                        exportError = nil
+                        presetActions.exportError = nil
                     }
                 }
                 .padding(.horizontal)
@@ -161,22 +223,28 @@ struct SettingsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            // Read-only: stays available in recovery mode,
+                            // where it is the way to review a recovered preset.
                             Button("Dry Run") {
                                 dryRunPreset = preset
                             }
                             .buttonStyle(.borderless)
+                            .accessibilityLabel("Dry run \(preset.displayName)")
                             if preset.id != WatchedAppPreset.globalProtectID {
-                                Button("Edit") {
+                                Button("Edit…") {
                                     prepareToEdit(preset)
                                 }
                                 .buttonStyle(.borderless)
+                                .accessibilityLabel("Edit preset \(preset.displayName)")
+                                .disabled(watchedApps.isReadOnlyAfterCorruption)
                             }
-                            Button("Delete", role: .destructive) {
-                                deletePreset(preset)
+                            Button("Delete…", role: .destructive) {
+                                requestPresetDeletion([preset])
                             }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("Delete preset \(preset.displayName)")
-                            Toggle("", isOn: Binding(
+                            .disabled(watchedApps.isReadOnlyAfterCorruption)
+                            Toggle("Notify", isOn: Binding(
                                 get: { preset.notificationsEnabled },
                                 set: { newValue in
                                     var updated = preset
@@ -190,18 +258,22 @@ struct SettingsView: View {
                                     }
                                 }
                             ))
-                            .labelsHidden()
                             .help("Notifications for this preset")
                             .accessibilityLabel("Notifications for \(preset.displayName)")
+                            .disabled(watchedApps.isReadOnlyAfterCorruption)
                         }
                         if preset.hasUnknownFields {
                             Text("Requires a newer build — read-only, and its actions are unavailable")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Text("Main: \(preset.mainProcessName)").font(.caption).foregroundStyle(.secondary)
-                        Text("Helpers: \(preset.helperProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
-                        Text("Protected: \(preset.protectedProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
-                        Text("App path: \(preset.appPath)").font(.caption).foregroundStyle(.tertiary)
+                        if !preset.helperProcessNames.isEmpty {
+                            Text("Helpers: \(preset.helperProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !preset.protectedProcessNames.isEmpty {
+                            Text("Protected: \(preset.protectedProcessNames.joined(separator: ", "))").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("App path: \(preset.appPath)").font(.caption).foregroundStyle(.secondary)
                         if preset.id == WatchedAppPreset.globalProtectID {
                             GlobalProtectCompatibilityButton(
                                 keepOffRequested: settings.isReadOnlyAfterCorruption
@@ -214,10 +286,13 @@ struct SettingsView: View {
                         }
                     }
                     .padding(.vertical, 4)
+                    .moveDisabled(watchedApps.isReadOnlyAfterCorruption)
+                    .deleteDisabled(watchedApps.isReadOnlyAfterCorruption)
                     .contextMenu {
-                        Button("Delete Preset", role: .destructive) {
-                            deletePreset(preset)
+                        Button("Delete Preset…", role: .destructive) {
+                            requestPresetDeletion([preset])
                         }
+                        .disabled(watchedApps.isReadOnlyAfterCorruption)
                     }
                     .disabled(preset.hasUnknownFields)
                 }
@@ -225,17 +300,21 @@ struct SettingsView: View {
                     watchedApps.move(from: from, to: to)
                 }
                 .onDelete { offsets in
-                    for preset in offsets.compactMap({ watchedApps.presets.indices.contains($0) ? watchedApps.presets[$0] : nil }) {
-                        deletePreset(preset)
-                    }
+                    requestPresetDeletion(offsets.compactMap {
+                        watchedApps.presets.indices.contains($0) ? watchedApps.presets[$0] : nil
+                    })
                 }
             }
-            .disabled(watchedApps.isReadOnlyAfterCorruption)
+            // Recovery mode disables only the mutating controls above, so the
+            // read-only Dry Run and Compatibility Self-Check keep working.
 
-            if let err = importError {
+            if let summary = presetActions.importSummary {
+                Text(summary).font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+            }
+            if let err = presetActions.importError {
                 Text(err).font(.caption).foregroundStyle(.red).padding(.horizontal)
             }
-            if let err = exportError {
+            if let err = presetActions.exportError {
                 Text(err).font(.caption).foregroundStyle(.red).padding(.horizontal)
             }
         }
@@ -271,16 +350,16 @@ struct SettingsView: View {
 
             // Only this editor's own errors: the store's shared error may belong
             // to an earlier import or deletion and would greet a blank form.
-            if let error = presetValidationError {
+            if let error = presetActions.editorError {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
 
             HStack {
+                Spacer()
                 Button("Cancel") { showPresetEditor = false }
                     .keyboardShortcut(.cancelAction)
-                Spacer()
                 Button(presetForm.editingPresetID == nil ? "Add Preset" : "Save Changes") {
                     savePresetEditor()
                 }
@@ -294,8 +373,8 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private var importPreviewSheet: some View {
-        if let preview = importPreview {
+    var importPreviewSheet: some View {
+        if let preview = presetActions.preview {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Preset Import Preview")
                     .font(.title2)
@@ -354,19 +433,15 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
 
                 HStack {
+                    Spacer()
                     Button("Cancel") {
                         showImportPreview = false
-                        importPreview = nil
+                        presetActions.preview = nil
                     }
                     .keyboardShortcut(.cancelAction)
-                    Spacer()
                     Button("Import \(preview.importableCount) Preset\(preview.importableCount == 1 ? "" : "s")") {
-                        let result = watchedApps.importPresets(preview.items.map(\.preset))
-                        importError = result.rejectedCount == 0
-                            ? nil
-                            : "\(result.rejectedCount) preset\(result.rejectedCount == 1 ? " was" : "s were") rejected by validation."
+                        presetActions.commitImport(into: watchedApps)
                         showImportPreview = false
-                        importPreview = nil
                     }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
@@ -381,7 +456,7 @@ struct SettingsView: View {
         }
     }
 
-    private func lifecycleDryRunSheet(for preset: WatchedAppPreset) -> some View {
+    func lifecycleDryRunSheet(for preset: WatchedAppPreset) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Lifecycle Dry Run")
                 .font(.title2)
@@ -397,12 +472,14 @@ struct SettingsView: View {
             }
             HStack {
                 Spacer()
-                Button("Close") { dryRunPreset = nil }
+                Button("Done") { dryRunPreset = nil }
                     .keyboardShortcut(.defaultAction)
             }
         }
         .padding(20)
         .frame(width: Self.dryRunSheetSize.width, height: Self.dryRunSheetSize.height)
+        // A read-only report: Escape closes it as Return does.
+        .onExitCommand { dryRunPreset = nil }
     }
 
     static func lifecycleDryRunOperations(for preset: WatchedAppPreset) -> [String] {
@@ -459,24 +536,34 @@ struct SettingsView: View {
                     .padding(.horizontal)
             }
             if autoStopRules.isRulesReadOnlyAfterRecovery {
-                Button("Reset Auto-Stop Rules After Backup", role: .destructive) {
+                RecoveryResetButton(
+                    subject: "Auto-Stop Rules",
+                    isBackupPreserved: autoStopRules.isRulesRecoveryBackupPreserved
+                ) {
                     autoStopRules.resetRulesAfterCorruption()
                 }
                 .padding(.horizontal)
             }
             if autoStopRules.isEventsReadOnlyAfterRecovery {
-                Button("Reset Auto-Stop Events After Backup", role: .destructive) {
+                RecoveryResetButton(
+                    subject: "Auto-Stop Events",
+                    isBackupPreserved: autoStopRules.isEventsRecoveryBackupPreserved
+                ) {
                     autoStopRules.resetEventsAfterCorruption()
                 }
                 .padding(.horizontal)
             }
             List {
                 Section("Rules") {
+                    if autoStopRules.rules.isEmpty {
+                        Text(Self.noRulesMessage)
+                            .foregroundStyle(.secondary)
+                    }
                     ForEach(autoStopRules.rules) { rule in
                         HStack {
                             Toggle("", isOn: Binding(
                                 get: { rule.isEnabled },
-                                set: { autoStopRules.setEnabled($0, for: rule) }
+                                set: { setRule(rule, enabled: $0) }
                             ))
                             .labelsHidden()
                             .accessibilityLabel("Enable rule \(rule.processName)")
@@ -495,26 +582,48 @@ struct SettingsView: View {
                                 if let path = rule.executablePath {
                                     Text(path)
                                         .font(.caption2)
-                                        .foregroundStyle(.tertiary)
+                                        .foregroundStyle(.secondary)
                                         .lineLimit(1)
+                                }
+                                // A refused change is reported on its own row,
+                                // not under the Add Rule form.
+                                if let error = interactions.ruleRowErrors[rule.id] {
+                                    Text(error)
+                                        .font(.caption)
+                                        .foregroundStyle(.red)
                                 }
                             }
                             Spacer()
-                            Button("Edit") {
+                            Button("Edit…") {
                                 editingRule = rule
                             }
                             .buttonStyle(.borderless)
+                            .accessibilityLabel("Edit rule \(rule.processName)")
+                            Button("Duplicate") {
+                                duplicateRule(rule)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Duplicate rule \(rule.processName)")
+                            Button("Delete…", role: .destructive) {
+                                interactions.pendingRuleDeletions = [rule]
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Delete rule \(rule.processName)")
                         }
                         .padding(.vertical, 4)
                         .contextMenu {
-                            Button("Edit") { editingRule = rule }
-                            Button("Duplicate") { autoStopRules.duplicate(rule) }
+                            Button("Edit…") { editingRule = rule }
+                            Button("Duplicate") { duplicateRule(rule) }
                             Divider()
-                            Button("Delete", role: .destructive) { autoStopRules.remove(rule) }
+                            Button("Delete…", role: .destructive) { interactions.pendingRuleDeletions = [rule] }
                         }
                         .disabled(rule.hasUnknownFields)
                     }
-                    .onDelete { autoStopRules.remove(at: $0) }
+                    .onDelete { offsets in
+                        interactions.pendingRuleDeletions = offsets.compactMap {
+                            autoStopRules.rules.indices.contains($0) ? autoStopRules.rules[$0] : nil
+                        }
+                    }
                 }
                 .disabled(autoStopRules.isRulesReadOnlyAfterRecovery)
 
@@ -523,7 +632,8 @@ struct SettingsView: View {
                         Text("No auto-stop events yet.")
                             .foregroundStyle(.secondary)
                     } else {
-                        ForEach(autoStopRules.events.prefix(50)) { event in
+                        // Every retained event (at most 200); the list is lazy.
+                        ForEach(autoStopRules.events) { event in
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack {
                                     Text(event.processName).fontWeight(.medium)
@@ -531,12 +641,12 @@ struct SettingsView: View {
                                     Text(event.outcome.label)
                                         .foregroundStyle(event.outcome == .failed ? .red : .secondary)
                                 }
-                                Text("\(event.timestamp.formatted(date: .abbreviated, time: .standard)) · PID \(event.pid)")
+                                Text(Self.eventTimeAndPID(event))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text(event.detail)
                                     .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 2)
                         }
@@ -546,8 +656,9 @@ struct SettingsView: View {
                         Text("Recent Events")
                         Spacer()
                         if !autoStopRules.events.isEmpty {
-                            Button("Clear") { autoStopRules.clearEvents() }
+                            Button("Clear…") { interactions.isConfirmingClearEvents = true }
                                 .buttonStyle(.borderless)
+                                .accessibilityLabel("Clear all auto-stop events")
                                 .disabled(autoStopRules.isEventsReadOnlyAfterRecovery)
                         }
                     }
@@ -566,17 +677,7 @@ struct SettingsView: View {
                 if let warning = AutoStopRuleValidation.pathWarning(newRuleExecutablePath) {
                     Text(warning).font(.caption).foregroundStyle(.orange)
                 }
-                Stepper(
-                    value: $newRuleMinutes,
-                    in: 1...AutoStopRulesStore.maximumRuntimeMinutes,
-                    step: 1
-                ) {
-                    HStack {
-                        Text("Runtime minutes")
-                        Spacer()
-                        Text("\(newRuleMinutes)").monospacedDigit()
-                    }
-                }
+                RuntimeMinutesControl(minutes: $newRuleMinutes)
                 Picker("Action", selection: $newRuleAction) {
                     ForEach(AutoStopRule.Action.allCases) { Text($0.label).tag($0) }
                 }
@@ -590,12 +691,19 @@ struct SettingsView: View {
                         newRuleName = ""
                         newRuleExecutablePath = ""
                         newRuleMinutes = 5
+                        interactions.addRuleError = nil
+                    } else {
+                        interactions.addRuleError = autoStopRules.validationError
+                            ?? "The auto-stop rule could not be added."
                     }
+                    autoStopRules.clearValidationError()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(newRuleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                if let error = autoStopRules.validationError {
+                // Only this form's own error: the store's shared message may
+                // belong to another window's rule sheet.
+                if let error = interactions.addRuleError {
                     Text(error)
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -649,6 +757,89 @@ struct SettingsView: View {
         }
     }
 
+    /// A plain string: interpolating the PID into a Text literal would format
+    /// it as a grouped number ("PID 48,165").
+    static func eventTimeAndPID(_ event: AutoStopEvent) -> String {
+        "\(event.timestamp.formatted(date: .abbreviated, time: .standard)) · PID \(String(event.pid))"
+    }
+
+    static let noRulesMessage = "No rules yet. Add one below, or right-click a process and choose Create Auto-Stop Rule…"
+
+    /// Shows a refusal at once; otherwise asks for confirmation before deleting.
+    private func requestPresetDeletion(_ presets: [WatchedAppPreset]) {
+        guard !presets.isEmpty else { return }
+        if let refused = presets.first(where: {
+            Self.presetDeletionRefusal(
+                for: $0,
+                keepGlobalProtectOff: settings.keepGlobalProtectOff,
+                isSettingsReadOnlyAfterCorruption: settings.isReadOnlyAfterCorruption,
+                isGlobalProtectKeepOffPending: processManager.isGlobalProtectKeepOffPending
+            ) != nil
+        }) {
+            refusedPresetDeletion = refused
+            presetDeletionError = nil
+            return
+        }
+        refusedPresetDeletion = nil
+        interactions.pendingPresetDeletions = presets
+    }
+
+    private var presetDeletionTitle: String {
+        let presets = interactions.pendingPresetDeletions
+        if presets.count > 1 { return "Delete \(presets.count) presets?" }
+        return "Delete “\(presets.first?.displayName ?? "")”?"
+    }
+
+    private var presetDeletionMessage: String {
+        if interactions.pendingPresetDeletions.contains(where: { $0.id == WatchedAppPreset.globalProtectID }) {
+            return "Deleting the built-in GlobalProtect preset also removes its Keep GlobalProtect Off and Disconnect controls. Restore Built-in GlobalProtect Preset adds it back."
+        }
+        return "This cannot be undone."
+    }
+
+    private var ruleDeletionTitle: String {
+        let rules = interactions.pendingRuleDeletions
+        if rules.count > 1 { return "Delete \(rules.count) auto-stop rules?" }
+        return "Delete the auto-stop rule for “\(rules.first?.processName ?? "")”?"
+    }
+
+    private func isPresenting<Item>(_ pending: Binding<[Item]>) -> Binding<Bool> {
+        Binding(
+            get: { !pending.wrappedValue.isEmpty },
+            set: { if !$0 { pending.wrappedValue = [] } }
+        )
+    }
+
+    private func setRule(_ rule: AutoStopRule, enabled: Bool) {
+        reportRuleResult(
+            autoStopRules.setEnabled(enabled, for: rule),
+            for: rule,
+            fallback: "The rule could not be updated."
+        )
+    }
+
+    private func duplicateRule(_ rule: AutoStopRule) {
+        reportRuleResult(
+            autoStopRules.duplicate(rule),
+            for: rule,
+            fallback: "The rule could not be duplicated."
+        )
+    }
+
+    private func deleteRule(_ rule: AutoStopRule) {
+        reportRuleResult(
+            autoStopRules.remove(rule),
+            for: rule,
+            fallback: "The rule could not be deleted."
+        )
+    }
+
+    /// Moves the store's shared reason for a refused row action onto that row.
+    private func reportRuleResult(_ succeeded: Bool, for rule: AutoStopRule, fallback: String) {
+        interactions.ruleRowErrors[rule.id] = succeeded ? nil : (autoStopRules.validationError ?? fallback)
+        autoStopRules.clearValidationError()
+    }
+
     private func deletePreset(_ preset: WatchedAppPreset) {
         if Self.presetDeletionRefusal(
             for: preset,
@@ -663,6 +854,7 @@ struct SettingsView: View {
         refusedPresetDeletion = nil
         if watchedApps.remove(preset) {
             presetDeletionError = nil
+            presetActions.clearImportFeedback()
         } else {
             presetDeletionError = watchedApps.validationError
         }
@@ -670,82 +862,19 @@ struct SettingsView: View {
 
     private func prepareNewPreset() {
         presetForm.prepareForNewPreset()
-        presetValidationError = nil
+        presetActions.editorError = nil
         showPresetEditor = true
     }
 
     private func prepareToEdit(_ preset: WatchedAppPreset) {
         presetForm.prepareForEditing(preset)
-        presetValidationError = nil
+        presetActions.editorError = nil
         showPresetEditor = true
     }
 
     private func savePresetEditor() {
-        let existing = presetForm.editingPresetID.flatMap { id in
-            watchedApps.presets.first(where: { $0.id == id })
-        }
-        let preset: WatchedAppPreset
-        switch presetForm.makePreset(existing: existing) {
-        case .success(let value):
-            preset = value
-        case .failure(let error):
-            presetValidationError = error.message
-            return
-        }
-        let saved = existing == nil ? watchedApps.add(preset) : watchedApps.update(preset)
-        guard saved else {
-            presetValidationError = watchedApps.validationError
-            return
-        }
-        presetValidationError = nil
-        showPresetEditor = false
-    }
-
-    private func exportPresets() {
-        // In corrupt mode the in-memory list is the empty array we fell back to, not
-        // the user's presets. Exporting it would write a valid-looking but empty
-        // backup — precisely when the banner is telling them to back up first.
-        guard watchedApps.canExportPresets else {
-            exportError = "Preset data is unreadable, so there is nothing to export. "
-                + "Recover the backup noted above before resetting."
-            return
-        }
-        guard let data = try? watchedApps.encodedPresetArchive() else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "TaskScope-presets.json"
-        if panel.runModal() == .OK, let url = panel.url {
-            do {
-                try data.write(to: url, options: .atomic)
-                exportError = nil
-            } catch {
-                exportError = error.localizedDescription
-            }
-        }
-    }
-
-    private func importPresets(from url: URL) {
-        let hasSecurityScope = url.startAccessingSecurityScopedResource()
-        defer {
-            if hasSecurityScope {
-                url.stopAccessingSecurityScopedResource()
-            }
-        }
-        do {
-            let resourceValues = try url.resourceValues(forKeys: [.fileSizeKey])
-            guard (resourceValues.fileSize ?? 0) <= WatchedAppsStore.maximumPresetArchiveBytes else {
-                importError = "Preset archives must be 1 MB or smaller."
-                return
-            }
-            let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-            let decoded = try WatchedAppsStore.decodePresetArchive(data)
-            importPreview = watchedApps.previewImport(decoded)
-            importError = nil
-            showImportPreview = true
-        } catch {
-            importError = (error as? LocalizedError)?.errorDescription
-                ?? "Could not read presets from file."
-            return
+        if presetActions.saveEditor(presetForm, into: watchedApps) {
+            showPresetEditor = false
         }
     }
 }

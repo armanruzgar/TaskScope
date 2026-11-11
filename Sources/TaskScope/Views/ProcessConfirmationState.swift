@@ -178,6 +178,15 @@ final class ProcessConfirmationState: ObservableObject {
     @Published var quickPresetDraft: QuickWatchedPresetDraft?
     @Published var quickAutoStopProcess: AppProcess?
     @Published var detailProcess: AppProcess?
+    /// A saved selection waiting for Delete to be confirmed (it has no undo).
+    @Published var pendingSelectionDeletion: SavedSelectionsStore.SavedSelection?
+    /// A reset of unreadable saved selections that no recovery slot holds,
+    /// waiting for the discard to be confirmed.
+    @Published var pendingSelectionsDiscard: SelectionsDiscardRequest?
+
+    struct SelectionsDiscardRequest: Equatable {
+        let id = UUID()
+    }
 
     @Published private(set) var pendingTermination: PendingTermination?
     @Published private(set) var pendingBatchTermination: PendingBatchTermination?
