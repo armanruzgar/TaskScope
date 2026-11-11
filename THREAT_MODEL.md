@@ -149,6 +149,26 @@ Required invariants:
   one shared window;
 - require current-user ownership and an executable directory for every scoped
   termination; there is no name-only termination entry point;
+- send Pause (`SIGSTOP`), Resume (`SIGCONT`), and Send Signal (`SIGHUP`,
+  `SIGINT`, `SIGUSR1`, `SIGUSR2`) to one PID at a time, through the same
+  path as Stop: the captured identity (PID, start time, and executable) is
+  checked against a fresh inventory, nothing is sent to a PID whose identity
+  changed, and no `await` comes between the last check and `kill(2)`. These
+  signals reach only the current user's processes, never TaskScope, launchd or
+  the kernel, GlobalProtect, a process whose executable could not be read, or a
+  macOS system component (under `/System` except `/System/Applications`, or
+  under `/usr/libexec`, `/usr/sbin`, `/sbin`, or `/Library/Apple`): a
+  stopped login-session component such as the Dock, loginwindow, or the
+  preferences daemon could leave the session unresponsive. Pause and every
+  Send Signal action need confirmation; Resume does not, since it only lets a
+  stopped process run;
+- collect Stop With Children targets from the last validated inventory into
+  the same review and batch path as Stop Selected, which lists every target
+  and checks each identity again before its `SIGTERM`; it never signals a
+  process group;
+- run a preset Restart (custom presets only) as Quit App and Helpers, then
+  Open, in one admitted action with one confirmation and one report; Open
+  runs only after the quit completed;
 - bind queued prompts and batch reports to immutable captured targets. Prompt
   alerts show the PID and use a new presentation identity when the queue head
   changes; actions from a retired alert cannot claim the replacement prompt.

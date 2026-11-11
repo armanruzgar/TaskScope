@@ -71,6 +71,9 @@ struct PresetsSectionView: View {
                             }
                         },
                         onStopWithoutDisconnect: stopRecoveryAction(for: snapshot.preset),
+                        onRestart: snapshot.preset.isBuiltInGlobalProtect ? nil : {
+                            requestPresetAction(.restart, id: snapshot.preset.id)
+                        },
                         isMutationActive: processManager.isMutationActive
                     )
                     .environment(\.watchedStatusAvailability, processManager.watchedStatusAvailability.forPresets(

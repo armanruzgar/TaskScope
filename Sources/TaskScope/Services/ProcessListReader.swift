@@ -98,8 +98,10 @@ enum ProcessListReader {
             return .failure(.cancelled)
         }
         let validatedStartTimeMap: [Int32: String]
+        let tableEntries: [Int32: KernelProcessEntry]
         switch processTable() {
         case .entries(let table):
+            tableEntries = table
             validatedStartTimeMap = validatedStartTimes(from: table)
         case .failed(let code):
             return .failure(.commandFailed("The process table could not be read (\(String(cString: strerror(code))))."))
@@ -133,6 +135,7 @@ enum ProcessListReader {
         // draws.
         for index in parsed.indices {
             parsed[index].isZombie = false
+            parsed[index].isStopped = tableEntries[parsed[index].pid]?.isStopped
             parsed[index].ownerName = parsed[index].uid.flatMap(ownerName)
         }
 

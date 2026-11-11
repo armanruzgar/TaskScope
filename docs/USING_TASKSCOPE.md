@@ -96,9 +96,32 @@ start of each row; with a selection, the red button with the count offers
 stop button at the end of a row opens the Stop review for that process.
 Right-click a row for **Create Auto-Stop Rule…**, **Watch This Process…**,
 **Save Selection as Preset…** (when rows are selected), **Stop…**, **Force
-Stop…**, **Show Detail**, **Copy Executable Path**, **Copy Command Line**,
+Stop…**, **Stop With Children…**, **Pause…** or **Resume**, **Send Signal**,
+**Show Detail**, **Copy Executable Path**, **Copy Command Line**,
 **Copy Visible Rows**, **Export Visible Rows…**, and **Open in Activity
 Monitor**; VoiceOver offers the same actions in its Actions rotor.
+
+**Stop With Children…** stops the process and every process it started, as the
+last process list showed them, through the same review as Stop Selected: every
+target is listed, and each is checked again (PID, start time, and executable)
+right before it is sent `SIGTERM`, one process at a time; a process group is
+never signalled. It is unavailable for a process with no child processes and
+for TaskScope itself.
+
+**Pause…** sends `SIGSTOP` after a confirmation, and **Resume** sends
+`SIGCONT` without one. A paused process stays alive but does not run, and a
+paused app does not respond; its row shows a **Paused** badge (the process
+state `T`) until it runs again. **Send Signal** offers **Hangup (SIGHUP)…**,
+**Interrupt (SIGINT)…**, **User 1 (SIGUSR1)…**, and **User 2 (SIGUSR2)…**,
+each confirmed like Stop; what a program does with them is up to the program
+(many services reload their configuration on `SIGHUP`, and most programs quit
+on `SIGINT`, as on Control-C). Pause, Resume, and Send Signal reach only your
+own processes, and never TaskScope, launchd, GlobalProtect, or a macOS system
+component (a program under `/System` other than an app in
+`/System/Applications`, or under `/usr/libexec`, `/usr/sbin`, `/sbin`, or
+`/Library/Apple`): pausing one of those could leave your session
+unresponsive. Each signal goes to one process only after TaskScope checks
+again that the PID still has the row's identity.
 
 **Copy Visible Rows** copies the rows on screen, with the columns on screen and a
 title row, as tab-separated text that a spreadsheet pastes as a table.
@@ -228,10 +251,13 @@ About TaskScope and the welcome window each open as a single window.
 | --- | --- |
 | Stop, Stop Selected… | One `SIGTERM` per target; TaskScope then waits up to three seconds for the target to exit |
 | Force Stop, Force Stop Selected… | One `SIGKILL` per target |
+| Stop With Children… | One `SIGTERM` per target, as Stop Selected |
+| Pause…, Resume | One `SIGSTOP`, or one `SIGCONT` |
+| Send Signal | One `SIGHUP`, `SIGINT`, `SIGUSR1`, or `SIGUSR2` |
 | Prompt rule, after **Stop Now** | One `SIGTERM`; never repeated. If the process still runs one 10-second engine cycle later, the event history records a failure that suggests Force Stop |
 | Auto Stop rule | `SIGTERM`; if the process still runs at least one 10-second engine cycle later, one more `SIGTERM`. It never sends `SIGKILL`: the event then says to use Force Stop |
 | Log Only rule | None |
-| Preset Quit App, Quit Helpers, Quit App and Helpers, and Keep Off; GlobalProtect Quit All | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
+| Preset Quit App, Quit Helpers, Quit App and Helpers, Restart, and Keep Off; GlobalProtect Quit All | `SIGTERM`, then `SIGKILL` to eligible processes still running after up to three seconds. The main process goes first; all helpers then share one three-second window, so an action waits about six seconds at most |
 
 Preset stops also unload the preset's user launch agents before signalling
 (Quit Helpers keeps an agent that runs the main process); see
@@ -313,11 +339,14 @@ main process, even when a helper is listed first. Each preset in Settings >
 Watched Apps has a **Notify** switch and **Dry Run** and **Delete…** buttons,
 and custom presets also have **Edit…**; deleting asks for confirmation.
 **Export…** and **Import…** handle the whole list. Each preset card in the
-**Presets** section has **Open**, **Quit App**, **Quit Helpers**, and **Quit
-App and Helpers**, and a **Keep <name> Off** switch (see [Keep Off](#keep-off)).
+**Presets** section has **Open**, **Quit App**, **Quit Helpers**, **Quit
+App and Helpers**, and **Restart**, and a **Keep <name> Off** switch (see
+[Keep Off](#keep-off)). **Restart…** quits the app and its helpers as Quit App
+and Helpers does, then opens it again, under one confirmation and with one
+report of both steps; when the quit does not complete, nothing is opened.
 On the built-in GlobalProtect preset, marked with a shield, the
 fourth button is **Quit All**, a different and stronger action that disconnects
-the VPN and turns on **Keep GlobalProtect Off**; read
+the VPN and turns on **Keep GlobalProtect Off**, and there is no Restart; read
 [GlobalProtect](GLOBALPROTECT.md). Quit
 Helpers is unavailable for a preset with no helpers and no user launch agents,
 and card actions are unavailable while another action runs. Confirmations name

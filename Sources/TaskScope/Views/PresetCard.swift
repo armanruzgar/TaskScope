@@ -11,6 +11,9 @@ struct PresetCard: View {
     var isKeepOffControlEnabled: Bool
     var onKeepOffChanged: @MainActor @Sendable (Bool) -> Void
     var onStopWithoutDisconnect: (() -> Void)? = nil
+    /// Quit App and Helpers, then Open. Nil for the built-in GlobalProtect
+    /// preset, whose full stop is Quit All.
+    var onRestart: (() -> Void)? = nil
     /// True while an action holds the operation gate. A second action would
     /// only wait silently behind it, so the card's actions are unavailable.
     var isMutationActive = false
@@ -41,6 +44,10 @@ struct PresetCard: View {
                     .help(hasHelperScope ? "Quit Helpers" : "This preset has no helper processes or user launch agents to stop.")
                 PresetActionButton(title: snapshot.preset.isBuiltInGlobalProtect ? "Quit All…" : "Quit App and Helpers…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
                     .disabled(snapshot.preset.isBuiltInGlobalProtect && !isKeepOffControlEnabled)
+                if let onRestart, !snapshot.preset.isBuiltInGlobalProtect {
+                    PresetActionButton(title: "Restart…", systemImage: "arrow.clockwise", role: .destructive, action: onRestart)
+                        .help("Quit the app and its helpers, then open it again")
+                }
             }
             .disabled(isMutationActive)
 

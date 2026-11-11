@@ -29,9 +29,12 @@ before installing.
 
 - Search, filter, sort, and explore processes in flat or tree views, and copy
   or export the visible rows as text or CSV.
-- Review captured targets before Stop or Force Stop, with identity checks before signals.
-- Create watched-app presets with Open, Quit App, Quit Helpers, and Quit App
-  and Helpers actions; the built-in GlobalProtect preset has Quit All instead.
+- Review captured targets before Stop, Force Stop, or Stop With Children, with
+  identity checks before signals; pause and resume your own processes, or send
+  them Hangup, Interrupt, User 1, or User 2.
+- Create watched-app presets with Open, Quit App, Quit Helpers, Quit App and
+  Helpers, and Restart actions, and keep any preset's app from running with
+  Keep Off; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
 - Create Prompt, Auto Stop, or Log Only rules on run time, sustained CPU or memory use, and command-line text, and review their event history.
 - View the last minutes of total CPU and resident memory, with latest and peak
@@ -181,8 +184,11 @@ processes**); a truncated list shows **Showing N of M**. Command-A adds the
 displayed matching rows to the selection. Review every captured target before
 Stop (`SIGTERM`, with which an app can quit without asking to save changes) or
 explicit Force Stop (`SIGKILL`); Stop waits up to three seconds for the process
-to exit and never escalates. TaskScope never signals itself, and rechecks
-process identity immediately before signaling. Unavailable readings remain
+to exit and never escalates. **Stop With Children…** reviews and stops a process
+and its descendants one PID at a time, and **Pause…**, **Resume**, and **Send
+Signal** reach only your own processes outside macOS system components; a
+paused row shows a **Paused** badge. TaskScope never signals itself or a process
+group, and rechecks process identity immediately before signaling. Unavailable readings remain
 unavailable. See [process actions](docs/USING_TASKSCOPE.md#process-actions-and-observations)
 and the [list's keyboard keys](docs/USING_TASKSCOPE.md#keyboard).
 

@@ -583,6 +583,27 @@ final class ProcessManager: ObservableObject {
         await stop(preset, scope: .all)
     }
 
+    /// Quit App and Helpers, then Open, under one confirmation and one report.
+    /// Custom presets only; see `PresetLifecycleCoordinator.restart`.
+    @discardableResult
+    func restart(_ preset: WatchedAppPreset) async -> TaskScopeCommandResult {
+        if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
+        var commandResult = TaskScopeCommandResult(status: .failed, message: "Restart did not complete.")
+        let ran = await runAction(kind: .mutation, announcesTransitions: false) {
+            // Admitted, a restart finishes both steps even if its caller leaves,
+            // so it never ends with the app quit and not reopened by accident.
+            commandResult = await Task { @MainActor in
+                let outcome = await lifecycleCoordinator.restart(preset, host: self)
+                publish(outcome)
+                return outcome.result
+            }.value
+        }
+        if !ran {
+            return TaskScopeCommandResult(status: .rejected, message: "Restart of \(preset.displayName) was cancelled.")
+        }
+        return commandResult
+    }
+
     private func stop(_ preset: WatchedAppPreset, scope: PresetStopScope) async -> TaskScopeCommandResult {
         if let refusal = lifecycleCoordinator.newerBuildRefusal(for: preset, host: self) { return refusal }
         var commandResult = PresetStopResult.failed(scope.incompleteMessage, reason: .incomplete).commandResult
@@ -636,52 +657,22 @@ final class ProcessManager: ObservableObject {
 
         var result: ProcessActionResult = .rejected
         await runAction(kind: .mutation) {
-            let verificationResult = await verificationInventory.load(fetchExtendedStats: false)
-            // An unreadable process list says nothing about this target. Treating it
-            // as an identity change both lied to the user and wiped the whole
-            // selection by reconciling against an empty inventory.
-            if Task.isCancelled || verificationResult == .failure(.cancelled) {
+            switch await verifyTarget(process) {
+            case .cancelled:
                 message = "Stop for \(process.name) was cancelled."
                 return
-            }
-            guard case .success(let currentProcesses) = verificationResult else {
-                if case .failure(let error) = verificationResult {
-                    recordInventoryFailure(error)
-                }
+            case .unreadable:
                 message = "Could not verify \(process.name); nothing was stopped."
                 result = .rejected
                 return
-            }
-            recordInventorySuccess()
-            guard currentProcesses.contains(where: { !$0.hasExited && $0.identity == process.identity }) else {
-                let identityChanged = currentProcesses.contains { $0.pid == process.pid && !$0.hasExited }
+            case .changed(let identityChanged):
                 message = identityChanged
                     ? "\(process.name)'s identity changed; nothing was stopped."
                     : "\(process.name) is no longer running."
                 result = identityChanged ? .identityChanged : .stale
-                apply(snapshots(from: currentProcesses))
-                if hasLoadedProcessList {
-                    // Verification reads no Net/Disk figures, so keep the last
-                    // observed ones for every row whose identity is unchanged.
-                    let previous = Dictionary(
-                        fullProcessInventory.map { ($0.identity, $0) },
-                        uniquingKeysWith: { first, _ in first }
-                    )
-                    fullProcessInventory = currentProcesses.map { process in
-                        var row = process
-                        if let old = previous[row.identity] {
-                            row.netInKB = old.netInKB
-                            row.netOutKB = old.netOutKB
-                            row.diskReadBytes = old.diskReadBytes
-                            row.diskWriteBytes = old.diskWriteBytes
-                        }
-                        return row
-                    }
-                    publishDisplayProcesses()
-                } else {
-                    reconcileSelection(with: currentProcesses)
-                }
                 return
+            case .verified:
+                break
             }
 
             // Auto-stop rules can be disabled or deleted while this mutation is
@@ -733,6 +724,114 @@ final class ProcessManager: ObservableObject {
             await refreshAfterMutation()
         }
         return result
+    }
+
+    /// Pause, Resume and Send Signal: one signal to one process, through the
+    /// same path as Stop. The captured identity is checked against a fresh
+    /// inventory first; nothing is sent to a PID whose identity changed, and
+    /// never to a process group. Only the user's own ordinary processes are
+    /// eligible (`ProcessSignalEligibility`).
+    @discardableResult
+    func sendSignal(_ action: ProcessSignalAction, to process: AppProcess) async -> ProcessSignalOutcome {
+        if let refusal = ProcessSignalEligibility.refusal(for: process, currentPID: currentPID, currentUID: getuid()) {
+            message = "\(action.name) is not available for \(process.name). \(refusal)"
+            return .refused
+        }
+        var outcome: ProcessSignalOutcome = .rejected
+        await runAction(kind: .mutation) {
+            switch await verifyTarget(process) {
+            case .cancelled:
+                message = "\(action.name) for \(process.name) was cancelled."
+                return
+            case .unreadable:
+                message = "Could not verify \(process.name); nothing was sent."
+                return
+            case .changed(let identityChanged):
+                message = identityChanged
+                    ? "\(process.name)'s identity changed; nothing was sent."
+                    : "\(process.name) is no longer running."
+                outcome = identityChanged ? .identityChanged : .notRunning
+                return
+            case .verified:
+                break
+            }
+            // No await may come between this check and kill(2).
+            guard !Task.isCancelled else {
+                message = "\(action.name) for \(process.name) was cancelled."
+                return
+            }
+            let delivery = processSignaler.deliver(action.signal, to: process.pid)
+            await settleAfterProcessChange()
+            switch delivery {
+            case .rejected(let code):
+                let reason = code == EPERM ? "" : " (\(String(cString: strerror(code))))"
+                message = "Could not send \(action.signalName) to \(process.name). The system refused the signal\(reason)."
+                outcome = .refused
+            case .noSuchProcess:
+                message = "\(process.name) had already exited; nothing was sent."
+                outcome = .notRunning
+            case .delivered:
+                message = action.deliveredMessage(for: process)
+                outcome = .delivered
+            }
+            await refreshAfterMutation()
+        }
+        return outcome
+    }
+
+    private enum TargetVerification {
+        case verified
+        case cancelled
+        case unreadable
+        /// The target is gone or another process now has its PID. The fresh
+        /// inventory has been published.
+        case changed(identityChanged: Bool)
+    }
+
+    /// Checks a single-process action's captured identity against a fresh,
+    /// uncached inventory read.
+    private func verifyTarget(_ process: AppProcess) async -> TargetVerification {
+        let verificationResult = await verificationInventory.load(fetchExtendedStats: false)
+        // An unreadable process list says nothing about this target. Treating it
+        // as an identity change both lied to the user and wiped the whole
+        // selection by reconciling against an empty inventory.
+        if Task.isCancelled || verificationResult == .failure(.cancelled) {
+            return .cancelled
+        }
+        guard case .success(let currentProcesses) = verificationResult else {
+            if case .failure(let error) = verificationResult {
+                recordInventoryFailure(error)
+            }
+            return .unreadable
+        }
+        recordInventorySuccess()
+        guard currentProcesses.contains(where: { !$0.hasExited && $0.identity == process.identity }) else {
+            let identityChanged = currentProcesses.contains { $0.pid == process.pid && !$0.hasExited }
+            apply(snapshots(from: currentProcesses))
+            if hasLoadedProcessList {
+                // Verification reads no Net/Disk figures, so keep the last
+                // observed ones for every row whose identity is unchanged.
+                let previous = Dictionary(
+                    fullProcessInventory.map { ($0.identity, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                fullProcessInventory = currentProcesses.map { process in
+                    var row = process
+                    if let old = previous[row.identity] {
+                        row.netInKB = old.netInKB
+                        row.netOutKB = old.netOutKB
+                        row.diskReadBytes = old.diskReadBytes
+                        row.diskWriteBytes = old.diskWriteBytes
+                    }
+                    return row
+                }
+                publishDisplayProcesses()
+            } else {
+                reconcileSelection(with: currentProcesses)
+            }
+            return .changed(identityChanged: identityChanged)
+        }
+        return .verified
     }
 
     /// The row's command line for Copy Command Line, read only if the PID still

@@ -45,6 +45,9 @@ final class ProcessConfirmationState: ObservableObject {
         let mode: TerminationMode
         /// Targets that are selected but not on screen when the request was made.
         var hiddenCount: Int = 0
+        /// Stop With Children: the process whose children were collected. The
+        /// first target is that process; the rest are its descendants.
+        var familyParentName: String? = nil
 
         struct Row: Equatable, Identifiable {
             var id: Int { index }
@@ -55,11 +58,17 @@ final class ProcessConfirmationState: ObservableObject {
         }
 
         var title: String {
-            mode == .force ? "Force Stop Selected Processes?" : "Stop Selected Processes?"
+            if let familyParentName {
+                return "Stop \(familyParentName) and Its Child Processes?"
+            }
+            return mode == .force ? "Force Stop Selected Processes?" : "Stop Selected Processes?"
         }
 
         var confirmTitle: String {
-            mode == .force ? "Force Stop Selected" : "Stop Selected"
+            if familyParentName != nil {
+                return "Stop \(targets.count) Processes"
+            }
+            return mode == .force ? "Force Stop Selected" : "Stop Selected"
         }
 
         /// One row per captured target, in capture order, named by the same rule
@@ -79,6 +88,10 @@ final class ProcessConfirmationState: ObservableObject {
             let action = mode == .force ? "Force stop" : "Stop"
             let noun = targets.count == 1 ? "process" : "processes"
             var text = "\(action) \(targets.count) selected \(noun)."
+            if let familyParentName {
+                let children = targets.count - 1
+                text = "\(action) \(familyParentName) and its \(children) child \(children == 1 ? "process" : "processes"), one at a time. Each is checked again before it is signalled; no process group is signalled."
+            }
             if hiddenCount > 0 {
                 text += hiddenCount == 1
                     ? " 1 of these is not currently shown."
@@ -127,6 +140,7 @@ final class ProcessConfirmationState: ObservableObject {
         case quitAll = "Quit App and Helpers"
         case keepOff = "Keep GlobalProtect Off"
         case stopServices = "Stop Services Anyway"
+        case restart = "Restart"
     }
 
     struct PendingPresetAction: Equatable {
@@ -157,6 +171,7 @@ final class ProcessConfirmationState: ObservableObject {
                     : "Quit \(name) and Its Helpers?"
             case .keepOff: return "Keep \(name) Off?"
             case .stopServices: return "Stop \(name) Services Anyway?"
+            case .restart: return "Restart \(name)?"
             }
         }
     }
@@ -209,10 +224,38 @@ final class ProcessConfirmationState: ObservableObject {
         pendingTermination = nil
     }
 
-    func requestBatch(_ targets: [ProcessIdentity], mode: TerminationMode = .normal, hiddenCount: Int = 0) {
+    func requestBatch(
+        _ targets: [ProcessIdentity],
+        mode: TerminationMode = .normal,
+        hiddenCount: Int = 0,
+        familyParentName: String? = nil
+    ) {
         pendingBatchTermination = targets.isEmpty
             ? nil
-            : PendingBatchTermination(targets: targets, mode: mode, hiddenCount: hiddenCount)
+            : PendingBatchTermination(
+                targets: targets, mode: mode, hiddenCount: hiddenCount, familyParentName: familyParentName
+            )
+    }
+
+    /// Pause or a Send Signal action, waiting for confirmation. Resume needs none.
+    struct PendingSignal: Equatable, Identifiable {
+        let id = UUID()
+        let process: AppProcess
+        let action: ProcessSignalAction
+
+        var title: String { action.confirmationTitle }
+        var confirmTitle: String { action.confirmTitle(for: process) }
+        var message: String { action.confirmationMessage(for: process) }
+    }
+
+    @Published private(set) var pendingSignal: PendingSignal?
+
+    func requestSignal(_ action: ProcessSignalAction, for process: AppProcess) {
+        pendingSignal = PendingSignal(process: process, action: action)
+    }
+
+    func clearSignal() {
+        pendingSignal = nil
     }
 
     func clearBatch() {

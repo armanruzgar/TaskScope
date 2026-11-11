@@ -693,6 +693,54 @@ final class PresetLifecycleCoordinator: ObservableObject {
         return outcome(of: exit, run: run, presetID: preset.id, action: scope.diagnosticAction, backgroundEnforcement: false)
     }
 
+    // MARK: - Restart
+
+    /// Quit App and Helpers, then Open, as one action with one report. Offered
+    /// for custom presets only: the built-in GlobalProtect preset's full stop is
+    /// Quit All, whose disconnect and privileged steps a restart would repeat.
+    func restart(_ preset: WatchedAppPreset, host: some PresetLifecycleHost) async -> PresetLifecycleOutcome {
+        let name = preset.displayName
+        guard !preset.isBuiltInGlobalProtect else {
+            let message = "Restart is not offered for the built-in GlobalProtect preset. Use Quit All, then Open."
+            return PresetLifecycleOutcome(result: TaskScopeCommandResult(status: .rejected, message: message), message: message)
+        }
+        let stopped = await stop(preset, scope: .all, host: host)
+        guard stopped.result.status == .completed else {
+            // The quit's own outcome, report and diagnostic; nothing is opened.
+            var outcome = stopped
+            if stopped.result.status == .failed {
+                let message = "Could not restart \(name): \(stopped.result.message)"
+                outcome.result = TaskScopeCommandResult(status: .failed, message: message)
+                outcome.message = message
+            }
+            return outcome
+        }
+        host.showProgress("Opening \(name) again…")
+        var opened = await open(preset, host: host)
+        // One report for the whole restart: the relaunch jobs the quit unloaded
+        // and the services Open restored.
+        let jobs = Self.reportJobs(stopped.report) + Self.reportJobs(opened.report)
+        opened.report = .replace(jobs.isEmpty ? nil : LifecycleReport(title: "\(name) Restart", jobs: jobs))
+        switch opened.result.status {
+        case .completed:
+            let message = "Restarted \(name)."
+            opened.result = TaskScopeCommandResult(status: .completed, message: message)
+            opened.message = message
+        case .failed:
+            let message = "\(name) quit, but could not be opened again: \(opened.result.message)"
+            opened.result = TaskScopeCommandResult(status: .failed, message: message)
+            opened.message = message
+        case .rejected:
+            break
+        }
+        return opened
+    }
+
+    private static func reportJobs(_ change: PresetLifecycleOutcome.ReportChange) -> [LifecycleJobResult] {
+        if case .replace(let report?) = change { return report.jobs }
+        return []
+    }
+
     // MARK: - The single exit
 
     /// Turns how an action ended into what ProcessManager publishes: the

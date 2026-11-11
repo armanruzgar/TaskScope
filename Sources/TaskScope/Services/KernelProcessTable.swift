@@ -14,6 +14,9 @@ struct KernelProcessEntry: Equatable, Sendable {
     /// `p_stat == SZOMB`: the process has exited and only awaits its parent's
     /// `waitpid`.
     var isZombie: Bool
+    /// `p_stat == SSTOP`: stopped by a signal (`ps` state `T`), for example
+    /// after SIGSTOP, until SIGCONT.
+    var isStopped: Bool
     /// `p_comm`: the kernel's name for the process, at most 16 bytes.
     var command: String
 
@@ -24,6 +27,7 @@ struct KernelProcessEntry: Equatable, Sendable {
         startSeconds: Int,
         startMicroseconds: Int = 0,
         isZombie: Bool = false,
+        isStopped: Bool = false,
         command: String = ""
     ) {
         self.pid = pid
@@ -32,6 +36,7 @@ struct KernelProcessEntry: Equatable, Sendable {
         self.startSeconds = startSeconds
         self.startMicroseconds = startMicroseconds
         self.isZombie = isZombie
+        self.isStopped = isStopped
         self.command = command
     }
 
@@ -43,6 +48,7 @@ struct KernelProcessEntry: Equatable, Sendable {
             startSeconds: Int(info.kp_proc.p_starttime.tv_sec),
             startMicroseconds: Int(info.kp_proc.p_starttime.tv_usec),
             isZombie: info.kp_proc.p_stat == UInt8(SZOMB),
+            isStopped: info.kp_proc.p_stat == UInt8(SSTOP),
             command: withUnsafeBytes(of: info.kp_proc.p_comm) { bytes in
                 String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
             }

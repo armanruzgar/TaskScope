@@ -245,6 +245,21 @@ struct TaskScopePopoverView: View {
         } message: { pending in
             Text(pending.message)
         }
+        .confirmationDialog(
+            confirmationState.pendingSignal?.title ?? "Send Signal?",
+            isPresented: signalConfirmationBinding,
+            presenting: confirmationState.pendingSignal
+        ) { pending in
+            Button(pending.confirmTitle, role: .destructive) {
+                confirmationState.clearSignal()
+                sendSignal(pending.action, to: pending.process)
+            }
+            Button("Cancel", role: .cancel) {
+                confirmationState.clearSignal()
+            }
+        } message: { pending in
+            Text(pending.message)
+        }
         // Every captured target is listed, including selected rows that are not
         // on screen; see `BatchStopReviewSheet`.
         .sheet(item: batchReviewBinding) { pending in
@@ -297,6 +312,15 @@ struct TaskScopePopoverView: View {
                 perform: { stopProcess(pending) }
             )
         }
+        .onChange(of: confirmationState.pendingSignal) { _, pending in
+            guard let pending else { return }
+            confirmInMenuBar(
+                MenuBarConfirmationRequest(title: pending.title, message: pending.message, confirmTitle: pending.confirmTitle),
+                isCurrent: { $0.pendingSignal == pending },
+                clear: { $0.clearSignal() },
+                perform: { sendSignal(pending.action, to: pending.process) }
+            )
+        }
         .onChange(of: confirmationState.pendingBatchTermination) { _, pending in
             guard let pending else { return }
             confirmInMenuBar(
@@ -346,6 +370,43 @@ struct TaskScopePopoverView: View {
         confirmationState.run { await manager.terminate(process, forceKill: forceKill) }
     }
 
+    private func sendSignal(_ action: ProcessSignalAction, to process: AppProcess) {
+        let manager = processManager
+        confirmationState.run { _ = await manager.sendSignal(action, to: process) }
+    }
+
+    /// Pause and the Send Signal actions ask first, like Stop; Resume does not.
+    func requestSignal(_ action: ProcessSignalAction, for process: AppProcess) {
+        if action.requiresConfirmation {
+            confirmationState.requestSignal(action, for: process)
+        } else {
+            sendSignal(action, to: process)
+        }
+    }
+
+    /// Stop With Children: the process and its descendants from the last
+    /// validated inventory, in the batch review that lists every target. The
+    /// batch stop checks each one again before it signals it.
+    func requestStopWithChildren(_ process: AppProcess) {
+        guard !processManager.isCurrentProcess(process) else { return }
+        let children = ProcessFamily.descendants(
+            of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID
+        )
+        guard !children.isEmpty else { return }
+        let family = [process] + children
+        let visible = Set(keyboardNavigationProcesses.map(\.identity))
+        confirmationState.requestBatch(
+            family.map(\.identity),
+            mode: .normal,
+            hiddenCount: family.filter { !visible.contains($0.identity) }.count,
+            familyParentName: process.name
+        )
+    }
+
+    private var currentProcessPID: Int32 {
+        ProcessInfo.processInfo.processIdentifier
+    }
+
     private func stopSelection(_ pending: ProcessConfirmationState.PendingBatchTermination) {
         let targets = pending.targets
         let forceKill = pending.mode == .force
@@ -383,6 +444,8 @@ struct TaskScopePopoverView: View {
                 if let failureID {
                     _ = await manager.stopGlobalProtectAfterFailedDisconnect(failureID: failureID)
                 }
+            case .restart:
+                _ = await manager.restart(preset)
             }
             // The vendor UI or authorization dialog may have taken
             // focus. Bring the completed result back to the user.
@@ -1326,6 +1389,13 @@ struct TaskScopePopoverView: View {
         )
     }
 
+    private var signalConfirmationBinding: Binding<Bool> {
+        Binding(
+            get: { menuBarConfirmation == nil && confirmationState.pendingSignal != nil },
+            set: { if !$0 { confirmationState.clearSignal() } }
+        )
+    }
+
     private var terminationConfirmationBinding: Binding<Bool> {
         Binding(
             get: { menuBarConfirmation == nil && confirmationState.pendingTermination != nil },
@@ -1545,6 +1615,13 @@ struct TaskScopePopoverView: View {
             confirmationState.requestTermination(process, mode: .force)
         }
         .disabled(processManager.isCurrentProcess(process))
+        let hasChildren = !processManager.isCurrentProcess(process) && !ProcessFamily.descendants(
+            of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID
+        ).isEmpty
+        Button("Stop With Children…") { requestStopWithChildren(process) }
+            .disabled(!hasChildren)
+            .help(hasChildren ? "Stop this process and every process it started" : "This process has no child processes.")
+        signalMenuItems(for: process)
         Divider()
         Button("Show Detail") {
             showDetail(for: process)
@@ -1585,6 +1662,20 @@ struct TaskScopePopoverView: View {
             Button("Force Stop…") {
                 confirmationState.requestTermination(process, mode: .force)
             }
+            if !ProcessFamily.descendants(of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID).isEmpty {
+                Button("Stop With Children…") { requestStopWithChildren(process) }
+            }
+            if signalRefusal(for: process) == nil {
+                if process.isStopped != true {
+                    Button(ProcessSignalAction.pause.menuTitle) { requestSignal(.pause, for: process) }
+                }
+                if process.isStopped != false {
+                    Button(ProcessSignalAction.resume.menuTitle) { requestSignal(.resume, for: process) }
+                }
+                ForEach(ProcessSignalAction.sendSignalMenu, id: \.self) { action in
+                    Button("Send \(action.menuTitle)") { requestSignal(action, for: process) }
+                }
+            }
         }
         Button("Show Detail") {
             showDetail(for: process)
@@ -1604,6 +1695,35 @@ struct TaskScopePopoverView: View {
         Button("Open in Activity Monitor") {
             openInActivityMonitor(identity: process.identity)
         }
+    }
+
+    private func signalRefusal(for process: AppProcess) -> String? {
+        ProcessSignalEligibility.refusal(for: process, currentPID: currentProcessPID, currentUID: getuid())
+    }
+
+    /// Pause or Resume (whichever the process's state calls for; both when
+    /// its state was not read) and the Send Signal submenu. Unavailable items
+    /// say why.
+    @ViewBuilder
+    private func signalMenuItems(for process: AppProcess) -> some View {
+        let refusal = signalRefusal(for: process)
+        if process.isStopped != true {
+            Button(ProcessSignalAction.pause.menuTitle) { requestSignal(.pause, for: process) }
+                .disabled(refusal != nil)
+                .help(refusal ?? "Stop the process from running until you resume it")
+        }
+        if process.isStopped != false {
+            Button(ProcessSignalAction.resume.menuTitle) { requestSignal(.resume, for: process) }
+                .disabled(refusal != nil)
+                .help(refusal ?? "Let a paused process run again")
+        }
+        Menu("Send Signal") {
+            ForEach(ProcessSignalAction.sendSignalMenu, id: \.self) { action in
+                Button(action.menuTitle) { requestSignal(action, for: process) }
+            }
+        }
+        .disabled(refusal != nil)
+        .help(refusal ?? "Send Hangup, Interrupt, User 1 or User 2")
     }
 
     func showDetail(for process: AppProcess) {
@@ -1704,6 +1824,8 @@ struct TaskScopePopoverView: View {
             return globalProtectStopMessage
         case .keepOff:
             return customKeepOffMessage(for: preset)
+        case .restart:
+            return restartMessage(for: preset)
         case .quitAll where preset.isBuiltInGlobalProtect:
             return globalProtectStopMessage
         case .quitApp:
@@ -1745,6 +1867,20 @@ struct TaskScopePopoverView: View {
         sentences.append(
             "While Keep Off is on, background enforcement stops matching processes whenever they appear. Turning Keep Off off, or Open, allows \(preset.displayName) to run again."
         )
+        sentences.append(PresetStopScope.forceStopDisclosure)
+        return sentences.joined(separator: " ")
+    }
+
+    /// Restart of a custom preset: Quit App and Helpers, then Open.
+    static func restartMessage(for preset: WatchedAppPreset) -> String {
+        let agents = PresetStopScope.closeAgentLabels(for: preset)
+        var sentences = [
+            "TaskScope will quit \(preset.displayName) and its helpers (\(preset.killableNames.joined(separator: ", "))), as Quit App and Helpers does, then open it again."
+        ]
+        if !agents.isEmpty {
+            sentences.append("It unloads the user launch agents (\(agents.joined(separator: ", "))) first; Open loads them again.")
+        }
+        sentences.append("If the quit does not complete, nothing is opened. One report shows both steps.")
         sentences.append(PresetStopScope.forceStopDisclosure)
         return sentences.joined(separator: " ")
     }

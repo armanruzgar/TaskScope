@@ -43,6 +43,10 @@ struct AppProcess: Identifiable, Equatable, Sendable {
     /// its parent's `waitpid`) when the inventory was read; nil when that state
     /// was not read.
     var isZombie: Bool?
+    /// Whether the kernel reported the process as stopped by a signal (`ps`
+    /// state `T`, for example after Pause) when the inventory was read; nil
+    /// when that state was not read. Not part of the identity.
+    var isStopped: Bool?
     var elapsedTime: String
     var startTime: String
     /// Runtime rules require this for live rows: `elapsedTime` is wall-clock

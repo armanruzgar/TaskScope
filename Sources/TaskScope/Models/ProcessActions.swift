@@ -91,3 +91,174 @@ enum ProcessOperationState: Equatable {
     case queued
     case coalesced
 }
+
+/// A signal the user can send to one process from its context menu, besides
+/// Stop and Force Stop. Each goes through the same revalidated single-PID path
+/// as Stop: never to a process group, never to a PID whose identity changed.
+enum ProcessSignalAction: String, CaseIterable, Sendable {
+    case pause, resume, hangup, interrupt, user1, user2
+
+    /// The Send Signal submenu, in menu order.
+    static let sendSignalMenu: [ProcessSignalAction] = [.hangup, .interrupt, .user1, .user2]
+
+    var signal: Int32 {
+        switch self {
+        case .pause: SIGSTOP
+        case .resume: SIGCONT
+        case .hangup: SIGHUP
+        case .interrupt: SIGINT
+        case .user1: SIGUSR1
+        case .user2: SIGUSR2
+        }
+    }
+
+    var signalName: String {
+        switch self {
+        case .pause: "SIGSTOP"
+        case .resume: "SIGCONT"
+        case .hangup: "SIGHUP"
+        case .interrupt: "SIGINT"
+        case .user1: "SIGUSR1"
+        case .user2: "SIGUSR2"
+        }
+    }
+
+    /// The action's name, as in "Pause is not available for …".
+    var name: String {
+        switch self {
+        case .pause: "Pause"
+        case .resume: "Resume"
+        case .hangup: "Hangup"
+        case .interrupt: "Interrupt"
+        case .user1: "User 1"
+        case .user2: "User 2"
+        }
+    }
+
+    /// The menu item. Every action but Resume asks first, like Stop.
+    var menuTitle: String {
+        switch self {
+        case .pause: "Pause…"
+        case .resume: "Resume"
+        default: "\(name) (\(signalName))…"
+        }
+    }
+
+    var requiresConfirmation: Bool {
+        self != .resume
+    }
+
+    var confirmationTitle: String {
+        self == .pause ? "Pause Process?" : "Send \(name) Signal?"
+    }
+
+    func confirmTitle(for process: AppProcess) -> String {
+        self == .pause ? "Pause \(process.name)" : "Send \(signalName) to \(process.name)"
+    }
+
+    func confirmationMessage(for process: AppProcess) -> String {
+        let pid = String(process.pid)
+        switch self {
+        case .pause:
+            return "Send SIGSTOP to PID \(pid). The process stops running until you choose Resume; a paused app does not respond and its windows may not redraw."
+        case .resume:
+            return "Send SIGCONT to PID \(pid)."
+        case .hangup:
+            return "Send SIGHUP to PID \(pid). Many services reload their configuration; other programs quit."
+        case .interrupt:
+            return "Send SIGINT to PID \(pid), as Control-C does in Terminal. Most programs quit."
+        case .user1, .user2:
+            return "Send \(signalName) to PID \(pid). Its meaning depends on the program; a program that does not handle it quits."
+        }
+    }
+
+    /// The status line after a delivered signal.
+    func deliveredMessage(for process: AppProcess) -> String {
+        switch self {
+        case .pause: "\(process.name) is paused. Choose Resume to let it run again."
+        case .resume: "\(process.name) resumed."
+        default: "Sent \(signalName) to \(process.name)."
+        }
+    }
+}
+
+/// What came of a signal sent with `ProcessManager.sendSignal`.
+enum ProcessSignalOutcome: Equatable, Sendable {
+    case delivered
+    /// The captured PID is gone or exited; nothing was sent.
+    case notRunning
+    /// The PID now belongs to a different process; nothing was sent.
+    case identityChanged
+    /// Nothing was sent for a reason that may clear on its own, such as an
+    /// unreadable process list or a cancelled request.
+    case rejected
+    /// Nothing was sent and retrying cannot change that.
+    case refused
+}
+
+/// Which processes Pause, Resume and Send Signal may reach. Stopping a process
+/// ends it; pausing one keeps it alive but frozen, which for a part of the
+/// login session (the Dock, loginwindow, the preferences daemon) can leave the
+/// whole session unresponsive. So these signals reach only the user's own
+/// processes that are not TaskScope, launchd or the kernel, GlobalProtect, or a
+/// macOS system component.
+enum ProcessSignalEligibility {
+    /// Executables in these folders are macOS system components.
+    static let systemComponentPrefixes = ["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"]
+    /// Apple's user-facing apps, which pause like any other app.
+    static let systemAppPrefix = "/System/Applications/"
+    static let globalProtectBundle = "/Applications/GlobalProtect.app/"
+    static let globalProtectNames: Set<String> = ["GlobalProtect", "PanGPA", "PanGPS"]
+
+    /// Why the signal actions are unavailable for `process`, or nil.
+    static func refusal(for process: AppProcess, currentPID: Int32, currentUID: uid_t) -> String? {
+        if process.pid == currentPID {
+            return "TaskScope does not pause or signal itself."
+        }
+        if !ProcessSignalGuard.isSignalablePID(process.pid) {
+            return "This PID cannot be signalled."
+        }
+        guard process.uid == currentUID else {
+            return "Only your own processes can be paused or signalled."
+        }
+        let path = process.executablePath
+        if globalProtectNames.contains(process.name) || path?.hasPrefix(globalProtectBundle) == true {
+            return "GlobalProtect is controlled only through its preset."
+        }
+        guard let path else {
+            return "Its executable could not be verified."
+        }
+        if isSystemComponent(path) {
+            return "It is part of macOS; pausing or signalling it can leave your session unresponsive."
+        }
+        return nil
+    }
+
+    static func isSystemComponent(_ path: String) -> Bool {
+        guard !path.hasPrefix(systemAppPrefix) else { return false }
+        return systemComponentPrefixes.contains { path.hasPrefix($0) }
+    }
+}
+
+/// A process and its descendants, as the last validated inventory shows them.
+enum ProcessFamily {
+    /// Every live descendant of `parent`, breadth first, children in PID order.
+    /// `excludedPID` (TaskScope) and its own descendants are left out, and a
+    /// recycled PID cannot make the walk loop.
+    static func descendants(of parent: AppProcess, in inventory: [AppProcess], excludingPID excludedPID: Int32) -> [AppProcess] {
+        let children = Dictionary(grouping: inventory.filter { !$0.hasExited }, by: \.parentPID)
+        var visited: Set<Int32> = [parent.pid]
+        var queue = [parent.pid]
+        var result: [AppProcess] = []
+        while !queue.isEmpty {
+            let pid = queue.removeFirst()
+            for child in (children[pid] ?? []).sorted(by: { $0.pid < $1.pid }) {
+                guard child.pid != excludedPID, !visited.contains(child.pid) else { continue }
+                visited.insert(child.pid)
+                result.append(child)
+                queue.append(child.pid)
+            }
+        }
+        return result
+    }
+}

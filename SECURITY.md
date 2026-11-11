@@ -37,7 +37,11 @@ only one, ViewInspector, is used by the tests and is not built into the app.
 TaskScope can inspect visible local processes and can signal a selected target
 only where macOS permits the current user to do so. A user can also choose a
 Force Stop action that sends `SIGKILL`, subject to the same macOS permission
-boundary. Only the immutable built-in GlobalProtect definition can request
+boundary. Pause (`SIGSTOP`), Resume (`SIGCONT`), and Send Signal (`SIGHUP`,
+`SIGINT`, `SIGUSR1`, `SIGUSR2`) reach only the user's own processes, never
+TaskScope, GlobalProtect, or a macOS system component, one revalidated PID at a
+time; Stop With Children stops each descendant the same way. No action signals a
+process group. Only the immutable built-in GlobalProtect definition can request
 administrator approval for its fixed `system/com.paloaltonetworks.gp.pangpsd` job:
 
 - The built-in preset's explicit in-app Keep Off / Apply Keep Off, GlobalProtect

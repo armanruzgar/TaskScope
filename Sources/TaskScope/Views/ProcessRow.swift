@@ -65,6 +65,14 @@ struct ProcessRow: View {
                     Text(verbatim: String(process.pid))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+
+                    if process.isStopped == true {
+                        Text("Paused")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5)
+                            .background(Color.orange.opacity(0.2), in: Capsule())
+                            .help("Stopped by a signal (state T). Choose Resume to let it run again.")
+                    }
                 }
 
                 HStack(spacing: 3) {
@@ -236,6 +244,7 @@ struct ProcessRow: View {
                 unit: "megabytes per second", first: "read", second: "written"
             ))
         }
+        if process.isStopped == true { values.append("paused") }
         if isHighlightedCPU { values.append("high CPU") }
         if isHighlightedMEM { values.append("high memory") }
         if matchedByCommandLine { values.append("matches the search in its command line") }
