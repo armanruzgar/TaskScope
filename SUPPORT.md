@@ -246,7 +246,10 @@ the last successful watched observation, separately from the process-list
 update time, with the date for observations before today. If inventory remains
 unavailable, record the exact in-app error rather than assuming that no process
 is running. Extended network/disk counters can be unavailable independently of
-the basic process list.
+the basic process list. In the window, a network or disk rate shows a dash
+until the second refresh after the window opens, and stays a dash for a
+process whose counters macOS does not report, such as another user's disk
+counters.
 
 ### Activity Monitor opens but does not select the PID
 
@@ -543,9 +546,10 @@ that migration was tested.
    ```
 
 7. Optionally delete files you exported (by default `TaskScope-presets.json`,
-   `TaskScope-configuration.json`, `TaskScope-diagnostics.json`, and
-   `TaskScope-GlobalProtect-compatibility.txt`,
-   plus `TaskScope-preferences.plist` if you exported preferences before a reset),
+   `TaskScope-configuration.json`, `TaskScope-diagnostics.json`,
+   `TaskScope-GlobalProtect-compatibility.txt`, and the `TaskScope Processes
+   <date> at <time>.csv` files from **Export Visible Rows…**, plus
+   `TaskScope-preferences.plist` if you exported preferences before a reset),
    the single-instance lock folder
    `~/Library/Application Support/com.local.TaskScope`, the per-user cache
    directory `"$(getconf DARWIN_USER_CACHE_DIR)com.local.TaskScope"`, and a

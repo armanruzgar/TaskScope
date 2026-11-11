@@ -224,8 +224,9 @@ TaskScope writes these entries to the macOS Unified Log, under its bundle
 identifier as the subsystem (`com.local.TaskScope` for local builds), and keeps
 no separate journal:
 
-- in the `Actions` category, a record of every `SIGTERM` or `SIGKILL` it sends,
-  with the signal and PID public and the process name private, and of every
+- in the `Actions` category, a record of every signal it sends (`SIGTERM`,
+  `SIGKILL`, and the signals of Pause, Resume, and Send Signal), with the
+  signal and PID public and the process name private, and of every
   launchd change (`launchctl bootout`, `bootstrap`, `disable`, `enable`,
   `kickstart`, and similar), app `open`, and administrator request it runs,
   with the exit status public and the command line private. Failures are
@@ -308,7 +309,8 @@ deleting TaskScope's preferences.
   and are excluded from support diagnostics. Reset commits recovered entries;
   preset reset supplies the built-in default if no presets remain. See
   [recovery details](SUPPORT.md#stored-data-is-unreadable).
-- Preset exports and configuration backups remain wherever the user saved them.
+- Preset exports, configuration backups, and exported process rows (CSV files)
+  remain wherever the user saved them.
 - Unified Log entries, including the `Actions` record, age out under macOS's
   own log retention; deleting TaskScope or its preferences does not remove
   them.

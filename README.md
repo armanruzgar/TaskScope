@@ -31,6 +31,8 @@ before installing.
 
 - Search, filter, sort, and explore processes in flat or tree views, and copy
   or export the visible rows as text or CSV.
+- Inspect a process's executable, code signature, threads, open files,
+  listening ports, and command line in Process Detail.
 - Review captured targets before Stop, Force Stop, or Stop With Children, with
   identity checks before signals; pause and resume your own processes, or send
   them Hangup, Interrupt, User 1, or User 2.
@@ -38,10 +40,16 @@ before installing.
   Helpers, and Restart actions, and keep any preset's app from running with
   Keep Off; the built-in GlobalProtect preset has Quit All instead.
 - Save process selections and preview matches before recalling them.
-- Create Prompt, Auto Stop, or Log Only rules on run time, sustained CPU or memory use, and command-line text, and review their event history.
+- Create Prompt, Auto Stop, or Log Only rules on run time, sustained CPU or
+  memory use, and command-line text, and review their event history.
 - View the last minutes of total CPU and resident memory, with latest and peak
   values, and opt into watched-process notifications.
-- Use Shortcuts, a configurable global hotkey, and optional Launch at Login.
+- See from the menu-bar icon when a watched app is running, a kept-off app is
+  back, watched status is unknown or stale, or an Auto-Stop prompt is waiting.
+- Use Shortcuts, including a read-only status action, a configurable global
+  hotkey, and optional Launch at Login.
+- Back up presets, Auto-Stop rules, saved selections, settings, and the hotkey
+  to one file, and review a backup part by part before importing it.
 - Inspect permissions and installation health, and preview redacted support reports.
 
 ## Requirements
@@ -147,6 +155,9 @@ Before removing TaskScope:
   Then clear the separate system-daemon override yourself: session-agent
   installations keep it disabled after Open. If TaskScope is already gone,
   clear all three overrides, on any layout.
+- If you used **Keep Off** on any other preset that has launch agents, turn its
+  Keep Off off or choose **Open**: Keep Off disabled those agents in your
+  launchd domain, and removing TaskScope does not enable them again.
 - Turn off Launch at Login, then delete every copy of the app, including the
   staged `dist/build.noindex/TaskScope.app` in a source checkout.
 
