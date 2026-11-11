@@ -296,6 +296,22 @@ final class ProcessControlActionsTests: XCTestCase {
         XCTAssertEqual(signaler.sent.map(\.signal), [SIGTERM, SIGTERM])
     }
 
+    func testChildLookupFollowsEachInventoryRead() async {
+        let parent = row(pid: 820)
+        let inventory = ControlTestInventory([
+            .success([parent, row(pid: 821, parent: 820), row(pid: 99_999, parent: 822), row(pid: 822)]),
+            .success([parent])
+        ])
+        let manager = manager(inventory)
+        await manager.loadProcessList(showMessage: false)
+        XCTAssertTrue(manager.hasChildProcesses(parent))
+        XCTAssertFalse(manager.hasChildProcesses(row(pid: 821, parent: 820)))
+        XCTAssertFalse(manager.hasChildProcesses(row(pid: 822)), "TaskScope is not a child to stop")
+
+        await manager.loadProcessList(showMessage: false)
+        XCTAssertFalse(manager.hasChildProcesses(parent), "The answer follows the newest read")
+    }
+
     func testAProcessWithoutChildrenOffersNoFamilyStop() async {
         let lone = row(pid: 810)
         let fixture = await Batch10.fixture(processes: [lone])

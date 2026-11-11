@@ -404,7 +404,7 @@ struct TaskScopePopoverView: View {
     }
 
     private var currentProcessPID: Int32 {
-        ProcessInfo.processInfo.processIdentifier
+        processManager.currentProcessPID
     }
 
     private func stopSelection(_ pending: ProcessConfirmationState.PendingBatchTermination) {
@@ -1615,9 +1615,7 @@ struct TaskScopePopoverView: View {
             confirmationState.requestTermination(process, mode: .force)
         }
         .disabled(processManager.isCurrentProcess(process))
-        let hasChildren = !processManager.isCurrentProcess(process) && !ProcessFamily.descendants(
-            of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID
-        ).isEmpty
+        let hasChildren = !processManager.isCurrentProcess(process) && processManager.hasChildProcesses(process)
         Button("Stop With Children…") { requestStopWithChildren(process) }
             .disabled(!hasChildren)
             .help(hasChildren ? "Stop this process and every process it started" : "This process has no child processes.")
@@ -1662,7 +1660,7 @@ struct TaskScopePopoverView: View {
             Button("Force Stop…") {
                 confirmationState.requestTermination(process, mode: .force)
             }
-            if !ProcessFamily.descendants(of: process, in: processManager.inventorySnapshot, excludingPID: currentProcessPID).isEmpty {
+            if processManager.hasChildProcesses(process) {
                 Button("Stop With Children…") { requestStopWithChildren(process) }
             }
             if signalRefusal(for: process) == nil {

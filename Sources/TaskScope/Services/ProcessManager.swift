@@ -852,6 +852,29 @@ final class ProcessManager: ObservableObject {
         process.pid == currentPID
     }
 
+    /// The PID TaskScope runs as.
+    var currentProcessPID: Int32 {
+        currentPID
+    }
+
+    /// The parents of the current inventory's live processes, TaskScope's own
+    /// process not counted as a child, computed once per inventory read.
+    private var childParentPIDs: (generation: UInt64, pids: Set<Int32>)?
+
+    /// Whether the current inventory lists a live child of `process`. Every
+    /// row's context menu asks while the list draws, so the answer is memoized
+    /// per inventory read instead of walking the inventory per row.
+    func hasChildProcesses(_ process: AppProcess) -> Bool {
+        if childParentPIDs?.generation != inventoryGeneration {
+            let ownPID = currentPID
+            childParentPIDs = (
+                inventoryGeneration,
+                Set(fullProcessInventory.lazy.filter { !$0.hasExited && $0.pid != ownPID }.map(\.parentPID))
+            )
+        }
+        return childParentPIDs?.pids.contains(process.pid) == true
+    }
+
     /// Test observation of the projection used by `treeRoots(for:)`.
     var ppidMap: [Int32: Int32] {
         listProjection.ppidMap
