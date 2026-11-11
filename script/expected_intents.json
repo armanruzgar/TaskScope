@@ -1,0 +1,34 @@
+{
+  "metadataVersion": "3.0",
+  "actions": [
+    "OpenWatchedAppIntent",
+    "RefreshTaskScopeIntent",
+    "StopWatchedAppIntent"
+  ],
+  "entities": [
+    "WatchedPresetEntity"
+  ],
+  "queries": [
+    "WatchedPresetEntityQuery"
+  ],
+  "shortcuts": [
+    {
+      "action": "RefreshTaskScopeIntent",
+      "phrases": [
+        "Refresh ${applicationName}"
+      ]
+    },
+    {
+      "action": "StopWatchedAppIntent",
+      "phrases": [
+        "Stop ${app} in ${applicationName}"
+      ]
+    },
+    {
+      "action": "OpenWatchedAppIntent",
+      "phrases": [
+        "Open ${app} in ${applicationName}"
+      ]
+    }
+  ]
+}

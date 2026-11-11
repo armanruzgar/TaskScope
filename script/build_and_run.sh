@@ -139,26 +139,11 @@ if [[ -n "$DSYM_COPY" && "$SIGNING_STYLE" != distribution ]]; then
   exit 2
 fi
 
-verify_plist_value() {
-  local plist="$1"
-  local key="$2"
-  local expected="$3"
-  local actual
-
-  actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist" 2>/dev/null || true)"
-  if [[ "$actual" != "$expected" ]]; then
-    echo "Bundle verification failed: $key is '$actual' (expected '$expected')." >&2
-    return 1
-  fi
-}
-
 verify_bundle() {
   local bundle="$1"
   local contents="$bundle/Contents"
   local executable="$contents/MacOS/$APP_NAME"
-  local plist="$contents/Info.plist"
   local icon="$contents/Resources/AppIcon.icns"
-  local app_intents_metadata="$contents/Resources/Metadata.appintents"
 
   [[ -d "$bundle" ]] || {
     echo "Bundle verification failed: missing $bundle" >&2
@@ -178,75 +163,10 @@ verify_bundle() {
   fi
   verify_icon_members "$icon" || return 1
 
-  /usr/bin/plutil -lint "$plist" >/dev/null
-  verify_plist_value "$plist" "CFBundleExecutable" "$APP_NAME"
-  verify_plist_value "$plist" "CFBundleIdentifier" "$BUNDLE_ID"
-  verify_plist_value "$plist" "CFBundleShortVersionString" "$APP_VERSION"
-  verify_plist_value "$plist" "CFBundleVersion" "$APP_BUILD_NUMBER"
-  verify_plist_value "$plist" "LSMinimumSystemVersion" "$MIN_SYSTEM_VERSION"
-  verify_plist_value "$plist" "CFBundleInfoDictionaryVersion" "6.0"
-  verify_plist_value "$plist" "CFBundleDevelopmentRegion" "en"
-  verify_plist_value "$plist" "LSApplicationCategoryType" "public.app-category.utilities"
-  verify_plist_value "$plist" "NSHumanReadableCopyright" "$APP_COPYRIGHT"
-  verify_plist_value "$plist" "CFBundleURLTypes:0:CFBundleURLSchemes:0" "taskscope"
-
-  local obsolete_privacy_key
-  for obsolete_privacy_key in NSAppleEventsUsageDescription NSServerUsageDescription; do
-    if /usr/libexec/PlistBuddy -c "Print :$obsolete_privacy_key" "$plist" >/dev/null 2>&1; then
-      echo "Bundle verification failed: obsolete $obsolete_privacy_key is present." >&2
-      return 1
-    fi
-  done
-
-  [[ -s "$app_intents_metadata/version.json" ]] || {
-    echo "Bundle verification failed: App Intents version metadata is missing." >&2
-    return 1
-  }
-  [[ -s "$app_intents_metadata/extract.actionsdata" ]] || {
-    echo "Bundle verification failed: App Intents action metadata is missing." >&2
-    return 1
-  }
-  local metadata_version
-  local metadata_tools_version
-  metadata_version="$(
-    /usr/bin/plutil -extract version raw -o - "$app_intents_metadata/version.json" 2>/dev/null || true
-  )"
-  metadata_tools_version="$(
-    /usr/bin/plutil -extract toolsVersion raw -o - "$app_intents_metadata/version.json" 2>/dev/null || true
-  )"
-  if [[ "$metadata_version" != "3.0" || -z "$metadata_tools_version" ]]; then
-    echo "Bundle verification failed: App Intents version metadata is invalid." >&2
-    return 1
-  fi
-
-  local metadata_path
-  for metadata_path in \
-    "actions.OpenWatchedAppIntent" \
-    "actions.RefreshTaskScopeIntent" \
-    "actions.StopWatchedAppIntent" \
-    "entities.WatchedPresetEntity" \
-    "queries.WatchedPresetEntityQuery"; do
-    if ! /usr/bin/plutil -extract "$metadata_path" json -o - \
-      "$app_intents_metadata/extract.actionsdata" >/dev/null 2>&1; then
-      echo "Bundle verification failed: App Intents metadata lacks $metadata_path." >&2
-      return 1
-    fi
-  done
-
-  local shortcut_metadata
-  shortcut_metadata="$(
-    /usr/bin/plutil -extract autoShortcuts json -o - \
-      "$app_intents_metadata/extract.actionsdata"
-  )"
-  for phrase in \
-    'Refresh ${applicationName}' \
-    'Stop ${app} in ${applicationName}' \
-    'Open ${app} in ${applicationName}'; do
-    if ! /usr/bin/grep -Fq "$phrase" <<< "$shortcut_metadata"; then
-      echo "Bundle verification failed: App Shortcut phrase '$phrase' is missing." >&2
-      return 1
-    fi
-  done
+  # The Info.plist values and the App Intents names and phrases, against
+  # script/expected_intents.json; install.sh and release.sh run the same check.
+  taskscope_verify_bundle_metadata full "$bundle" "$ROOT_DIR" "$BUNDLE_ID" \
+    "$APP_VERSION" "$APP_BUILD_NUMBER" "$MIN_SYSTEM_VERSION" || return 1
 
   /usr/bin/codesign --verify --deep --strict "$bundle"
   local signature_info
@@ -510,13 +430,7 @@ taskscope_acquire_lock "$PACKAGING_LOCK" "packaging process"
 PACKAGING_LOCK_ACQUIRED=1
 taskscope_recover_bundles "$APP_BUNDLE" "$DIST_DIR/.$APP_NAME.output-backup." "$DIST_DIR/.$APP_NAME.staging."
 
-# Package.swift alone sets the deployment target, so the linker's minimum OS,
-# LSMinimumSystemVersion and the App Intents metadata always match the code.
-MIN_SYSTEM_VERSION="$(taskscope_minimum_system_version "$ROOT_DIR")"
-[[ "$MIN_SYSTEM_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
-  echo "Could not determine the Package.swift macOS deployment target." >&2
-  exit 1
-}
+MIN_SYSTEM_VERSION="$(taskscope_resolve_minimum_system_version "$ROOT_DIR")"
 APP_COPYRIGHT="$(taskscope_copyright_notice "$ROOT_DIR")"
 
 # Hold the packaging lock across both static and startup verification so a

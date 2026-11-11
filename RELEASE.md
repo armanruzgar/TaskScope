@@ -330,7 +330,9 @@ syntax, version, build (which must exceed the maximum build number across all
 `v*` tags, including prereleases and hotfixes; missing or invalid tagged values
 fail), the changelog heading and empty `[Unreleased]` section, arm64
 architecture, retained GlobalProtect lifecycle evidence, the deployment target
-(read from `Package.swift`), and App Intents metadata. It builds from a
+(read from `Package.swift`), and the bundle's Info.plist values and App Intents
+actions, entities, queries and App Shortcut phrases, which must match
+`script/expected_intents.json` exactly, as staging requires. It builds from a
 generated app-only package, so the release build never resolves the test
 dependencies or rewrites `Package.resolved`, and rechecks the worktree after
 the build. It builds with hardened runtime and no entitlements, removes

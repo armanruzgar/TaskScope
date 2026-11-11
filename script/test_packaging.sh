@@ -16,6 +16,7 @@ BUILD_SCRIPT="$ROOT_DIR/script/build_and_run.sh"
 INSTALL_SCRIPT="$ROOT_DIR/script/install.sh"
 RELEASE_SCRIPT="$ROOT_DIR/script/release.sh"
 COMMON_SCRIPT="$ROOT_DIR/script/packaging_common.sh"
+INTENTS_GENERATOR="$ROOT_DIR/script/generate_expected_intents.sh"
 TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taskscope-packaging.XXXXXX")"
 export TASKSCOPE_CODE_SIGN_IDENTITY=-
 export TASKSCOPE_OUTPUT_DIR="$TEST_DIR/build.noindex"
@@ -71,7 +72,34 @@ bash -n "$BUILD_SCRIPT"
 bash -n "$INSTALL_SCRIPT"
 bash -n "$RELEASE_SCRIPT"
 bash -n "$COMMON_SCRIPT"
+bash -n "$INTENTS_GENERATOR"
 source "$COMMON_SCRIPT"
+
+# The app embeds script/expected_intents.json, the list packaging checks
+# bundles against, through a generated Swift file that must be current.
+"$INTENTS_GENERATOR" --check
+GENERATOR_FIXTURE="$TEST_DIR/Generator"
+GENERATED_SOURCE="$GENERATOR_FIXTURE/Sources/TaskScope/Models/ExpectedAppIntents+Source.swift"
+mkdir -p "$GENERATOR_FIXTURE/script" "$(dirname "$GENERATED_SOURCE")"
+cp "$INTENTS_GENERATOR" "$GENERATOR_FIXTURE/script/"
+cp "$ROOT_DIR/Sources/TaskScope/Models/ExpectedAppIntents+Source.swift" "$GENERATED_SOURCE"
+sed 's/"metadataVersion": "[^"]*"/"metadataVersion": "9.9"/' "$ROOT_DIR/script/expected_intents.json" \
+  > "$GENERATOR_FIXTURE/script/expected_intents.json"
+grep -Fq '"metadataVersion": "9.9"' "$GENERATOR_FIXTURE/script/expected_intents.json"
+if "$GENERATOR_FIXTURE/script/generate_expected_intents.sh" --check > "$TEST_DIR/generator.out" 2>&1 \
+  || ! grep -Fq 'is out of date' "$TEST_DIR/generator.out"; then
+  echo "The generator check accepted a stale ExpectedAppIntents+Source.swift." >&2
+  exit 1
+fi
+"$GENERATOR_FIXTURE/script/generate_expected_intents.sh" > /dev/null
+"$GENERATOR_FIXTURE/script/generate_expected_intents.sh" --check
+grep -Fq '"metadataVersion": "9.9"' "$GENERATED_SOURCE"
+printf '{"broken": \n' > "$GENERATOR_FIXTURE/script/expected_intents.json"
+if "$GENERATOR_FIXTURE/script/generate_expected_intents.sh" > "$TEST_DIR/generator.out" 2>&1 \
+  || ! grep -Fq '"metadataVersion": "9.9"' "$GENERATED_SOURCE"; then
+  echo "The generator embedded malformed JSON." >&2
+  exit 1
+fi
 
 (
   /bin/sleep 30 &

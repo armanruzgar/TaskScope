@@ -316,9 +316,7 @@ validate_credential_independent_inputs() {
   require_command xcrun
 
   taskscope_require_xcode
-  MIN_SYSTEM_VERSION="$(taskscope_minimum_system_version "$ROOT_DIR")"
-  [[ "$MIN_SYSTEM_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] \
-    || fail "Could not determine the Package.swift macOS deployment target."
+  MIN_SYSTEM_VERSION="$(taskscope_resolve_minimum_system_version "$ROOT_DIR")" || exit 1
   xcrun --find appintentsmetadataprocessor >/dev/null
   xcrun --find dsymutil >/dev/null
   xcrun --find notarytool >/dev/null
@@ -361,31 +359,20 @@ cleanup_release() {
   return "$exit_code"
 }
 
-plist_value() {
-  local plist="$1"
-  local key="$2"
-  /usr/libexec/PlistBuddy -c "Print :$key" "$plist" 2>/dev/null
-}
-
 verify_release_signature() {
   local bundle="$1"
   local executable="$bundle/Contents/MacOS/$APP_NAME"
-  local plist="$bundle/Contents/Info.plist"
-  local metadata="$bundle/Contents/Resources/Metadata.appintents"
   local signature_info
   local entitlements
   local build_version
 
   [[ -d "$bundle" ]] || fail "Release verification failed: missing $bundle"
   [[ -x "$executable" ]] || fail "Release verification failed: missing executable."
-  [[ "$(plist_value "$plist" CFBundleIdentifier)" == "$BUNDLE_ID" ]] \
-    || fail "Release verification failed: bundle identifier mismatch."
-  [[ "$(plist_value "$plist" CFBundleShortVersionString)" == "$APP_VERSION" ]] \
-    || fail "Release verification failed: version mismatch."
-  [[ "$(plist_value "$plist" CFBundleVersion)" == "$APP_BUILD_NUMBER" ]] \
-    || fail "Release verification failed: build number mismatch."
-  [[ "$(plist_value "$plist" LSMinimumSystemVersion)" == "$MIN_SYSTEM_VERSION" ]] \
-    || fail "Release verification failed: minimum-system mismatch."
+  # The same Info.plist and App Intents check that staging runs, including the
+  # App Intents names and phrases in script/expected_intents.json.
+  taskscope_verify_bundle_metadata full "$bundle" "$ROOT_DIR" "$BUNDLE_ID" \
+    "$APP_VERSION" "$APP_BUILD_NUMBER" "$MIN_SYSTEM_VERSION" \
+    || fail "Release verification failed: the bundle metadata does not match this checkout."
   [[ "$(lipo -archs "$executable")" == "arm64" ]] \
     || fail "Release verification failed: expected exactly arm64."
   # Captured first: grep -q leaving a pipe early could fail it under pipefail.
@@ -395,8 +382,6 @@ verify_release_signature() {
 
   taskscope_verify_binary_paths "$executable" || fail "Release verification failed: unsafe runtime search paths."
   taskscope_verify_no_debug_paths "$executable" || exit 1
-  [[ -s "$metadata/version.json" && -s "$metadata/extract.actionsdata" ]] \
-    || fail "Release verification failed: App Intents metadata is missing."
   /usr/bin/codesign --verify --deep --strict --verbose=4 "$bundle"
 
   signature_info="$(/usr/bin/codesign -dvvv "$bundle" 2>&1)"

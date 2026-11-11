@@ -121,8 +121,10 @@ installed but cannot be opened, the installer warns and still succeeds; if an
 upgrade fails after quitting TaskScope, it says that TaskScope was not
 restarted. To choose another existing writable directory, use
 `DEST_DIR="$PWD/local-apps" ./script/install.sh --no-open` after creating that
-directory. Installation validates the staged and copied bundle, replaces the
-destination transactionally, and restores the prior app if replacement fails;
+directory. Installation checks the staged bundle's Info.plist and App Intents
+metadata against the checkout, as staging and releasing do, checks the signature
+and identity of each copy, replaces the destination transactionally, and
+restores the prior app if replacement fails;
 after an interrupted run, such as a power loss, the next install or stage
 restores or removes what it left. Export important presets before upgrading;
 this rollback does not migrate preferences across incompatible releases.

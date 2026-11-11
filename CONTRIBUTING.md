@@ -104,6 +104,23 @@ error.
 If a contributor cannot run a platform-specific gate, say exactly which command was not run and why; do not
 report it as passing. A maintainer must run every release gate before tagging.
 
+### App Intents and App Shortcuts
+
+[script/expected_intents.json](script/expected_intents.json) is the one list of
+the App Intents actions, entities and queries, and of each App Shortcut's
+phrases, that a packaged TaskScope declares. Staging, `script/install.sh` and
+`script/release.sh` all check a bundle's `Metadata.appintents` against it with
+the shared `taskscope_verify_bundle_metadata` in `script/packaging_common.sh`,
+and Settings > Health applies the same exact-match rule to the running app. When
+you add, rename or remove an intent, entity, query or App Shortcut phrase in
+`Sources/TaskScope/Services/TaskScopeIntents.swift`, update the JSON in the same
+change and run `./script/generate_expected_intents.sh`, which embeds the file in
+the app as `ExpectedAppIntents+Source.swift`. `ExpectedAppIntentsTests` fails
+while the embedded copy differs from the file, or while the list differs from
+`TaskScopeShortcuts.appShortcuts`, and staging fails while the packaged metadata
+differs from the list. The macOS deployment target comes from `Package.swift`
+alone, through `taskscope_resolve_minimum_system_version`.
+
 ## Security-sensitive changes
 
 Keep pull requests focused. Explain user-visible changes and explicitly call out

@@ -118,24 +118,18 @@ stop_destination_app() {
   DESTINATION_STOPPED="$TASKSCOPE_STOPPED_PROCESSES"
 }
 
+# The staged bundle gets the full check that staging and releasing run. Each
+# later copy passes codesign first, which seals its Info.plist and resources,
+# so confirming its identity is enough.
 verify_install_bundle_metadata() {
-  local bundle="$1"
-  local key
-  local expected
-  local actual
+  local level="$1"
+  local bundle="$2"
 
-  for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
-    case "$key" in
-      CFBundleIdentifier) expected="$BUNDLE_ID" ;;
-      CFBundleShortVersionString) expected="$APP_VERSION" ;;
-      CFBundleVersion) expected="$APP_BUILD_NUMBER" ;;
-    esac
-    actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$bundle/Contents/Info.plist" 2>/dev/null || true)"
-    if [[ "$actual" != "$expected" ]]; then
-      echo "Refusing to install $bundle: $key is '$actual' (expected '$expected')." >&2
-      return 1
-    fi
-  done
+  taskscope_verify_bundle_metadata "$level" "$bundle" "$ROOT_DIR" "$BUNDLE_ID" \
+    "$APP_VERSION" "$APP_BUILD_NUMBER" "${MIN_SYSTEM_VERSION:-}" || {
+    echo "Refusing to install $bundle." >&2
+    return 1
+  }
 }
 
 if [[ ! -d "$DEST_DIR" ]]; then
@@ -178,6 +172,7 @@ taskscope_acquire_lock "$PACKAGING_LOCK" "packaging process"
 PACKAGING_LOCK_ACQUIRED=1
 APP_VERSION="$(taskscope_read_release_value "$ROOT_DIR/VERSION" "version")"
 APP_BUILD_NUMBER="$(taskscope_read_release_value "$ROOT_DIR/BUILD_NUMBER" "build number")"
+MIN_SYSTEM_VERSION="$(taskscope_resolve_minimum_system_version "$ROOT_DIR")"
 
 if [[ ! -d "$STAGED_BUNDLE" ]]; then
   echo "Build did not produce $STAGED_BUNDLE" >&2
@@ -186,7 +181,7 @@ fi
 
 /usr/bin/codesign --verify --deep --strict "$STAGED_BUNDLE"
 
-verify_install_bundle_metadata "$STAGED_BUNDLE"
+verify_install_bundle_metadata full "$STAGED_BUNDLE"
 
 if [[ -d "$DEST_BUNDLE" ]]; then
   EXISTING_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$DEST_BUNDLE/Contents/Info.plist" 2>/dev/null || true)"
@@ -199,7 +194,7 @@ fi
 rm -rf "$INSTALLING_BUNDLE" "$BACKUP_BUNDLE"
 /usr/bin/ditto "$STAGED_BUNDLE" "$INSTALLING_BUNDLE"
 /usr/bin/codesign --verify --deep --strict "$INSTALLING_BUNDLE"
-verify_install_bundle_metadata "$INSTALLING_BUNDLE"
+verify_install_bundle_metadata identity "$INSTALLING_BUNDLE"
 fail_if_requested "after_copy"
 
 # The private copy is now validated; destination replacement needs only the
@@ -230,7 +225,7 @@ fi
 fail_if_requested "after_replace"
 
 /usr/bin/codesign --verify --deep --strict "$DEST_BUNDLE"
-verify_install_bundle_metadata "$DEST_BUNDLE"
+verify_install_bundle_metadata identity "$DEST_BUNDLE"
 fail_if_requested "after_verify"
 
 INSTALL_STATE="complete"

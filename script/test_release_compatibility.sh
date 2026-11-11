@@ -34,6 +34,105 @@ EVIDENCE_RELATIVE='Evidence/GlobalProtect/lifecycle/1.2.3-7'
 EVIDENCE_DIR="$FIXTURE_DIR/$EVIDENCE_RELATIVE"
 MANIFEST="$EVIDENCE_DIR/arm64.evidence"
 CHECKS=0
+# Bundles whose Info.plist and App Intents metadata match a checkout, as
+# staging writes them, for the harnesses below. Nothing in them is executable.
+BUNDLE_FIXTURES="$TEST_DIR/bundle-fixtures.sh"
+cat > "$BUNDLE_FIXTURES" <<'EOF'
+# Prints extract.actionsdata JSON that declares exactly the expectations file.
+taskscope_fixture_actions_data() {
+  local expected="$1"
+  local group
+  local count
+  local index
+  local name
+  local phrase_count
+  local phrase_index
+
+  printf '{'
+  for group in actions entities queries; do
+    printf '"%s":{' "$group"
+    count="$(/usr/bin/plutil -extract "$group" raw -o - "$expected")" || return 1
+    for ((index = 0; index < count; index++)); do
+      name="$(/usr/bin/plutil -extract "$group.$index" raw -o - "$expected")" || return 1
+      [[ "$index" -eq 0 ]] || printf ','
+      printf '"%s":{"identifier":"%s"}' "$name" "$name"
+    done
+    printf '},'
+  done
+  printf '"autoShortcuts":['
+  count="$(/usr/bin/plutil -extract shortcuts raw -o - "$expected")" || return 1
+  for ((index = 0; index < count; index++)); do
+    name="$(/usr/bin/plutil -extract "shortcuts.$index.action" raw -o - "$expected")" || return 1
+    [[ "$index" -eq 0 ]] || printf ','
+    printf '{"actionIdentifier":"%s","phraseTemplates":[' "$name"
+    phrase_count="$(/usr/bin/plutil -extract "shortcuts.$index.phrases" raw -o - "$expected")" || return 1
+    for ((phrase_index = 0; phrase_index < phrase_count; phrase_index++)); do
+      [[ "$phrase_index" -eq 0 ]] || printf ','
+      printf '{"alternatives":[],"key":"%s"}' \
+        "$(/usr/bin/plutil -extract "shortcuts.$index.phrases.$phrase_index" raw -o - "$expected")"
+    done
+    printf ']}'
+  done
+  printf ']}\n'
+}
+
+# Writes an Info.plist and App Intents metadata that pass the full check for
+# ROOT, whose LICENSE and script/expected_intents.json they follow:
+#   taskscope_write_bundle_fixture BUNDLE ROOT BUNDLE_ID VERSION BUILD MINIMUM
+taskscope_write_bundle_fixture() {
+  local bundle="$1"
+  local root="$2"
+  local metadata="$1/Contents/Resources/Metadata.appintents"
+  local copyright
+
+  copyright="$(/usr/bin/awk '/^Copyright \(c\) [0-9][0-9][0-9][0-9] / { print; exit }' "$root/LICENSE")"
+  [[ -n "$copyright" ]] && mkdir -p "$metadata" || return 1
+  cat > "$bundle/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>TaskScope</string>
+  <key>CFBundleIdentifier</key><string>$3</string>
+  <key>CFBundleName</key><string>TaskScope</string>
+  <key>CFBundleDisplayName</key><string>TaskScope</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$4</string>
+  <key>CFBundleVersion</key><string>$5</string>
+  <key>LSMinimumSystemVersion</key><string>$6</string>
+  <key>LSUIElement</key><false/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>NSHumanReadableCopyright</key><string>$copyright</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>$3</string>
+      <key>CFBundleURLSchemes</key><array><string>taskscope</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+PLIST
+  printf '{"toolsVersion":"fixture","version":"%s"}\n' \
+    "$(/usr/bin/plutil -extract metadataVersion raw -o - "$root/script/expected_intents.json")" \
+    > "$metadata/version.json" || return 1
+  taskscope_fixture_actions_data "$root/script/expected_intents.json" > "$metadata/extract.actionsdata"
+}
+
+# Gives ROOT the files the full check reads: the checkout's App Intents list
+# and a LICENSE copyright line.
+taskscope_prepare_metadata_root() {
+  mkdir -p "$1/script" || return 1
+  cp "$REAL_EXPECTED_INTENTS" "$1/script/expected_intents.json" || return 1
+  printf 'Copyright (c) 2026 Packaging Tests\n' > "$1/LICENSE"
+}
+EOF
+export BUNDLE_FIXTURES
+export REAL_EXPECTED_INTENTS="$ROOT_DIR/script/expected_intents.json"
 # Exercise only the swap section with fake process and file operations. Never
 # build, signal a real process, or launch an app in these regression cases.
 test_staging_stops_before_swap() (
@@ -358,10 +457,13 @@ test_install_locks_and_rechecks_copy() (
   chmod +x "$fixture/script/build_and_run.sh"
   printf '1.2.3\n' > "$fixture/VERSION"
   printf '7\n' > "$fixture/BUILD_NUMBER"
+  source "$BUNDLE_FIXTURES"
+  taskscope_prepare_metadata_root "$fixture"
   cat > "$harness" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$COMMON_SCRIPT"
+source "$BUNDLE_FIXTURES"
 APP_NAME=TaskScope
 BUNDLE_ID=com.example.TaskScopeTests
 OPEN_AFTER_INSTALL=0
@@ -375,17 +477,17 @@ PACKAGING_LOCK="$ROOT_DIR/dist/build.noindex/.TaskScope.package.lock"
 INSTALL_LOCK_ACQUIRED=0
 PACKAGING_LOCK_ACQUIRED=0
 INSTALL_STATE=preparing
-mkdir -p "$DEST_DIR" "$STAGED_BUNDLE/Contents"
-printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.2.3\nCFBundleVersion=7\n' \
-  "$BUNDLE_ID" > "$STAGED_BUNDLE/Contents/Info.plist"
+mkdir -p "$DEST_DIR"
+rm -rf "$STAGED_BUNDLE"
+taskscope_write_bundle_fixture "$STAGED_BUNDLE" "$ROOT_DIR" "$BUNDLE_ID" 1.2.3 7 14.0
+if [[ -n "${STAGED_DEFECT:-}" ]]; then
+  /usr/bin/plutil -remove "$STAGED_DEFECT" "$STAGED_BUNDLE/Contents/Resources/Metadata.appintents/extract.actionsdata"
+fi
+taskscope_minimum_system_version() { printf 14.0; }
 taskscope_process_identity() { printf "fake-owner-identity"; }
 function /usr/bin/shlock() {
   [[ ! -e "$2" ]] || return 1
   printf '%s\n' "$4" > "$2"
-}
-function /usr/libexec/PlistBuddy() {
-  local key="${2#Print :}"
-  awk -F= -v key="$key" '$1 == key { print $2 }' "$3"
 }
 function /usr/bin/codesign() {
   local bundle="${@: -1}"
@@ -408,9 +510,7 @@ function /usr/bin/ditto() {
   fi
   cp -R "$1" "$2"
   if [[ -n "${CORRUPT_KEY:-}" ]]; then
-    awk -F= -v key="$CORRUPT_KEY" '$1 == key { $0 = key "=substituted" } { print }' \
-      "$2/Contents/Info.plist" > "$2/Contents/changed"
-    mv "$2/Contents/changed" "$2/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :$CORRUPT_KEY substituted" "$2/Contents/Info.plist"
   fi
 }
 eval "$INSTALL_DEFINITIONS"
@@ -427,7 +527,7 @@ EOF
     fi
     [[ -f "$fixture/Applications/TaskScope.app/Contents/Info.plist" ]] || exit 1
     [[ ! -e "$fixture/dist/build.noindex/.TaskScope.package.lock" ]] || exit 1
-    for key in CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
+    for key in CFBundleExecutable CFBundleIdentifier CFBundleShortVersionString CFBundleVersion; do
       : > "$TOOL_LOG"
       if ROOT_DIR="$fixture" COMMON_SCRIPT="$common" \
         INSTALL_DEFINITIONS="$definitions" INSTALL_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
@@ -441,10 +541,28 @@ EOF
         echo 'Invalid install copy stopped the existing destination app.' >&2
         exit 1
       fi
-      grep -Fxq 'CFBundleVersion=7' "$fixture/Applications/TaskScope.app/Contents/Info.plist"
+      [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+        "$fixture/Applications/TaskScope.app/Contents/Info.plist")" == 7 ]] || exit 1
       [[ ! -e "$fixture/dist/build.noindex/.TaskScope.package.lock" ]] || exit 1
       [[ ! -e "$fixture/Applications/.TaskScope.install.lock" ]] || exit 1
     done
+    # A staged bundle whose App Intents differ from the checkout's list is
+    # refused before anything is copied or stopped.
+    : > "$TOOL_LOG"
+    if ROOT_DIR="$fixture" COMMON_SCRIPT="$common" \
+      INSTALL_DEFINITIONS="$definitions" INSTALL_FLOW="$flow" TOOL_LOG="$TOOL_LOG" \
+      TASKSCOPE_SKIP_BUILD="$skip_build" STAGED_DEFECT="actions.$(/usr/bin/plutil -extract actions.0 raw -o - \
+        "$fixture/script/expected_intents.json")" bash "$harness" > "$OUTPUT" 2>&1; then
+      echo 'Installer accepted a staged bundle that lacks a listed App Intent.' >&2
+      exit 1
+    fi
+    grep -Fq 'App Intents metadata lacks actions.' "$OUTPUT" && grep -Fq 'Refusing to install' "$OUTPUT" \
+      || { cat "$OUTPUT" >&2; exit 1; }
+    if grep -Eq 'stop-destination|verify .*installing' "$TOOL_LOG"; then
+      echo 'Installer copied or stopped before refusing the staged bundle.' >&2
+      exit 1
+    fi
+    [[ ! -e "$fixture/dist/build.noindex/.TaskScope.package.lock" ]] || exit 1
     printf 'other-owner\n' > "$fixture/dist/build.noindex/.TaskScope.package.lock"
     : > "$TOOL_LOG"
     if ROOT_DIR="$fixture" COMMON_SCRIPT="$common" \
@@ -677,10 +795,13 @@ test_installer_guards_before_changes() (
   chmod +x "$fixture/script/build_and_run.sh"
   printf '1.2.3\n' > "$fixture/VERSION"
   printf '7\n' > "$fixture/BUILD_NUMBER"
+  source "$BUNDLE_FIXTURES"
+  taskscope_prepare_metadata_root "$fixture"
   cat > "$harness" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 source "$COMMON_SCRIPT"
+source "$BUNDLE_FIXTURES"
 APP_NAME=TaskScope
 BUNDLE_ID=com.example.TaskScopeTests
 DEST_DIR="$ROOT_DIR/Applications"
@@ -694,13 +815,10 @@ INSTALL_LOCK_ACQUIRED=0
 PACKAGING_LOCK_ACQUIRED=0
 INSTALL_STATE=preparing
 DESTINATION_STOPPED=0
-mkdir -p "$DEST_DIR" "$STAGED_BUNDLE/Contents"
-printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.2.3\nCFBundleVersion=7\n' \
-  "$BUNDLE_ID" > "$STAGED_BUNDLE/Contents/Info.plist"
-function /usr/libexec/PlistBuddy() {
-  local key="${2#Print :}"
-  awk -F= -v key="$key" '$1 == key { print $2 }' "$3"
-}
+mkdir -p "$DEST_DIR"
+rm -rf "$STAGED_BUNDLE"
+taskscope_write_bundle_fixture "$STAGED_BUNDLE" "$ROOT_DIR" "$BUNDLE_ID" 1.2.3 7 14.0
+taskscope_minimum_system_version() { printf 14.0; }
 function /usr/bin/codesign() { :; }
 function /usr/bin/ditto() { cp -R "$1" "$2"; }
 function /usr/bin/open() { printf 'open %s\n' "$*" >> "$TOOL_LOG"; }
@@ -902,6 +1020,182 @@ test_xcode_requirement() (
   taskscope_require_xcode
 )
 
+# Staging, installing and releasing share one Info.plist and App Intents check.
+# It accepts a bundle that matches the checkout and its expected_intents.json,
+# names whatever differs, and the identity level checks only the identity.
+test_bundle_metadata_check() (
+  local root="$TEST_DIR/metadata root"
+  local bundle="$TEST_DIR/metadata bundles/TaskScope.app"
+  local metadata="$TEST_DIR/metadata bundles/TaskScope.app/Contents/Resources/Metadata.appintents"
+  local expected="$TEST_DIR/metadata root/script/expected_intents.json"
+  local status
+  source "$ROOT_DIR/script/packaging_common.sh"
+  source "$BUNDLE_FIXTURES"
+  taskscope_prepare_metadata_root "$root"
+  # A list of its own, so these cases test the rules rather than today's intents.
+  cat > "$expected" <<'JSON'
+{
+  "metadataVersion": "3.0",
+  "actions": ["FirstIntent", "SecondIntent"],
+  "entities": ["ExampleEntity"],
+  "queries": ["ExampleQuery"],
+  "shortcuts": [
+    {"action": "FirstIntent", "phrases": ["First ${applicationName}", "Begin ${applicationName}"]},
+    {"action": "SecondIntent", "phrases": ["Second ${item} in ${applicationName}"]}
+  ]
+}
+JSON
+  reset_bundle() {
+    rm -rf "$bundle"
+    taskscope_write_bundle_fixture "$bundle" "$root" com.example.TaskScopeTests 1.2.3 7 14.0
+  }
+  check() {
+    taskscope_verify_bundle_metadata "$1" "$bundle" "$root" com.example.TaskScopeTests 1.2.3 7 14.0 \
+      > "$OUTPUT" 2>&1
+  }
+  accepts() {
+    check "$1" || { cat "$OUTPUT" >&2; echo "The $1 metadata check refused a matching bundle." >&2; exit 1; }
+  }
+  refuses() {
+    if check "$1"; then
+      echo "The $1 metadata check accepted a bundle with: $2" >&2
+      exit 1
+    fi
+    grep -Fq -- "$2" "$OUTPUT" || { cat "$OUTPUT" >&2; echo "The $1 check did not report: $2" >&2; exit 1; }
+  }
+  plist() { /usr/libexec/PlistBuddy -c "$1" "$bundle/Contents/Info.plist"; }
+  edit_metadata() { /usr/bin/plutil "$@" "$metadata/extract.actionsdata"; }
+
+  reset_bundle
+  accepts full
+  accepts identity
+  # The checkout's own list passes against metadata written from it.
+  mkdir -p "$TEST_DIR/real metadata"
+  printf '{"toolsVersion":"fixture","version":"3.0"}\n' > "$TEST_DIR/real metadata/version.json"
+  taskscope_fixture_actions_data "$REAL_EXPECTED_INTENTS" > "$TEST_DIR/real metadata/extract.actionsdata"
+  taskscope_verify_app_intents_metadata "$TEST_DIR/real metadata" "$REAL_EXPECTED_INTENTS" \
+    || { echo 'script/expected_intents.json does not accept metadata that declares exactly it.' >&2; exit 1; }
+  # Usage errors are not verification failures.
+  status=0
+  taskscope_verify_bundle_metadata strict "$bundle" "$root" com.example.TaskScopeTests 1.2.3 7 14.0 \
+    > "$OUTPUT" 2>&1 || status="$?"
+  [[ "$status" -eq 2 ]] || exit 1
+  grep -Fq 'Unknown bundle metadata level: strict' "$OUTPUT"
+  status=0
+  taskscope_verify_bundle_metadata full "$bundle" "$root" com.example.TaskScopeTests 1.2.3 7 \
+    > "$OUTPUT" 2>&1 || status="$?"
+  [[ "$status" -eq 2 ]] || exit 1
+  grep -Fq 'needs the minimum system version' "$OUTPUT"
+
+  # Identity: the executable, identifier, version and build, at both levels.
+  for entry in CFBundleExecutable=Other CFBundleIdentifier=com.example.Other \
+    CFBundleShortVersionString=1.2.4 CFBundleVersion=8; do
+    plist "Set :${entry%%=*} ${entry#*=}"
+    refuses identity "${entry%%=*} is '${entry#*=}'"
+    refuses full "${entry%%=*} is '${entry#*=}'"
+    reset_bundle
+  done
+  rm "$bundle/Contents/Info.plist"
+  refuses identity "missing $bundle/Contents/Info.plist"
+  reset_bundle
+
+  # Full: every other Info.plist value packaging writes ...
+  for entry in CFBundleName=Other CFBundleDisplayName=Other CFBundleIconFile=Other CFBundlePackageType=FMWK \
+    LSMinimumSystemVersion=13.0 NSPrincipalClass=Other CFBundleInfoDictionaryVersion=5.0 \
+    CFBundleDevelopmentRegion=fr LSApplicationCategoryType=public.app-category.games \
+    NSHumanReadableCopyright=Other CFBundleURLTypes:0:CFBundleURLName=com.example.Other \
+    CFBundleURLTypes:0:CFBundleURLSchemes:0=other; do
+    plist "Set :${entry%%=*} ${entry#*=}"
+    accepts identity
+    refuses full "${entry%%=*} is '${entry#*=}'"
+    reset_bundle
+  done
+  plist 'Set :LSUIElement true'
+  refuses full "LSUIElement is 'true' (expected 'false')"
+  reset_bundle
+  for key in NSAppleEventsUsageDescription NSServerUsageDescription; do
+    plist "Add :$key string legacy"
+    accepts identity
+    refuses full "obsolete $key is present"
+    reset_bundle
+  done
+  # A truncated Info.plist is reported as malformed, not as a wrong value.
+  /usr/bin/sed -i '' '/<\/plist>/d' "$bundle/Contents/Info.plist"
+  refuses identity 'is not a valid property list'
+  reset_bundle
+  mv "$root/LICENSE" "$root/LICENSE.moved"
+  refuses full "LICENSE lacks a 'Copyright (c) <year> <holder>' line"
+  mv "$root/LICENSE.moved" "$root/LICENSE"
+
+  # ... and App Intents metadata that matches the list exactly.
+  printf '{"toolsVersion":"fixture","version":"4.0"}\n' > "$metadata/version.json"
+  accepts identity
+  refuses full 'App Intents version metadata is invalid'
+  printf '{"version":"3.0"}\n' > "$metadata/version.json"
+  refuses full 'App Intents version metadata is invalid'
+  rm "$metadata/version.json"
+  refuses full 'App Intents version metadata is missing'
+  reset_bundle
+  rm "$metadata/extract.actionsdata"
+  refuses full 'App Intents action metadata is missing'
+  reset_bundle
+  edit_metadata -remove actions.SecondIntent
+  refuses full 'App Intents metadata lacks actions.SecondIntent.'
+  reset_bundle
+  edit_metadata -insert actions.ExtraIntent -json '{}'
+  refuses full 'App Intents metadata declares actions.ExtraIntent, which'
+  reset_bundle
+  edit_metadata -insert entities.ExtraEntity -json '{}'
+  refuses full 'App Intents metadata declares entities.ExtraEntity, which'
+  reset_bundle
+  edit_metadata -remove queries
+  refuses full 'App Intents metadata lacks queries.ExampleQuery.'
+  reset_bundle
+  edit_metadata -remove autoShortcuts
+  refuses full 'App Shortcut metadata is missing'
+  reset_bundle
+  edit_metadata -remove autoShortcuts.0.phraseTemplates.1
+  refuses full "App Shortcut phrase 'Begin \${applicationName}' is missing"
+  reset_bundle
+  edit_metadata -insert autoShortcuts.1.phraseTemplates.1 -json '{"alternatives":[],"key":"Extra ${applicationName}"}'
+  refuses full "App Shortcut phrase 'Extra \${applicationName}' for SecondIntent is not listed"
+  reset_bundle
+  # A phrase moved to another action is both missing and unlisted.
+  edit_metadata -remove autoShortcuts.0.phraseTemplates.1
+  edit_metadata -insert autoShortcuts.1.phraseTemplates.1 -json '{"alternatives":[],"key":"Begin ${applicationName}"}'
+  refuses full "App Shortcut phrase 'Begin \${applicationName}' is missing"
+  grep -Fq "App Shortcut phrase 'Begin \${applicationName}' for SecondIntent is not listed" "$OUTPUT"
+  reset_bundle
+  edit_metadata -remove autoShortcuts.1
+  refuses full 'App Intents metadata has no App Shortcut for SecondIntent.'
+  reset_bundle
+  edit_metadata -insert autoShortcuts.2 -json '{"actionIdentifier":"FirstIntent","phraseTemplates":[]}'
+  refuses full 'App Intents metadata declares 3 App Shortcuts'
+  reset_bundle
+  # A broken list fails closed.
+  printf '{"metadataVersion": "3.0"' > "$expected"
+  refuses full 'is missing or malformed'
+  accepts identity
+
+  # The deployment target comes from Package.swift alone, in a valid form.
+  taskscope_minimum_system_version() { printf '15.1'; }
+  [[ "$(taskscope_resolve_minimum_system_version "$root")" == 15.1 ]]
+  for bad_version in '' 'fifteen' '15' '15.1.2.3' "15.0
+16.0"; do
+    taskscope_minimum_system_version() { printf '%s' "$bad_version"; }
+    if taskscope_resolve_minimum_system_version "$root" > "$OUTPUT" 2>&1; then
+      echo "An invalid deployment target was accepted: $bad_version" >&2
+      exit 1
+    fi
+    grep -Fq 'Could not determine the Package.swift macOS deployment target.' "$OUTPUT"
+  done
+  taskscope_minimum_system_version() { return 1; }
+  if taskscope_resolve_minimum_system_version "$root" > /dev/null 2>&1; then
+    echo 'A failed Package.swift read produced a deployment target.' >&2
+    exit 1
+  fi
+)
+
 # Only /usr/lib/swift may remain as a runtime search path, no @rpath library
 # may be linked, and a distributed binary carries no debug-map source paths.
 test_binary_search_and_debug_paths() (
@@ -1090,10 +1384,13 @@ test_release_pipeline() (
   local step
   mkdir -p "$fixture/script" "$fixture/$evidence"
   cp "$ROOT_DIR/script/release.sh" "$ROOT_DIR/script/packaging_common.sh" "$fixture/script/"
+  source "$BUNDLE_FIXTURES"
+  taskscope_prepare_metadata_root "$fixture"
   printf '1.2.3\n' > "$fixture/VERSION"
   printf '7\n' > "$fixture/BUILD_NUMBER"
   printf '## [1.2.3] - 2026-11-10\n' > "$fixture/CHANGELOG.md"
-  # The staging step is a stub that fabricates an inert bundle and dSYM.
+  # The staging step is a stub that fabricates an inert bundle and dSYM whose
+  # Info.plist and App Intents metadata match the fixture checkout.
   cat > "$fixture/script/build_and_run.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1101,12 +1398,16 @@ set -euo pipefail
 # A release stages into its own work directory, never the development output.
 [[ "$TASKSCOPE_OUTPUT_DIR" == */.TaskScope.release.*/stage.noindex ]]
 [[ ! -e "$TASKSCOPE_VERIFIED_BUNDLE_COPY" && ! -e "$TASKSCOPE_DSYM_COPY" ]]
-mkdir -p "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS" \
-  "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents" "$TASKSCOPE_DSYM_COPY"
+source "$BUNDLE_FIXTURES"
+root="$(cd "$(dirname "$0")/.." && pwd)"
+mkdir -p "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS" "$TASKSCOPE_DSYM_COPY"
 printf 'inert fixture, never executable code\n' > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS/TaskScope"
 chmod +x "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/MacOS/TaskScope"
-printf metadata > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents/version.json"
-printf metadata > "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents/extract.actionsdata"
+taskscope_write_bundle_fixture "$TASKSCOPE_VERIFIED_BUNDLE_COPY" "$root" "$TASKSCOPE_BUNDLE_ID" 1.2.3 7 14.0
+if [[ "$SCENARIO" == missing-intent ]]; then
+  /usr/bin/plutil -remove "actions.$(/usr/bin/plutil -extract actions.0 raw -o - "$root/script/expected_intents.json")" \
+    "$TASKSCOPE_VERIFIED_BUNDLE_COPY/Contents/Resources/Metadata.appintents/extract.actionsdata"
+fi
 touch "$TOOL_LOG.built"
 EOF
   chmod +x "$fixture/script/build_and_run.sh"
@@ -1186,15 +1487,6 @@ function /usr/bin/codesign() {
   esac
 }
 codesign() { /usr/bin/codesign "$@"; }
-function /usr/libexec/PlistBuddy() {
-  case "$2" in
-    *CFBundleIdentifier) printf 'com.example.TaskScopeTests\n' ;;
-    *CFBundleShortVersionString) printf '1.2.3\n' ;;
-    *CFBundleVersion) printf '7\n' ;;
-    *LSMinimumSystemVersion) printf '14.0\n' ;;
-    *) return 91 ;;
-  esac
-}
 function /usr/bin/vtool() { printf 'minos 14.0\n'; }
 function /usr/bin/otool() {
   if [[ "$1" == -L ]]; then
@@ -1341,6 +1633,8 @@ EOF
   assert_pipeline_failure locked 'Another TaskScope release process owns'
   assert_pipeline_failure build-dirty 'Release build changed the Git worktree'
   assert_pipeline_failure missing-runtime 'hardened runtime is absent'
+  # The release runs the same Info.plist and App Intents check as staging.
+  assert_pipeline_failure missing-intent 'App Intents metadata lacks actions.'
   assert_pipeline_failure wrong-team 'signing Team ID mismatch'
   assert_pipeline_failure entitlements 'unexpectedly contains entitlements'
   assert_pipeline_failure rpath 'unsafe runtime search paths'
@@ -1516,11 +1810,12 @@ if [[ -z "$TEST_MODE" || "$TEST_MODE" == --packaging-only ]]; then
   test_interrupted_transaction_recovery
   test_xcode_requirement
   test_binary_search_and_debug_paths
+  test_bundle_metadata_check
   test_startup_failure_is_reported
   test_launch_conflict_checked_before_build
   test_signing_uses_hardened_runtime
   test_unexpected_exit_fails
-  echo 'Packaging regression tests passed (20 groups).'
+  echo 'Packaging regression tests passed (21 groups).'
 fi
 if [[ -z "$TEST_MODE" || "$TEST_MODE" == --pipeline-only ]]; then
   test_release_pipeline

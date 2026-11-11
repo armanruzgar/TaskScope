@@ -63,14 +63,7 @@ private struct Batch09AppFixture {
         if metadata {
             let directory = resources.appendingPathComponent("Metadata.appintents", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let version: [String: Any] = ["version": "3.0", "toolsVersion": "fixture"]
-            let actions: [String: Any] = [
-                "actions": ["OpenWatchedAppIntent": [:], "RefreshTaskScopeIntent": [:], "StopWatchedAppIntent": [:]],
-                "entities": ["WatchedPresetEntity": [:]],
-                "queries": ["WatchedPresetEntityQuery": [:]],
-                "autoShortcuts": [["phrases": ["Refresh ${applicationName}", "Stop ${app} in ${applicationName}",
-                                                "Open ${app} in ${applicationName}"]]]
-            ]
+            let (version, actions) = try XCTUnwrap(ExpectedAppIntents.current).extractedMetadata()
             try JSONSerialization.data(withJSONObject: version).write(to: directory.appendingPathComponent("version.json"))
             try JSONSerialization.data(withJSONObject: actions).write(to: directory.appendingPathComponent("extract.actionsdata"))
         }

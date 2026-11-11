@@ -136,19 +136,16 @@ final class InstallationHealthTests: XCTestCase {
         XCTAssertFalse(InstallationHealthProbe.validBundleIdentifier("private/path"))
     }
 
-    func testMetadataRequiresKnownVersionAllActionsQueriesAndPhrases() {
-        let version: [String: Any] = ["version": "3.0", "toolsVersion": "fixture"]
-        var actions: [String: Any] = [
-            "actions": ["OpenWatchedAppIntent": [:], "StopWatchedAppIntent": [:], "RefreshTaskScopeIntent": [:]],
-            "entities": ["WatchedPresetEntity": [:]], "queries": ["WatchedPresetEntityQuery": [:]],
-            "autoShortcuts": ["Refresh ${applicationName}", "Stop ${app} in ${applicationName}", "Open ${app} in ${applicationName}"]
-        ]
+    func testMetadataRequiresKnownVersionAllActionsQueriesAndPhrases() throws {
+        // The expected names and phrases come from script/expected_intents.json.
+        let (version, valid) = try XCTUnwrap(ExpectedAppIntents.current).extractedMetadata()
+        var actions = valid
         XCTAssertTrue(InstallationHealthProbe.validMetadata(version: version, actions: actions))
         XCTAssertFalse(InstallationHealthProbe.validMetadata(version: ["version": "4.0"], actions: actions))
         actions.removeValue(forKey: "queries")
         XCTAssertFalse(InstallationHealthProbe.validMetadata(version: version, actions: actions))
-        actions["queries"] = ["WatchedPresetEntityQuery": [:]]
-        actions["autoShortcuts"] = []
+        actions = valid
+        actions["autoShortcuts"] = [[String: Any]]()
         XCTAssertFalse(InstallationHealthProbe.validMetadata(version: version, actions: actions))
     }
 

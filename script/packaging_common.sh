@@ -470,6 +470,263 @@ taskscope_minimum_system_version() {
   taskscope_describe_package "$1" | /usr/bin/plutil -extract platforms.0.version raw -o - -
 }
 
+# Package.swift alone sets the deployment target, so the linker's minimum OS,
+# LSMinimumSystemVersion and the App Intents metadata always match the code.
+# Every packaging script reads it through this function.
+taskscope_resolve_minimum_system_version() {
+  local version
+
+  version="$(taskscope_minimum_system_version "$1" 2>/dev/null)" || version=""
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "Could not determine the Package.swift macOS deployment target." >&2
+    return 1
+  fi
+  printf '%s' "$version"
+}
+
+# script/expected_intents.json is the one list of the App Intents types and App
+# Shortcut phrases a packaged TaskScope declares. The app embeds the same file
+# (script/generate_expected_intents.sh) for its Settings > Health check.
+taskscope_expected_intents_file() {
+  printf '%s/script/expected_intents.json' "$1"
+}
+
+# Prints the strings of the array at KEYPATH in a JSON or property list file,
+# one per line. Fails unless the value is an array of non-empty one-line strings.
+taskscope_string_list() {
+  local file="$1"
+  local keypath="$2"
+  local count
+  local index
+  local value
+
+  count="$(/usr/bin/plutil -extract "$keypath" raw -expect array -o - "$file" 2>/dev/null)" || return 1
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  for ((index = 0; index < count; index++)); do
+    value="$(/usr/bin/plutil -extract "$keypath.$index" raw -expect string -o - "$file" 2>/dev/null)" \
+      || return 1
+    [[ -n "$value" && "$value" != *$'\n'* ]] || return 1
+    printf '%s\n' "$value"
+  done
+}
+
+# Prints the differences between two newline-separated lists as "-name" for a
+# name only the first has and "+name" for one only the second has.
+taskscope_list_differences() {
+  local LC_ALL=C
+
+  /usr/bin/comm -23 <(printf '%s\n' "$1" | /usr/bin/sed '/^$/d' | /usr/bin/sort -u) \
+    <(printf '%s\n' "$2" | /usr/bin/sed '/^$/d' | /usr/bin/sort -u) | /usr/bin/sed 's/^/-/'
+  /usr/bin/comm -13 <(printf '%s\n' "$1" | /usr/bin/sed '/^$/d' | /usr/bin/sort -u) \
+    <(printf '%s\n' "$2" | /usr/bin/sed '/^$/d' | /usr/bin/sort -u) | /usr/bin/sed 's/^/+/'
+}
+
+# Checks a Metadata.appintents folder against the expectations file: the
+# metadata format version, exactly the listed actions, entities and queries,
+# and exactly the listed App Shortcuts, each with exactly its phrases.
+taskscope_verify_app_intents_metadata() {
+  local metadata="$1"
+  local expected="$2"
+  local version_file="$metadata/version.json"
+  local actions_file="$metadata/extract.actionsdata"
+  local expected_version
+  local actual_version
+  local tools_version
+  local group
+  local wanted
+  local found
+  local difference
+  local status=0
+  local shortcut_count
+  local declared_count
+  local index
+  local entry
+  local action
+  local matched
+  local phrase_count
+  local phrase_index
+
+  expected_version="$(/usr/bin/plutil -extract metadataVersion raw -expect string -o - "$expected" 2>/dev/null)" \
+    && shortcut_count="$(/usr/bin/plutil -extract shortcuts raw -expect array -o - "$expected" 2>/dev/null)" \
+    && [[ -n "$expected_version" && "$shortcut_count" =~ ^[0-9]+$ ]] || {
+    echo "Bundle verification failed: $expected is missing or malformed." >&2
+    return 1
+  }
+  [[ -s "$version_file" ]] || {
+    echo "Bundle verification failed: App Intents version metadata is missing." >&2
+    return 1
+  }
+  [[ -s "$actions_file" ]] || {
+    echo "Bundle verification failed: App Intents action metadata is missing." >&2
+    return 1
+  }
+  actual_version="$(/usr/bin/plutil -extract version raw -o - "$version_file" 2>/dev/null || true)"
+  tools_version="$(/usr/bin/plutil -extract toolsVersion raw -o - "$version_file" 2>/dev/null || true)"
+  if [[ "$actual_version" != "$expected_version" || -z "$tools_version" ]]; then
+    echo "Bundle verification failed: App Intents version metadata is invalid." >&2
+    return 1
+  fi
+
+  for group in actions entities queries; do
+    wanted="$(taskscope_string_list "$expected" "$group")" || {
+      echo "Bundle verification failed: $expected lists no valid $group." >&2
+      return 1
+    }
+    # A dictionary prints one key per line in raw format.
+    found="$(/usr/bin/plutil -extract "$group" raw -expect dictionary -o - "$actions_file" 2>/dev/null || true)"
+    while IFS= read -r difference; do
+      case "$difference" in
+        -*) echo "Bundle verification failed: App Intents metadata lacks $group.${difference#-}." >&2 ;;
+        +*) echo "Bundle verification failed: App Intents metadata declares $group.${difference#+}, which $expected does not list." >&2 ;;
+        *) continue ;;
+      esac
+      status=1
+    done < <(taskscope_list_differences "$wanted" "$found")
+  done
+  [[ "$status" -eq 0 ]] || return 1
+
+  declared_count="$(/usr/bin/plutil -extract autoShortcuts raw -expect array -o - "$actions_file" 2>/dev/null || true)"
+  [[ "$declared_count" =~ ^[0-9]+$ ]] || {
+    echo "Bundle verification failed: App Shortcut metadata is missing." >&2
+    return 1
+  }
+  for ((index = 0; index < shortcut_count; index++)); do
+    action="$(/usr/bin/plutil -extract "shortcuts.$index.action" raw -expect string -o - "$expected" 2>/dev/null)" \
+      && wanted="$(taskscope_string_list "$expected" "shortcuts.$index.phrases")" && [[ -n "$wanted" ]] || {
+      echo "Bundle verification failed: $expected has a malformed shortcut at index $index." >&2
+      return 1
+    }
+    matched=0
+    for ((entry = 0; entry < declared_count; entry++)); do
+      [[ "$(/usr/bin/plutil -extract "autoShortcuts.$entry.actionIdentifier" raw -o - "$actions_file" 2>/dev/null)" \
+        == "$action" ]] || continue
+      matched=1
+      found=""
+      phrase_count="$(/usr/bin/plutil -extract "autoShortcuts.$entry.phraseTemplates" raw -expect array -o - \
+        "$actions_file" 2>/dev/null || true)"
+      [[ "$phrase_count" =~ ^[0-9]+$ ]] || phrase_count=0
+      for ((phrase_index = 0; phrase_index < phrase_count; phrase_index++)); do
+        found+="$(/usr/bin/plutil -extract "autoShortcuts.$entry.phraseTemplates.$phrase_index.key" raw -o - \
+          "$actions_file" 2>/dev/null || true)"$'\n'
+      done
+      while IFS= read -r difference; do
+        case "$difference" in
+          -*) echo "Bundle verification failed: App Shortcut phrase '${difference#-}' is missing." >&2 ;;
+          +*) echo "Bundle verification failed: App Shortcut phrase '${difference#+}' for $action is not listed in $expected." >&2 ;;
+          *) continue ;;
+        esac
+        status=1
+      done < <(taskscope_list_differences "$wanted" "$found")
+      break
+    done
+    if [[ "$matched" -eq 0 ]]; then
+      echo "Bundle verification failed: App Intents metadata has no App Shortcut for $action." >&2
+      status=1
+    fi
+  done
+  if [[ "$status" -eq 0 && "$declared_count" -ne "$shortcut_count" ]]; then
+    echo "Bundle verification failed: App Intents metadata declares $declared_count App Shortcuts; $expected lists $shortcut_count." >&2
+    status=1
+  fi
+  return "$status"
+}
+
+taskscope_verify_plist_value() {
+  local plist="$1"
+  local key="$2"
+  local expected="$3"
+  local actual
+
+  actual="$(/usr/libexec/PlistBuddy -c "Print :$key" "$plist" 2>/dev/null || true)"
+  if [[ "$actual" != "$expected" ]]; then
+    echo "Bundle verification failed: $key is '$actual' (expected '$expected')." >&2
+    return 1
+  fi
+}
+
+# Verifies the Info.plist and App Intents metadata of a packaged TaskScope
+# against this checkout. Staging, installing and releasing all call it, so
+# their checks cannot drift apart.
+#   taskscope_verify_bundle_metadata LEVEL BUNDLE ROOT BUNDLE_ID VERSION BUILD [MINIMUM_SYSTEM_VERSION]
+# LEVEL is one of:
+#   identity  a well-formed Info.plist with the executable name, bundle
+#             identifier, version and build number: enough for a copy whose
+#             signature verifies, of a bundle that passed the full check.
+#   full      identity, plus every other Info.plist value
+#             packaging writes, no obsolete privacy keys, and App Intents
+#             metadata that matches script/expected_intents.json exactly.
+#             MINIMUM_SYSTEM_VERSION is required.
+taskscope_verify_bundle_metadata() {
+  local level="$1"
+  local bundle="$2"
+  local root="$3"
+  local bundle_id="$4"
+  local version="$5"
+  local build="$6"
+  local minimum="${7:-}"
+  local plist="$bundle/Contents/Info.plist"
+  local copyright
+  local entry
+  local obsolete_privacy_key
+
+  case "$level" in
+    identity) ;;
+    full)
+      [[ -n "$minimum" ]] || {
+        echo "The full bundle metadata check needs the minimum system version." >&2
+        return 2
+      }
+      ;;
+    *)
+      echo "Unknown bundle metadata level: $level" >&2
+      return 2
+      ;;
+  esac
+  [[ -d "$bundle" ]] || {
+    echo "Bundle verification failed: missing $bundle" >&2
+    return 1
+  }
+  [[ -f "$plist" ]] || {
+    echo "Bundle verification failed: missing $plist" >&2
+    return 1
+  }
+  /usr/bin/plutil -lint "$plist" >/dev/null 2>&1 || {
+    echo "Bundle verification failed: $plist is not a valid property list." >&2
+    return 1
+  }
+  taskscope_verify_plist_value "$plist" CFBundleExecutable TaskScope || return 1
+  taskscope_verify_plist_value "$plist" CFBundleIdentifier "$bundle_id" || return 1
+  taskscope_verify_plist_value "$plist" CFBundleShortVersionString "$version" || return 1
+  taskscope_verify_plist_value "$plist" CFBundleVersion "$build" || return 1
+  [[ "$level" == full ]] || return 0
+
+  copyright="$(taskscope_copyright_notice "$root")" || return 1
+  for entry in \
+    CFBundleName=TaskScope \
+    CFBundleDisplayName=TaskScope \
+    CFBundleIconFile=AppIcon \
+    CFBundlePackageType=APPL \
+    "LSMinimumSystemVersion=$minimum" \
+    LSUIElement=false \
+    NSPrincipalClass=NSApplication \
+    CFBundleInfoDictionaryVersion=6.0 \
+    CFBundleDevelopmentRegion=en \
+    LSApplicationCategoryType=public.app-category.utilities \
+    "NSHumanReadableCopyright=$copyright" \
+    "CFBundleURLTypes:0:CFBundleURLName=$bundle_id" \
+    CFBundleURLTypes:0:CFBundleURLSchemes:0=taskscope; do
+    taskscope_verify_plist_value "$plist" "${entry%%=*}" "${entry#*=}" || return 1
+  done
+  for obsolete_privacy_key in NSAppleEventsUsageDescription NSServerUsageDescription; do
+    if /usr/libexec/PlistBuddy -c "Print :$obsolete_privacy_key" "$plist" >/dev/null 2>&1; then
+      echo "Bundle verification failed: obsolete $obsolete_privacy_key is present." >&2
+      return 1
+    fi
+  done
+  taskscope_verify_app_intents_metadata "$bundle/Contents/Resources/Metadata.appintents" \
+    "$(taskscope_expected_intents_file "$root")"
+}
+
 # Prints one target's description as JSON. Equal descriptions print the same
 # text; a property list format cannot hold the nulls SwiftPM writes.
 taskscope_target_description() {

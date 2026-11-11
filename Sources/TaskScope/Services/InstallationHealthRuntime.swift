@@ -264,21 +264,14 @@ enum InstallationHealthProbe {
         }
     }
 
-    static func validMetadata(version: [String: Any], actions: [String: Any]) -> Bool {
-        guard version["version"] as? String == "3.0",
-              let tools = version["toolsVersion"] as? String, !tools.isEmpty else { return false }
-        for (group, names) in [
-            "actions": ["OpenWatchedAppIntent", "RefreshTaskScopeIntent", "StopWatchedAppIntent"],
-            "entities": ["WatchedPresetEntity"], "queries": ["WatchedPresetEntityQuery"]
-        ] {
-            guard let entries = actions[group] as? [String: Any],
-                  names.allSatisfy({ entries[$0] is [String: Any] }) else { return false }
-        }
-        guard let shortcuts = actions["autoShortcuts"], JSONSerialization.isValidJSONObject(shortcuts),
-              let data = try? JSONSerialization.data(withJSONObject: shortcuts),
-              let text = String(data: data, encoding: .utf8) else { return false }
-        return ["Refresh ${applicationName}", "Stop ${app} in ${applicationName}", "Open ${app} in ${applicationName}"]
-            .allSatisfy { text.contains($0) }
+    /// The packaged metadata must match script/expected_intents.json exactly,
+    /// the rule every packaging script applies, so Health verifies a bundle
+    /// exactly when staging would have accepted it.
+    static func validMetadata(
+        version: [String: Any], actions: [String: Any],
+        expected: ExpectedAppIntents? = .current
+    ) -> Bool {
+        expected?.matches(version: version, actions: actions) ?? false
     }
 
     /// Inspects the running app's bundle. `app` is a parameter so tests can
