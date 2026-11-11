@@ -39,7 +39,11 @@ confirmed from the 480-point menu. The normal attempt failed after 7.38 seconds
 with both session jobs/processes preserved and the 900-point main window in
 front showing the failure. The UI process was resumed before recovery.
 
-Cancel in the recovery confirmation left the services running. A second click
+Cancel in the recovery confirmation left the services running. The harness
+labels both the cancel and the confirm step "Confirmed recovery choice"; the
+cancel step is evidenced by the `after_cancel` state, recorded about 1.1
+seconds after the failure, with both session jobs still loaded and the process
+counts unchanged. A second click
 and confirmation stopped all vendor processes and disabled/unloaded all three
 known jobs in 5.77 seconds. The main result window was frontmost and had one
 report sheet. Public HTTPS returned 200; vendor launch files were unchanged.

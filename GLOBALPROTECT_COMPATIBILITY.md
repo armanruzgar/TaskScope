@@ -40,11 +40,12 @@ including when invoked through Siri, Spotlight, or App Shortcuts.
 After a failed attempt, **Stop Services Anyway…** offers a separately confirmed
 exception that skips the idle-state prerequisite, discloses stale-DNS risk, and
 uses the same fixed service controls. The [October 1 recovery check](Evidence/GlobalProtect/2026-10-01-disconnect-recovery.md)
-verifies failure/result visibility, cancellation, and the confirmed recovery
-with an unresponsive vendor UI on the recorded configuration.
+verifies failure/result visibility and the confirmed recovery with an
+unresponsive vendor UI on the recorded configuration; the services were still
+running after the cancel step.
 The [automatic Quit All test](Evidence/GlobalProtect/2026-09-28-quit-all.md)
-records two connected-to-off cycles with public HTTPS working afterward and
-the final installed build's unchanged menu-bar frame.
+records two connected-to-off cycles, public HTTPS returning 200 after the
+second, and the final installed build's unchanged menu-bar frame.
 
 The [restore regression follow-up](Evidence/GlobalProtect/2026-09-29-restore.md)
 records the enabled-but-unloaded service failure and duplicate UI, the fix that
@@ -90,12 +91,17 @@ See [GlobalProtect behavior](docs/GLOBALPROTECT.md) for action and recovery deta
 | Kind / date | macOS / architecture | GlobalProtect / TaskScope | Result | Limits |
 | --- | --- | --- | --- | --- |
 | Deterministic fixtures, 2026-09-12 | Host-independent data on macOS test runner | Simulated layouts and tool responses | Optional/missing agents, both disabled-output formats, unknown/error states, process ownership, protected PID validation, version handling, and redaction covered by `GlobalProtectCompatibilityTests` | No installed-product lifecycle actions |
-| Live read-only observation, 2026-09-12 19:59 UTC | 26.6.2 (25G83), arm64 process | GlobalProtect 6.3.3-1121; TaskScope self-check based on `059de91` | [Redacted report](Evidence/GlobalProtect/2026-09-12-macos-26.6.2-gp-6.3.3-1121.txt): both user plists installed, disabled overrides, neither loaded; system plist installed, enabled override, not loaded; no matching processes observed | XCTest execution, no TaskScope app bundle version or Keep Off preference read; GlobalProtect build metadata unavailable; protected process not verified; no lifecycle or policy test |
+| Live read-only observation, 2026-09-12 19:59 UTC | 26.6.2 (25G83), arm64 process | GlobalProtect 6.3.3-1121; TaskScope self-check from a working tree based on `1109a3c` (cited as `059de91` in older records), committed afterward as `1a06d4d` | [Redacted report](Evidence/GlobalProtect/2026-09-12-macos-26.6.2-gp-6.3.3-1121.txt): both user plists installed, disabled overrides, neither loaded; system plist installed, enabled override, not loaded; no matching processes observed | XCTest execution, no TaskScope app bundle version or Keep Off preference read; GlobalProtect build metadata unavailable; protected process not verified; no lifecycle or policy test |
 | Authorized live lifecycle, 2026-09-28 | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope 1.0.0 (3), local development build | [Redacted stop/restore record](Evidence/GlobalProtect/2026-09-28-live-stop-restore.md): fixed user and system jobs disabled/unloaded; Open re-enabled them and restored the session service and UI; VPN reported Connected | Initial reconnect required retry. Stale VPN DNS remained after some stops, even following Disconnect; Open recovered DNS and a subsequent idle stop preserved it. Login/reboot, private-resource reachability, and management-policy interference not tested |
-| Passwordless session lifecycle, 2026-09-28 | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope source `3c8d401` | [Follow-up record](Evidence/GlobalProtect/2026-09-28-passwordless.md): Open restored the session service with the system job still disabled; VPN reached Connected; Keep Off stopped all processes; no administrator window during these actions; public HTTPS worked afterward | Initial system-disable approval was required. Other layouts, pre-login, logout/reboot, policy changes, and private-resource connectivity remain untested; earlier DNS limitation is not fixed |
+| Passwordless session lifecycle, 2026-09-28 | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope source `311cc00` (cited as `3c8d401` in the record) | [Follow-up record](Evidence/GlobalProtect/2026-09-28-passwordless.md): Open restored the session service with the system job still disabled; VPN reached Connected; Keep Off stopped all processes; no administrator window during these actions; public HTTPS worked afterward | Initial system-disable approval was required. Other layouts, pre-login, logout/reboot, policy changes, and private-resource connectivity remain untested; earlier DNS limitation is not fixed |
 | Automatic Quit All, 2026-09-28 | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope 1.0.0 (3), final executable `0742281e…` | [Live record](Evidence/GlobalProtect/2026-09-28-quit-all.md): TaskScope pressed Disconnect, verified Not Connected, disabled/unloaded all known jobs and stopped all processes; public HTTPS worked; final menu-bar frame unchanged | One-time Accessibility authorization required. English UI exercised; other layouts, policies, login/reboot, and private-resource connectivity untested |
 | Restore regression, 2026-09-29 UTC | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope executable `35383249…` | [Follow-up](Evidence/GlobalProtect/2026-09-29-restore.md): toggle-off restored service and one UI; healthy Open preserved PIDs and connection; final state Connected with public HTTPS working | Orphan recovery and direct-UI duplicate prevention unit-tested; exact orphan setup on final binary aborted because clean disconnect was not confirmed. Other layouts, policy, login/reboot and private resources untested |
-| Menu-bar Quit All, 2026-09-29 UTC | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope executable `81e7ae1f…` | [Follow-up](Evidence/GlobalProtect/2026-09-29-menu-quit-all.md): two final menu-bar full stops from Connection Failed; visible progress and one result sheet; zero vendor processes; Open restored one UI and service; public HTTPS 200 | Portal connection attempts reported unreachable/unresponsive, so no new connected-to-off cycle; translated UI, other layouts, policy and reboot untested |
+| Menu-bar Quit All, 2026-09-29 UTC | 26.6.2 (25G83), arm64 | GlobalProtect 6.3.3-1121; TaskScope executable `81e7ae1f…` (first stop: `d5574025…`) | [Follow-up](Evidence/GlobalProtect/2026-09-29-menu-quit-all.md): two final menu-bar full stops from Connection Failed; visible progress and one result sheet; zero vendor processes; Open restored one UI and service; public HTTPS 200 | Portal connection attempts reported unreachable/unresponsive, so no new connected-to-off cycle; translated UI, other layouts, policy and reboot untested |
+| Authorized live recovery check, 2026-10-01 | macOS version not recorded, arm64 | GlobalProtect 6.3.3-1121; TaskScope 1.0.0 (3), executable `2b7c5d68…` | [Recovery record](Evidence/GlobalProtect/2026-10-01-disconnect-recovery.md): with the vendor UI suspended, the normal Keep Off attempt failed after 7.38 s and left services running; the confirmed Stop Services Anyway stopped every vendor process and left all three known jobs disabled and unloaded in 5.77 s; public HTTPS 200; a later normal menu-bar Quit All stopped the idle VPN in 8.73 s | Idle VPN, no active tunnel; unresponsive UI simulated by suspending it; the cancel step is shown only by the unchanged state that followed it; other layouts, policy, login/reboot and private resources untested |
+
+Records written before 2026-10-17 cite commit SHAs from the original history;
+[Evidence/README.md](Evidence/README.md#commit-shas-in-older-records) maps them to
+public commits with the same trees.
 
 The September 12 live report describes the recorded environment's existing state. The check did not create
 that state and no repair was attempted. In particular, the absent protected
@@ -155,8 +161,8 @@ artifact/revision. Retain the baseline and each after-action self-check export.
 | Protected service / VPN | Compare baseline and later system state; verify connectivity through the organization's supported method separately |
 
 Record **pass**, **fail**, or **not tested** for each performed step, with the
-observed result and redacted artifact references. Only the explicitly approved Keep Off or GlobalProtect Quit All action may unload the fixed system
-daemon on daemon-only layouts. Record its absence after stopping and verified identity after Open;
+observed result and redacted artifact references. Only the explicitly approved Keep Off or GlobalProtect Quit All action, or the separately confirmed Stop
+Services Anyway recovery, may unload the fixed system daemon on daemon-only layouts. Record its absence after stopping and verified identity after Open;
 on session layouts, record preservation of any loaded system daemon and its override;
 never directly signal it or restart a loaded daemon just to obtain evidence. System-state changes may be
 caused by policy or other software; the self-check cannot attribute causation.

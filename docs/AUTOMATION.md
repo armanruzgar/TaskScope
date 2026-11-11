@@ -25,7 +25,12 @@ Install and launch a properly signed packaged app to discover **Refresh
 TaskScope**, **Open Watched App**, and **Stop Watched App**. Open and Stop use a
 user-selected entity from stored presets and share the app's lifecycle result
 reporting. Stop requests confirmation naming that app before stopping eligible
-watched processes, including direct App Shortcut invocation.
+watched processes, including direct App Shortcut invocation. It runs the same
+stop as a custom preset's **Quit All Killable** button, which support
+diagnostics record as `close`.
+
+The App Shortcut phrases are "Refresh TaskScope", "Open *preset* in TaskScope",
+and "Stop *preset* in TaskScope", where *preset* is a preset's display name.
 
 Unreadable stored preset data, including wrong-type property-list values,
 publishes no default watched-app targets in Shortcuts.
@@ -33,7 +38,12 @@ publishes no default watched-app targets in Shortcuts.
 Cold intent launches, including entity pickers and confirmation, stay in the
 background without opening a window or leaving a Dock icon. Late intent signals
 suppress a launch that has had no interactive activation or explicit window
-request; an app already in use is not demoted. Queued cancelled commands are
+request; a launch you activated or reopened is never demoted, even during its
+first half-second. A cold URL launch stays in the background although Launch
+Services activates it before delivering the URL. TaskScope publishes preset
+names for its App Shortcuts only after a launch has settled: about half a second
+after it starts, or at the first activation of a launch that started inactive.
+Queued cancelled commands are
 rejected independently. An admitted preset Stop completes despite caller
 cancellation; Open readiness remains cancellable and reports possible prior
 changes. See [process behavior](USING_TASKSCOPE.md#process-actions-and-observations).

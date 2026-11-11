@@ -16,9 +16,13 @@ Thanks for helping improve TaskScope.
 
 ## Development environment
 
-The package declares macOS 14 as its deployment target. Swift tools 5.9 or newer
-can build it; Xcode 26 or newer is required for the current full test suite and
-App Intents metadata packaging. The current local packaging evidence is arm64.
+The package declares macOS 14 as its deployment target. Use Xcode 26 or newer
+(full Xcode, not only the Command Line Tools) for the build, the full test
+suite, and App Intents metadata packaging. `Package.swift` declares Swift tools
+5.9, but the sources need at least Xcode 16 with the macOS 15 SDK to compile:
+they call an App Intents API that older SDKs do not declare, and they use
+`nonisolated(unsafe)`, which needs Swift 5.10. The current local packaging
+evidence is arm64.
 Do not claim compatibility with another OS version or architecture based only on
 a successful cross-build.
 
@@ -45,6 +49,13 @@ a successful cross-build.
 
 5. Open a pull request using the repository template.
 
+Tests that need settings create them with
+`InMemoryUserDefaults(suiteName: "TaskScope.<TestClass>.\(UUID().uuidString)")`
+from `Tests/TaskScopeTests/InMemoryUserDefaults.swift`, never with
+`UserDefaults(suiteName:)`. Each instance is its own in-memory domain, so
+parallel test processes cannot overwrite each other's fixtures and a run leaves
+no preference files behind.
+
 The packaging test requires macOS and Xcode 26 and launches the staged app.
 It uses a unique test bundle identifier and checks for leaked test preferences;
 startup verification uses volatile defaults without normal background enforcement.
@@ -65,7 +76,9 @@ anything affecting:
 
 Changes to a trust boundary must update [THREAT_MODEL.md](THREAT_MODEL.md).
 Changes to stored or surfaced data must update [PRIVACY.md](PRIVACY.md). Release
-process changes must update [RELEASE.md](RELEASE.md).
+process changes must update [RELEASE.md](RELEASE.md). Add a
+[CHANGELOG.md](CHANGELOG.md) entry under [Unreleased] in the same commit as any
+user-visible or trust-boundary change.
 
 By contributing, you agree that your contributions are licensed under the
 project's [MIT License](LICENSE).

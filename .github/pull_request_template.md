@@ -15,6 +15,12 @@ Describe the problem and the change.
 
 Explain any check that does not apply or could not run.
 
+## Documentation
+
+- [ ] `CHANGELOG.md` [Unreleased] has an entry for every user-visible or
+      trust-boundary change in this pull request, or there is none
+- [ ] User, privacy, support, and threat-model documents match the changed behavior
+
 ## Risk
 
 Call out changes to process signaling, privileged lifecycle operations,

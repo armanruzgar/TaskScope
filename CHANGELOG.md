@@ -5,13 +5,17 @@ All notable changes to TaskScope are documented in this file. The project uses
 
 ## [Unreleased]
 
-### Changed
+### Added
 
+- Added a confirmed, persistent Keep GlobalProtect Off switch to the built-in GlobalProtect preset. It disables and unloads the fixed `pangpa` and optional `pangps` user launch agents and, with macOS administrator approval, disables and boots out the fixed `system/com.paloaltonetworks.gp.pangpsd` VPN daemon; GlobalProtect Quit All and Stop Services Anyway use the same path. Open or turning the switch off restores the services.
 - Added Settings > Health with expiring, read-only permission, signing, metadata, path, and bundle-identity checks and navigation-only recovery.
 - Added previewable support diagnostics with exact JSON copy/save and at most 20 redacted lifecycle failures retained in memory.
-- Use diagnostics schema version 2 with `null` for unreadable saved notification and Keep Off settings; document `disconnectFailed` and shipped action mappings.
 - Added a read-only GlobalProtect Compatibility Self-Check with version, fixed-job, override, ownership, and protected-service observations.
 - Added versioned preset archives, bounded reads, legacy-array import, field review, and non-mutating lifecycle previews.
+
+### Changed
+
+- Use diagnostics schema version 2 with `null` for unreadable saved notification and Keep Off settings; document `disconnectFailed` and shipped action mappings.
 - GlobalProtect Quit All and explicit Keep Off disconnect before stopping known services, including fixed system disable/bootout with administrator approval where supported.
 - Turning Keep Off off performs the same full service and app restoration as Open, preserving the unused system override on session-agent layouts.
 - Limit disconnect observation to about 30 seconds (60 observations with 0.5-second waits plus reads), inside a 90-second deadline that also bounds Accessibility requests; timeout leaves services running.
@@ -33,6 +37,8 @@ All notable changes to TaskScope are documented in this file. The project uses
 - Require candidate-bound lifecycle evidence for public-binary releases and build numbers greater than every existing version tag.
 - Keep the complete quality gate local, retain weekly dependency updates, and use a per-checkout strict-build directory.
 - Reorganize public documentation, document private reporting, and clarify uninstall cleanup for persistent user and system launchd overrides.
+- Ask for menu-bar confirmations in an app-modal alert that brings TaskScope forward; the regular window keeps its in-window dialogs. New lifecycle and batch reports wait until their window is in front, so the Dock icon no longer bounces after GlobalProtect on/off actions.
+- Stage the app at `dist/build.noindex/TaskScope.app` instead of `dist/TaskScope.app`, so Spotlight does not index the build; release archives stay in `dist/releases`.
 
 ### Fixed
 
@@ -96,6 +102,24 @@ All notable changes to TaskScope are documented in this file. The project uses
 - Judge administrator system-daemon stops by a fixed disable-phase marker and bounded final launchd inspection; report cancelled or denied approval and failed disables after one inspection, and accept a nonzero bootout once the daemon is verified gone.
 - Require Prompt, Auto Stop, and Log Only thresholds to be reached on the kernel's monotonic process clock as well as `ps etime`, so a forward wall-clock step cannot make a rule act early.
 - Size the process list's Sort and filter pickers to their content so the sort key no longer truncates on macOS 26, and wrap the saved-selection and stop controls onto a second row when the menu bar popover is too narrow for one.
+- Keep the stale process-list banner until the list itself reloads; watched-status reads no longer clear it.
+- When an automatic launch hides its window, hand activation back only while TaskScope is active, and to the app that was most recently frontmost.
+- Let a command that joined a read cancelled midway run its own work instead of treating that read as delivered.
+- Clear a pending preset confirmation when that preset is edited.
+- Explain why renaming a saved selection that was deleted fails.
+- Treat a legacy recall entry whose candidates are all claimed by other entries as unmatched.
+- Clear stale Settings errors after a cancelled rule edit, a deletion refusal, or an export after reset, and show when the notification toggle is rejected.
+- Look for Activity Monitor's search field in its process-table window.
+- Keep an import candidate rejected as a duplicate from reserving its preset ID.
+- Name a process whose command is not an absolute path but contains `/` by its leading token, for example `sshd-session` for `sshd-session: user@ttys001`.
+- Drop history-chart samples taken before a pause, and keep the Unavailable state across sampling-interval changes.
+- Make the packaging scripts always stop the startup-verification child, and refuse to launch while a copy running from the bundle path is an older, replaced build.
+
+### Security
+
+- Bind new Auto Stop rules and durable saved selections to kernel-resolved executable paths, and include that path in the final pre-signal identity check. Legacy name-only Auto Stop rules load disabled for review after an upgrade.
+- Make watched-app open and close actions fail closed when a fresh process inventory cannot be read, instead of using cached process state.
+- Reject presets that repeat a launch-job label or plist path, in imported and in stored data.
 
 ## [1.0.0] - 2026-08-08
 

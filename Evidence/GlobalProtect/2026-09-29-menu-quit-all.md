@@ -38,8 +38,10 @@ was confirmed from the 480-point menu window. It showed progress in the new
 900-point main window and completed full shutdown in approximately 11 seconds.
 All known jobs were disabled/unloaded, all vendor process counts were zero,
 public HTTPS returned 200, and no administrator window was observed. This first
-build exposed duplicate result sheets; the final refinement gives the regular
-window sole ownership and preserves step messages while polling is queued.
+build (executable SHA-256
+`d5574025fc0e4372693a25beaa9db08b181cd195e5bdfe71e75903f5acf4e485`) exposed
+duplicate result sheets; the final refinement gives the regular window sole
+ownership and preserves step messages while polling is queued.
 
 Final installed executable SHA-256:
 `81e7ae1f7e3e6171b15c588db700fbe9b1fbbf5fbebcebbdd2ea99548446df0b`.

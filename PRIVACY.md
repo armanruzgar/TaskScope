@@ -14,7 +14,8 @@ document and the in-app disclosure must be updated before that feature ships.
 TaskScope can read local information exposed by macOS process tools, including:
 
 - PID, parent PID, process owner UID, process/executable name, command path,
-  start and elapsed time;
+  start and elapsed time; **Show Detail** also reads and shows the owner's
+  account name, which is not stored;
 - observed CPU and resident memory usage;
 - extended per-process network byte counters (from `nettop`) and cumulative
   disk I/O byte counters (from the kernel's per-process resource usage) when
@@ -143,9 +144,24 @@ paths, user launch-agent labels and paths, or process names. The immutable
 built-in GlobalProtect entry also contains its fixed service fields. Inspect and
 sanitize an export before sharing.
 
+TaskScope gives macOS the display name of every valid preset, custom names
+included, as the choices for the **Open Watched App** and **Stop Watched App**
+App Shortcuts. These names can appear in the Shortcuts app, Spotlight, and Siri.
+TaskScope updates them once a launch has settled and whenever a preset is
+added, renamed, or deleted.
+
+TaskScope writes to the clipboard only when you ask: **Copy JSON** in Support
+diagnostics, **Copy Summary** in the GlobalProtect self-check, and **Copy
+Command** in a process row's context menu. Copy Command replaces the clipboard
+contents with the process's kernel executable path, or with its `ps` command
+name when that path is unavailable. TaskScope does not read the clipboard.
+
 When notifications are enabled, process names can appear in Notification
-Center. TaskScope also writes local macOS Unified Log errors. A failed automation
-or lifecycle message can include a preset or process name. The
+Center. TaskScope's own Unified Log entries are limited to failed handling of
+`taskscope://` URLs: a fixed message for a malformed URL and, logged with
+private visibility, the error text of a failed refresh or a rejected URL. A
+rejected URL's text repeats the URL's action word; refresh failures name no
+preset or process. Lifecycle actions and App Intents write no log entries. The
 `build_and_run.sh --logs` and `--telemetry` modes display local Unified Logs;
 `--telemetry` does not upload them.
 
@@ -222,8 +238,9 @@ deleting TaskScope's preferences.
 
 To remove the current development build and its stored data:
 
-1. Choose Open or turn Keep Off off to restore required services. Whenever Keep
-   Off was used, also clear the system override with
+1. If you ever used Keep GlobalProtect Off, GlobalProtect Quit All, or Stop
+   Services Anyway, choose Open or turn Keep Off off to restore required
+   services, then also clear the system override with
    `sudo launchctl enable system/com.paloaltonetworks.gp.pangpsd`, regardless of
    layout. If TaskScope is already gone, run all three enable commands in
    [Support](SUPPORT.md#uninstall-and-erase-local-data), including the system
@@ -231,8 +248,9 @@ To remove the current development build and its stored data:
 2. Disable Launch at Login in Presets in the window or menu-bar popover. For
    Requires Approval or Unavailable, choose **Turn Off Launch at Login** and
    resolve any reported error.
-3. Quit and delete the app; remove its Accessibility and notification entries
-   in System Settings if desired.
+3. Quit TaskScope and delete every copy of the app, including
+   `dist/build.noindex/TaskScope.app` in a source checkout. Remove its
+   Accessibility and notification entries in System Settings if desired.
 4. To erase local development preferences, run:
 
    ```bash

@@ -12,6 +12,9 @@ by the test operator.
 - TaskScope 1.0.0 (3), `com.local.TaskScope`, installed in `/Applications` by
   `script/install.sh`; Apple Development signed, signature verified.
 - Final implementation source: `78f2a09129b0d0315107f1698a0720684ec53812`.
+  In the public history, the same tree is commit
+  `272e48714b83bca60de1be2a31a4fbabd5c613e6`
+  ([why the SHAs differ](../README.md#commit-shas-in-older-records)).
 - Final installed executable SHA-256:
   `86807067828aaad5f1a985324d3f36f8f304a7434c63646e229d0a0604672770`.
 - The earlier full off → Open → Connected cycle used executable SHA-256

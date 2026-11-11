@@ -4,12 +4,13 @@
 
 | Version | Security support |
 | --- | --- |
-| `main` | Active development; not a stable release |
-| Latest published release | Supported |
-| Older releases | Upgrade before requesting a security fix |
+| `main` | Security fixes are made here. Active development; not a stable release |
+| 1.0.0 | The only published release. It has no maintenance branch and gets no separate fixes; a fix for a problem in 1.0.0 is made on `main` |
 
-Before the first GitHub release is published, only `main` exists. A changelog
-entry or local app bundle is not a published release.
+1.0.0 is a source release: its GitHub release (tag `v1.0.0`) contains
+GitHub-generated source archives and no app binary. A changelog entry or a
+local app bundle is not a published release. Say which version or commit you
+tested when you report a problem.
 
 ## Reporting a vulnerability
 

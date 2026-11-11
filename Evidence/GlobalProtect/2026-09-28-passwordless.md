@@ -6,7 +6,9 @@ as the [earlier live test](2026-09-28-live-stop-restore.md).
 
 ## Tested build
 
-- Source: `3c8d40129498787cc7418b51925e424ca1115844`.
+- Source: `3c8d40129498787cc7418b51925e424ca1115844`. In the public history,
+  the same tree is commit `311cc00ecb01e6ac26821edbad17212d6a613168`
+  ([why the SHAs differ](../README.md#commit-shas-in-older-records)).
 - TaskScope 1.0.0 (3), `com.local.TaskScope`, installed using
   `script/install.sh`, with the installed signature verified.
 - Installed executable SHA-256:

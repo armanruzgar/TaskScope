@@ -91,8 +91,19 @@ Required invariants:
   inventory even if the stored preset changes or is deleted;
 - partial stop failures must not claim every target stopped or no target
   received a stop request;
-- never signal TaskScope itself, launchd (pid 1), the kernel task, or a process
-  group; the parser drops such rows and every signal path refuses them;
+- never signal TaskScope itself, launchd (pid 1), the kernel task, or any
+  process group other than the one the shell runner creates for its own child
+  command; the parser drops such rows and every process-action signal path
+  refuses them;
+- contain child commands (such as `ps`, `nettop`, `launchctl`, `open`, and the
+  administrator `osascript` request) in their own process group: the runner
+  spawns `/bin/zsh` as the leader of a new group and, only when a command is
+  cancelled or times out, sends that group `SIGTERM`, then `SIGKILL` after
+  500 ms, or at once when the leader is reaped while other members remain.
+  This is the one deliberate group signal; it does not pass through the
+  process-action signal guard. It reaches only the command's own process tree:
+  work handed to another process, such as an approved administrator script,
+  is not stopped by a timeout or cancellation;
 - distinguish privileged processes from launchd domains: root ownership alone
   cannot identify the system daemon, because a login-session PanGPS can elevate
   via setuid; readiness, automatic-disconnect gating, and final Keep Off
@@ -142,7 +153,13 @@ Required invariants:
 - importing parses and validates data but performs no lifecycle action;
 - bound imported file size, recognize an explicit archive schema version, and
   show every lifecycle field plus rejection reason before import is committed;
-- require absolute `.app` and `.plist` paths and valid non-empty labels/names;
+- require absolute `.app` and `.plist` paths, non-empty names of at most 255
+  characters, and launch-agent labels that start with an ASCII letter or digit
+  and contain only ASCII letters, digits, `.`, `-`, `_`, and `@`, so a label
+  cannot retarget `launchctl`; reject control, invisible formatting, and line or
+  paragraph separator characters in every name, path, and label, so a reviewed
+  field cannot read differently from its bytes. Lifecycle actions and
+  diagnostics also skip any job whose label breaks these rules;
 - reject duplicate identities, invalid mappings, and any privileged daemon
   fields on a noncanonical preset;
 - require the built-in GlobalProtect identity and all of its privileged fields
@@ -292,7 +309,12 @@ Required invariants:
   naming the app before submitting a stop command, including direct App Shortcuts;
 - keep cold intent launches in the background, including entity queries and
   confirmation; late intent signals suppress a launch with no interactive
-  activation or explicit window request, without demoting an app already in use;
+  activation or explicit window request, and never demote a launch the user
+  activated or reopened, including during the launch grace period. A URL keeps a
+  starting launch in the background even though Launch Services activates a
+  cold URL launch before delivering the URL. TaskScope's own App Shortcuts
+  parameter refresh waits until the launch has settled, so the entity query it
+  triggers cannot reclassify a Dock or Finder launch;
 - do not treat local/development signing as proof of production artifact
   identity;
 - make Launch at Login optional and recover visibly from macOS approval states;

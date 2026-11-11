@@ -61,8 +61,9 @@ Failure reasons are `disconnectFailed`, `appBundleMissing`, `inventoryUnavailabl
 `verificationUnavailable`, `stillRunning`, or the fallback `incomplete`.
 `disconnectFailed` means automatic GlobalProtect disconnect could not be verified.
 Turning Keep Off off is recorded as `open`; in-app GlobalProtect Quit All and
-Stop Services Anyway are recorded as `keepOff`; Stop Watched App is recorded as
-`close`.
+Stop Services Anyway are recorded as `keepOff`. A custom preset's **Quit All
+Killable** button, which result messages call Close, and Stop Watched App are
+recorded as `close`.
 
 Counts refer to job results in that action attempt; an early failure can have
 zero job failures. They do not contain job labels or raw error details, and
@@ -276,79 +277,43 @@ managed installer or IT support when its protected service cannot be restored.
 
 ### GlobalProtect keeps reopening
 
-**Quit All** from the menu bar opens the regular TaskScope window so the
-disconnect/stop progress and final result remain visible when GlobalProtect's
-menu takes focus. The Presets footer wraps long failure messages. A vendor
-**Connection Failed** view can be stopped once TaskScope verifies its enabled
-Connect control and absence of Disconnect for consecutive observations; an
-unknown Error state still leaves services running and explains the failure.
-TaskScope brings its result window forward again when the operation finishes.
-Automatic disconnect has an observation window of about 30 seconds: up to 60
-observations with 0.5-second waits, plus observation work. A 90-second overall
-deadline also bounds Accessibility requests; slow reads or revealing controls
-consume that budget, and unreadable state can fail sooner. On timeout, TaskScope
-leaves services running. See [GlobalProtect behavior](docs/GLOBALPROTECT.md).
+Turn on **Keep GlobalProtect Off** on the built-in preset, or choose **Quit
+All**, which also turns that switch on. Confirm the action, and approve the
+macOS administrator dialog if the system VPN service still needs to be
+disabled. TaskScope first presses Disconnect and waits for a stable
+disconnected state, so this can disconnect the GlobalProtect VPN. A menu-bar
+action opens the regular window so its progress and result stay visible.
+Choose **Open**, or turn the switch off, to restore the services and app
+without reinstalling.
 
-If automatic disconnect fails or times out, the preset shows **Stop Services
-Anyway…**. This separately confirmed recovery stops and disables the known
-services even when the VPN UI cannot finish disconnecting. It can leave stale
-VPN DNS settings or interrupt internet access; choose **Open** to restore the
-service if that happens. Normal Keep Off still attempts a verified disconnect
-first. The recovery choice is cleared by a new attempt, Open, or an app restart.
+If the action does not finish:
 
-Use **Keep GlobalProtect Off** on the built-in preset. Confirm the action and
-approve the macOS administrator dialog if the system service still needs to be
-disabled/unloaded. This can disconnect the GlobalProtect VPN. Choose **Open** to restore the
-required services without reinstalling. Turning Keep Off off now performs the
-same restoration, starting the VPN service and app together.
+- **Automatic disconnect failed or timed out.** The services keep running and
+  the preset offers **Stop Services Anyway…**. After a separate confirmation it
+  stops and disables the known services without a verified disconnect. It can
+  leave stale VPN DNS settings or interrupt internet access; choose **Open** to
+  recover. A new attempt, Open, or an app restart clears the choice.
+- **Approval was cancelled or a service is still loaded.** The result reports a
+  failure; **Apply Keep Off…** retries. On session-agent installations, a loaded
+  or uninspectable separate system daemon is preserved even on retry; consult
+  the organization managing the Mac.
+- **DNS fails after stopping.** Choose **Open**, leave the VPN disconnected,
+  verify normal internet access, and retry Keep Off. TaskScope does not rewrite
+  DNS, routes, or vendor settings.
+- **Settings are unreadable.** Quit All, Apply Keep Off, the switch, and Stop
+  Services Anyway are disabled. Preserve the backup and use
+  **Settings > General > Reset Settings After Backup** before changing Keep Off;
+  Quit App and Quit Helpers remain available.
 
 If GlobalProtect is stuck retrieving portal configuration after being opened
-directly, choose **Open** in TaskScope. When the UI is running without PanGPS,
-TaskScope closes that orphaned UI and restores the service before starting one
-new instance. An existing healthy VPN service is left running. Open also avoids
-loading another UI agent over an app instance opened outside launchd.
+directly, choose **Open** in TaskScope. It closes a UI that runs without its VPN
+service, restores the service, and starts one UI; a healthy running service is
+left alone.
 
-When the installed `pangps` session agent supplies the VPN service, Open and
-toggle-off retain the separate system daemon's disabled override. After the
-first approved full stop, subsequent Open/Keep Off cycles need no administrator
-prompt unless system state or the installed layout changes.
-No password is stored and no elevated helper or authorization-policy exception
-is installed. Layouts without that session agent still require administrator
-approval to restore the system daemon. An unreadable or mismatched session
-agent label is reported as a failure, not as successful restoration.
-
-If approval is cancelled or a service remains loaded, the result reports a
-failure. **Apply Keep Off…** retries an explicit disconnect and stop. On session
-layouts, a loaded or uninspectable separate system daemon is preserved; retrying
-Apply Keep Off does not override that policy. Consult the organization managing
-the Mac for a preserved system daemon. Existing Keep Off preferences from older
-builds do not authorize background system changes. Background enforcement never
-requests administrator privileges and does not repeat an unchanged failure report.
-Preserved PanGPS services do not trigger polling stops or count as failed
-background session stops. When settings are unreadable, every Keep Off intent
-control, including Quit All, is disabled. Preserve the backup and use Settings >
-General > Reset Settings After Backup before changing Keep Off; Quit App and
-Quit Helpers remain available.
-
-A `PanGPS` process running as root can belong to either the login-session
-`pangps` job or the system `pangpsd` job. Open restores and verifies the installed
-session service first; the system daemon is used when that agent is absent.
-Ordinary Quit actions can unload only the `pangpa` interface agent, leaving the
-`pangps` session VPN service and system daemon alone because they do not
-disconnect. Keep Off / Quit All stop the required VPN service after a verified
-disconnect, subject to the session-layout preservation policy above.
-An off result verifies the known processes and launchd jobs, not VPN health or
-system extension removal. If policy restores or rejects changes to services,
-consult the organization managing the Mac.
-
-Quit All and explicit Keep Off press Disconnect automatically and wait for a
-stable idle state so the VPN can restore normal networking. Earlier live tests
-on 6.3.3-1121 found public DNS unavailable after stopping
-following VPN use, including one stop after the client showed Disconnected.
-Open restored DNS without reconnecting the VPN; stopping that idle service
-retained public DNS/HTTPS access. If DNS fails, choose Open, leave the VPN
-disconnected, verify normal internet access, and retry Keep Off. TaskScope does
-not rewrite DNS, routes, or vendor settings as a workaround.
+[GlobalProtect behavior and recovery](docs/GLOBALPROTECT.md) covers disconnect
+timing, which jobs each action changes, session-agent and system-daemon
+layouts, the retained system override, background enforcement, and the DNS
+observations behind this advice.
 
 ### Collect GlobalProtect compatibility evidence
 
@@ -403,13 +368,15 @@ that migration was tested.
 
 ## Uninstall and erase local data
 
-1. If Keep Off was used, choose **Open** or turn **Keep GlobalProtect Off** off
-   before removing TaskScope. Open clears required user overrides and the system
-   override on system-daemon layouts, even without saved intent or an app bundle.
-   With the app installed, Open also restores the required service and app.
-   On login-session installations it deliberately leaves the separate system
-   `pangpsd` override disabled. Whenever Keep Off was used, also clear that
-   system override during uninstall, regardless of layout:
+1. If you ever used **Keep GlobalProtect Off**, GlobalProtect **Quit All**, or
+   **Stop Services Anyway**, choose **Open** or turn **Keep GlobalProtect Off**
+   off before removing TaskScope; all three set the same launchd overrides. Open
+   clears required user overrides and the system override on system-daemon
+   layouts, even without saved intent or an installed GlobalProtect app. With
+   the GlobalProtect app installed, Open also restores its required service and
+   app. On login-session installations it deliberately leaves the separate
+   system `pangpsd` override disabled. Whenever one of those actions was used,
+   also clear that system override during uninstall, regardless of layout:
 
    ```bash
    sudo launchctl enable system/com.paloaltonetworks.gp.pangpsd
@@ -431,15 +398,29 @@ that migration was tested.
    menu-bar popover. For Requires Approval or Unavailable, choose **Turn Off
    Launch at Login** and resolve any reported error.
 3. Quit TaskScope.
-4. Delete the app bundle.
-5. Remove Accessibility and notification permission entries if desired.
+4. Delete every copy of the app: the installed `/Applications/TaskScope.app`
+   (or `TaskScope.app` in the `DEST_DIR` you installed to) and, in a source
+   checkout, `dist/build.noindex/TaskScope.app`. The default
+   `./script/build_and_run.sh` run and its `--logs` and `--telemetry` modes open
+   that staged copy and leave it registered with Launch Services. Deleting the
+   checkout also removes it.
+5. If desired, remove TaskScope from **System Settings > Privacy & Security >
+   Accessibility** (or run `tccutil reset Accessibility com.local.TaskScope`)
+   and turn off its notifications in **System Settings > Notifications**. macOS
+   may keep the notification entry after the app is deleted.
 6. For the current development identifier only, erase preferences with:
 
    ```bash
    defaults delete com.local.TaskScope
    ```
 
-The final step is permanent and removes settings, presets, rules, saved
+7. Optionally delete files you exported (by default `TaskScope-presets.json`,
+   `TaskScope-diagnostics.json`, and `TaskScope-GlobalProtect-compatibility.txt`),
+   the per-user cache directory
+   `"$(getconf DARWIN_USER_CACHE_DIR)com.local.TaskScope"`, and a source
+   checkout's `.build` and `dist` directories.
+
+Step 6 is permanent and removes settings, presets, rules, saved
 selections, event history, and all `.corruptBackup` and
 `.rejectedMigrationBackup` copies, including numbered slots. A production release
 with a different identifier requires its own documented deletion command.

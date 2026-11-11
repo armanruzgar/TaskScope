@@ -67,9 +67,9 @@ verify normal internet access before retrying Keep Off. Earlier observations on
 GlobalProtect 6.3.3-1121 found stale DNS even after the client displayed
 Disconnected; Open restored DNS without reconnecting, and a subsequent idle stop
 preserved public DNS/HTTPS. Later [automatic Quit All observations](../Evidence/GlobalProtect/2026-09-28-quit-all.md)
-preserved public access in two connected-to-off cycles on the recorded
-configuration. These results are not a guarantee. TaskScope does not rewrite
-DNS, routes, or vendor settings as a workaround.
+recorded two connected-to-off cycles on the recorded configuration, with public
+HTTPS working after the second. These results are not a guarantee. TaskScope
+does not rewrite DNS, routes, or vendor settings as a workaround.
 
 ## Open and turning Keep Off off
 

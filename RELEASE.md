@@ -13,6 +13,10 @@ staged app is not itself a published release.
 - Deployment target: macOS 14
 - Verified packaging architecture: arm64 only
 - Distribution: GitHub source release and local-development packaging
+- Tag: `v1.0.0` points to `70be2a5`. The public history is a rewritten copy of
+  the original repository, so commits from before 2026-10-17 have different
+  SHAs; [Evidence/README.md](Evidence/README.md#commit-shas-in-older-records)
+  maps the SHAs that older records cite
 - Local bundle identifier: `com.local.TaskScope`
 - Possible local signatures: Apple Development or ad-hoc
 - Not provided or claimed: production bundle identity, universal/Intel binary,
