@@ -45,8 +45,14 @@ struct PresetCard: View {
                 PresetActionButton(title: snapshot.preset.isBuiltInGlobalProtect ? "Quit All…" : "Quit App and Helpers…", systemImage: "stop.circle", role: .destructive, action: onQuitAll)
                     .disabled(snapshot.preset.isBuiltInGlobalProtect && !isKeepOffControlEnabled)
                 if let onRestart, !snapshot.preset.isBuiltInGlobalProtect {
-                    PresetActionButton(title: "Restart…", systemImage: "arrow.clockwise", role: .destructive, action: onRestart)
-                        .help("Quit the app and its helpers, then open it again")
+                    // Restart opens the app, and Open turns Keep Off off.
+                    PresetActionButton(
+                        title: "Restart…", systemImage: "arrow.clockwise", role: .destructive, action: onRestart,
+                        help: isKeptOff
+                            ? "Not available while Keep Off is on: restarting opens the app, which turns Keep Off off."
+                            : "Quit the app and its helpers, then open it again"
+                    )
+                    .disabled(isKeptOff)
                 }
             }
             .disabled(isMutationActive)
@@ -194,8 +200,18 @@ private struct PresetActionButton: View {
     var systemImage: String
     var role: ButtonRole?
     var action: () -> Void
+    /// Set on the Button itself, so it can say why the button is unavailable.
+    var help: String? = nil
 
     var body: some View {
+        if let help {
+            button.help(help)
+        } else {
+            button
+        }
+    }
+
+    private var button: some View {
         Button(role: role, action: action) {
             Label(title, systemImage: systemImage)
                 .frame(maxWidth: .infinity, alignment: .leading)

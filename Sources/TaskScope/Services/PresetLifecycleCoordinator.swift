@@ -704,6 +704,12 @@ final class PresetLifecycleCoordinator: ObservableObject {
             let message = "Restart is not offered for the built-in GlobalProtect preset. Use Quit All, then Open."
             return PresetLifecycleOutcome(result: TaskScopeCommandResult(status: .rejected, message: message), message: message)
         }
+        // Restart's Open step turns Keep Off off. Checked inside the gate, so a
+        // restart queued behind a Keep Off is refused too.
+        guard !host.dependencies.isPresetKeptOff(preset) else {
+            let message = "Restart is not available while Keep \(name) Off is on: restarting opens \(name), which turns Keep Off off. Turn Keep Off off first."
+            return PresetLifecycleOutcome(result: TaskScopeCommandResult(status: .rejected, message: message), message: message)
+        }
         let stopped = await stop(preset, scope: .all, host: host)
         guard stopped.result.status == .completed else {
             // The quit's own outcome, report and diagnostic; nothing is opened.

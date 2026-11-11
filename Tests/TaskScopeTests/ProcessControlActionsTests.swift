@@ -457,6 +457,46 @@ final class ProcessControlActionsTests: XCTestCase {
         XCTAssertEqual(manager.lifecycleDiagnostics.failures(for: preset.id).first?.action, .close)
     }
 
+    /// Review follow-up: Restart's Open step turns Keep Off off, so a kept-off
+    /// preset is not restarted, and its card says why.
+    func testRestartIsNotAvailableWhileThePresetIsKeptOff() async throws {
+        let preset = WatchedAppPreset(
+            displayName: "Example", mainProcessName: "Example", helperProcessNames: [], protectedProcessNames: [],
+            appPath: "/Applications/Example.app"
+        )
+        let lifecycle = ControlTestLifecycle()
+        let manager = manager(ControlTestInventory(repeating: .success([])), lifecycle: lifecycle)
+        manager.dependencies.watchedPresets = { [preset] }
+        manager.dependencies.isPresetKeptOff = { _ in true }
+        var intentWrites: [Bool] = []
+        manager.dependencies.setPresetKeptOff = { _, keptOff in intentWrites.append(keptOff) }
+
+        let result = await manager.restart(preset)
+
+        XCTAssertEqual(result.status, .rejected)
+        XCTAssertEqual(
+            result.message,
+            "Restart is not available while Keep Example Off is on: restarting opens Example, which turns Keep Off off. Turn Keep Off off first."
+        )
+        XCTAssertEqual(manager.message, result.message)
+        XCTAssertTrue(lifecycle.calls.isEmpty, "\(lifecycle.calls)")
+        XCTAssertTrue(intentWrites.isEmpty, "Keep Off must stay on")
+
+        let card = PresetCard(snapshot: .init(preset: preset, runningNames: []), onOpen: {}, onQuitApp: {}, onQuitHelpers: {},
+                              onQuitAll: {}, isKeptOff: true, isKeepOffControlEnabled: true, onKeepOffChanged: { _ in },
+                              onRestart: {})
+        let restart = try card.inspect().find(button: "Restart…")
+        XCTAssertTrue(restart.isDisabled())
+        XCTAssertEqual(
+            try restart.help().string(),
+            "Not available while Keep Off is on: restarting opens the app, which turns Keep Off off."
+        )
+        let running = PresetCard(snapshot: .init(preset: preset, runningNames: []), onOpen: {}, onQuitApp: {}, onQuitHelpers: {},
+                                 onQuitAll: {}, isKeptOff: false, isKeepOffControlEnabled: true, onKeepOffChanged: { _ in },
+                                 onRestart: {})
+        XCTAssertFalse(try running.inspect().find(button: "Restart…").isDisabled())
+    }
+
     func testRestartIsNotOfferedForGlobalProtect() async throws {
         let lifecycle = ControlTestLifecycle()
         let manager = manager(ControlTestInventory([]), lifecycle: lifecycle)

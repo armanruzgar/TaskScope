@@ -175,8 +175,9 @@ Required invariants:
   parent's PID only while the parent's identity (PID and start time) is still
   in the current validated inventory, so a reused PID's children are never
   collected;
-- run a preset Restart (custom presets only) as Quit App and Helpers, then
-  Open, in one admitted action with one confirmation and one report; Open
+- run a preset Restart (custom presets only, and never while the preset is
+  kept off, because Open would turn Keep Off off) as Quit App and Helpers,
+  then Open, in one admitted action with one confirmation and one report; Open
   runs only after the quit completed;
 - bind queued prompts and batch reports to immutable captured targets. Prompt
   alerts show the PID and use a new presentation identity when the queue head

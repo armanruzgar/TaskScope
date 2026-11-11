@@ -351,6 +351,8 @@ App and Helpers**, and **Restart**, and a **Keep <name> Off** switch (see
 [Keep Off](#keep-off)). **Restart…** quits the app and its helpers as Quit App
 and Helpers does, then opens it again, under one confirmation and with one
 report of both steps; when the quit does not complete, nothing is opened.
+Restart is unavailable while the preset's Keep Off is on, because opening the
+app turns Keep Off off; turn Keep Off off first if you mean to run it again.
 On the built-in GlobalProtect preset, marked with a shield, the
 fourth button is **Quit All**, a different and stronger action that disconnects
 the VPN and turns on **Keep GlobalProtect Off**, and there is no Restart; read
