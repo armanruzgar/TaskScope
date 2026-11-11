@@ -135,12 +135,11 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
             let result = await ShellCommandRunner.run(
                 executable: "/var/empty/taskscope-missing-program", hooks: hooks
             )
-            let created = pipes.created
-            let stillOpen = created.filter { fcntl($0, F_GETFD) != -1 }
+            let stillOpen = pipes.stillOpenPipeEnds
 
             XCTAssertEqual(result.exitCode, -1, "\(result)")
             XCTAssertEqual(result.stderr, "Could not start the command: No such file or directory.")
-            XCTAssertEqual(created.count, 4)
+            XCTAssertEqual(pipes.created.count, 4)
             guard stillOpen.isEmpty else {
                 return XCTFail("Attempt \(attempt): descriptors \(stillOpen) were still open after the result")
             }
@@ -164,11 +163,8 @@ final class Batch05ShellCommandRunnerTests: XCTestCase {
             XCTAssertEqual(result.exitCode, -1, "\(result)")
             XCTAssertEqual(result.stderr, "Could not start the command: Too many open files.")
             XCTAssertEqual(pipes.callCount, failingCall)
-            for descriptor in pipes.created {
-                errno = 0
-                XCTAssertEqual(fcntl(descriptor, F_GETFD), -1, "Descriptor \(descriptor) was left open")
-                XCTAssertEqual(errno, EBADF)
-            }
+            XCTAssertEqual(pipes.created.count, 2 * (failingCall - 1))
+            XCTAssertEqual(pipes.stillOpenPipeEnds, [], "A created pipe was left open")
         }
         XCTAssertEqual(fcntl(STDIN_FILENO, F_GETFL), standardInputFlags, "Descriptor 0 must not be touched")
     }
@@ -417,6 +413,8 @@ final class ScriptedPipeFactory: @unchecked Sendable {
     private let failingCall: Int
     private var calls = 0
     private var descriptors: [Int32] = []
+    /// Each created descriptor's pipe end, which `fstat` names by its inode.
+    private var pipeEnds: [Int32: UInt64] = [:]
 
     init(failingCall: Int) {
         self.failingCall = failingCall
@@ -433,13 +431,31 @@ final class ScriptedPipeFactory: @unchecked Sendable {
         }
         let result = Darwin.pipe(pipeDescriptors)
         if result == 0 {
-            lock.withLock { descriptors += [pipeDescriptors[0], pipeDescriptors[1]] }
+            let created = [pipeDescriptors[0], pipeDescriptors[1]]
+            let ends = created.map { descriptor -> (Int32, UInt64) in
+                var info = stat()
+                return (descriptor, fstat(descriptor, &info) == 0 ? UInt64(info.st_ino) : 0)
+            }
+            lock.withLock {
+                descriptors += created
+                for (descriptor, inode) in ends { pipeEnds[descriptor] = inode }
+            }
         }
         return result
     }
 
     var callCount: Int { lock.withLock { calls } }
     var created: [Int32] { lock.withLock { descriptors } }
+
+    /// The created descriptors still open on the pipe they were created for.
+    /// Once the runner closes a descriptor, other code in the test process may
+    /// get the same number for something else; that number is not a leak.
+    var stillOpenPipeEnds: [Int32] {
+        lock.withLock { descriptors.map { ($0, pipeEnds[$0] ?? 0) } }.filter { descriptor, inode in
+            var info = stat()
+            return fstat(descriptor, &info) == 0 && UInt64(info.st_ino) == inode
+        }.map { $0.0 }
+    }
 }
 
 /// Cancels a run from inside its reap window (`Hooks.afterReap`): after the

@@ -36,11 +36,7 @@ final class AuditLeadSystemTests: XCTestCase {
         XCTAssertEqual(result.stdout, "")
         XCTAssertEqual(result.stderr, "Could not start the command: Argument list too long.")
         XCTAssertEqual(pipes.created.count, 4)
-        for descriptor in pipes.created {
-            errno = 0
-            XCTAssertEqual(fcntl(descriptor, F_GETFD), -1, "Descriptor \(descriptor) was left open")
-            XCTAssertEqual(errno, EBADF)
-        }
+        XCTAssertEqual(pipes.stillOpenPipeEnds, [], "A created pipe was left open")
     }
 }
 
